@@ -53,11 +53,17 @@ export interface GameDef {
 	world: World;
 	opLaws: OpLaw[];
 	tickLaws?: TickLaw[];
+	/** 兜底法则：所有法则否决且无具体理由时调用。不提供则用引擎默认回应。 */
+	denyAll?: OpLaw;
 	hint?: string;
 	/** set 只允许写入这些属性；未声明即全部拒绝（结构性属性必须走 apply/move）。未设置时退回纯法则裁决。 */
 	settableProps?: string[];
+	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验（如 burnTicks）。 */
+	internalProps?: string[];
 	/** 表达层后置校验钩子：返回错误信息或 null。text 中出现的实体/断言不得与 world + changes 矛盾。 */
 	validateText?: (input: { text: string; world: World; changes: Change[]; actor: string }) => string | null;
+	/** 确定性回退摘要（表达层两次校验失败时展示给玩家）。缺省用引擎的通用 JSON 摘要。 */
+	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 }
 
 export type StepOp = Op | { kind: "tick"; n: number };
@@ -67,6 +73,8 @@ export interface StepResult {
 	reason: string;
 	changes: Change[];
 	op: StepOp;
+	/** 否决来源：具体法则给了世界性理由（law），还是所有法则都未表态落到兜底（denyAll）。 */
+	deniedBy?: "law" | "denyAll";
 }
 
 export function entity(world: World, id: string): Entity | undefined {
@@ -123,16 +131,15 @@ export function visibleIds(world: World, actor: string): Set<string> {
 	return vis;
 }
 
-const INTERNAL_PROPS = new Set(["actor", "burnTicks"]);
-
-export function serialize(world: World, actor: string): string {
+export function serialize(world: World, actor: string, internalProps: readonly string[] = []): string {
 	const vis = visibleIds(world, actor);
+	const internal = new Set(internalProps);
 	const items = world.entities
 		.filter((e) => vis.has(e.id))
 		.map((e) => ({
 			id: e.id,
 			name: e.name,
-			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !INTERNAL_PROPS.has(k))),
+			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 		}));
 	return JSON.stringify({ time: world.time, entities: items }, null, 2);
 }
@@ -168,7 +175,7 @@ export class Simulation {
 		if (op.kind === "set" && this.def.settableProps && !this.def.settableProps.includes(op.prop)) {
 			const e = entity(this.world, op.entity);
 			const reason = `世界不这样运转——${e?.name ?? op.entity}的${op.prop}无法被改变。`;
-			const sr: StepResult = { ok: false, reason, changes: [], op };
+			const sr: StepResult = { ok: false, reason, changes: [], op, deniedBy: "law" };
 			this.log.push(sr);
 			return sr;
 		}
@@ -184,7 +191,9 @@ export class Simulation {
 			}
 			if (res.denyReason != null && denial == null) denial = res.denyReason;
 		}
-		const sr: StepResult = { ok: false, reason: denial ?? "世界没有回应这个操作。", changes: [], op };
+		const deniedBy: "law" | "denyAll" = denial != null ? "law" : "denyAll";
+		const reason = denial ?? (this.def.denyAll ? this.def.denyAll(ctx).denyReason : null) ?? "世界没有回应这个操作。";
+		const sr: StepResult = { ok: false, reason, changes: [], op, deniedBy };
 		this.log.push(sr);
 		return sr;
 	}
@@ -212,7 +221,7 @@ export class Simulation {
 	}
 
 	serialize(): string {
-		return serialize(this.world, this.actor);
+		return serialize(this.world, this.actor, this.def.internalProps);
 	}
 
 	private commit(deltas: Delta[]): Change[] {

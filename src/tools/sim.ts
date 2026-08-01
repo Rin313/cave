@@ -2,7 +2,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { Simulation } from "../core/sim.ts";
 import type { Op, PropValue } from "../core/sim.ts";
-import { cave, isGenericDeny } from "../games/cave.ts";
+import type { GameDef } from "../core/sim.ts";
+import { getGame } from "../games/registry.ts";
 
 type OpLike =
 	| { kind: "apply"; source: string; target: string }
@@ -74,7 +75,7 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	return failures.length ? failures.join("; ") : "ok";
 }
 
-function runScenario(scenario: Scenario, def: typeof cave, seed: number): ScenarioReport {
+function runScenario(scenario: Scenario, def: GameDef, seed: number): ScenarioReport {
 	const sim = new Simulation(def, seed);
 	const reports: StepReport[] = [];
 	for (const [i, step] of scenario.steps.entries()) {
@@ -127,7 +128,8 @@ function runScenario(scenario: Scenario, def: typeof cave, seed: number): Scenar
 
 async function cmdScenario(scenarioPath: string): Promise<void> {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
-	const reports = file.scenarios.map((s) => runScenario(s, cave, file.seed ?? 1));
+	const def = getGame(file.game);
+	const reports = file.scenarios.map((s) => runScenario(s, def, file.seed ?? 1));
 
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);
@@ -173,17 +175,18 @@ function describeOp(op: Op): string {
 	return `set ${op.entity} ${op.prop} ${JSON.stringify(op.value)}`;
 }
 
-async function cmdProbe(): Promise<void> {
-	const sim = 	new Simulation(cave, 1);
-	const ids = [...sim.visibleIds].filter((id) => id !== "player");
+function probeDef(def: GameDef): { gaps: { op: string; reason: string }[]; seen: number } {
+	const sim = new Simulation(def, 1);
+	const ids = [...sim.visibleIds].filter((id) => id !== def.playerId);
 	const itemIds = ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true);
+	const internal = new Set(def.internalProps ?? []);
 	const gaps: { op: string; reason: string }[] = [];
 	const seen = new Set<string>();
 
 	const probeOp = (op: Op) => {
-		const fresh = 	new Simulation(cave, 1);
+		const fresh = new Simulation(def, 1);
 		const r = fresh.apply(op);
-		if (!r.ok && isGenericDeny(r.reason)) gaps.push({ op: describeOp(op), reason: r.reason });
+		if (!r.ok && r.deniedBy === "denyAll") gaps.push({ op: describeOp(op), reason: r.reason });
 	};
 
 	const unique = (op: Op) => {
@@ -206,19 +209,39 @@ async function cmdProbe(): Promise<void> {
 		}
 	}
 	for (const e of itemIds) {
-		for (const p of BOOL_PROPS) {
-			unique({ kind: "set", entity: e, prop: p, value: true });
-			unique({ kind: "set", entity: e, prop: p, value: false });
+		const props = new Set<string>([...BOOL_PROPS, "attachedTo", "material", "in"]);
+		for (const ent of sim.world.entities) {
+			if (ent.id === e) continue;
+			for (const k of Object.keys(ent.props)) {
+				if (!internal.has(k)) props.add(k);
+			}
 		}
-		unique({ kind: "set", entity: e, prop: "attachedTo", value: null });
-		for (const m of ["wood", "iron", "stone", "ash", "steel"]) {
-			unique({ kind: "set", entity: e, prop: "material", value: m });
+	for (const e of itemIds) {
+		const props = new Set<string>([...BOOL_PROPS, "attachedTo", "material", "in"]);
+		for (const ent of sim.world.entities) {
+			if (ent.id === e) continue;
+			for (const k of Object.keys(ent.props)) {
+				if (!internal.has(k)) props.add(k);
+			}
 		}
-		for (const d of ids) {
-			unique({ kind: "set", entity: e, prop: "in", value: d });
+		for (const p of props) {
+			const values = new Set<PropValue>([true, false, null]);
+			for (const ent of sim.world.entities) {
+				const v = ent.props[p];
+				if (typeof v === "string") values.add(v);
+			}
+			if (p === "in" || p === "attachedTo") for (const d of ids) values.add(d);
+			for (const v of values) unique({ kind: "set", entity: e, prop: p, value: v });
 		}
 	}
+	}
 
+	return { gaps, seen: seen.size };
+}
+
+async function cmdProbe(gameId: string): Promise<void> {
+	const def = getGame(gameId);
+	const { gaps, seen } = probeDef(def);
 	const applyMoveGaps = gaps.filter((g) => g.op.startsWith("apply") || g.op.startsWith("move"));
 	const setGaps = gaps.filter((g) => g.op.startsWith("set"));
 	const byProp = new Map<string, { n: number; examples: string[] }>();
@@ -229,7 +252,7 @@ async function cmdProbe(): Promise<void> {
 		if (e.examples.length < 3) e.examples.push(g.op);
 		byProp.set(prop, e);
 	}
-	console.log(`=== 法则完整性探测（${seen.size} 个典型 op）===`);
+	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型 op）===`);
 	console.log(`apply/move 缺口: ${applyMoveGaps.length}`);
 	for (const g of applyMoveGaps) console.log(`  [GAP] ${g.op} → ${g.reason}`);
 	console.log(`set 缺口（按属性分组）: ${setGaps.length}`);
@@ -239,8 +262,9 @@ async function cmdProbe(): Promise<void> {
 	console.log(gaps.length === 0 ? "\n无缺口。法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
 }
 
-async function cmdRun(tokens: string[]): Promise<void> {
-	const sim = 	new Simulation(cave, 1);
+async function cmdRun(tokens: string[], gameId: string): Promise<void> {
+	const def = getGame(gameId);
+	const sim = 	new Simulation(def, 1);
 	console.log("=== 初始世界 ===");
 	console.log(sim.serialize());
 	for (const token of tokens) {
@@ -269,18 +293,23 @@ async function main(): Promise<void> {
 		return;
 	}
 	if (cmd === "run") {
-		await cmdRun(rest);
+		const gameIdx = rest.indexOf("--game");
+		const gameId = gameIdx >= 0 ? rest[gameIdx + 1] : "cave";
+		const tokens = rest.filter((_, i) => i !== gameIdx && i !== gameIdx + 1);
+		await cmdRun(tokens, gameId);
 		return;
 	}
 	if (cmd === "probe") {
-		await cmdProbe();
+		const gameIdx = rest.indexOf("--game");
+		const gameId = gameIdx >= 0 ? rest[gameIdx + 1] : "cave";
+		await cmdProbe(gameId);
 		return;
 	}
 	console.log(`用法:
   sim scenario [<scenario.json>]    运行法则引擎场景验证（默认 scenarios/cave.json）
-  sim run <op> [<op>...]            按顺序执行操作并展示世界与变更
+  sim run <op> [<op>...] [--game <id>]    按顺序执行操作并展示世界与变更
     op: apply <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
-  sim probe                         穷举可见实体的 op 组合，报告落到通用 denyAll 的法则缺口
+  sim probe [--game <id>]           穷举可见实体的 op 组合，报告落到 denyAll 的法则缺口
 `);
 }
 

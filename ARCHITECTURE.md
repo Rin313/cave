@@ -31,6 +31,15 @@
 5. **tool schema 是操作提案**——`act(ops)`，ops 为 apply/move/set 的列表；非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。
 6. **无别名表、无关键词匹配、无语言限制**：操作与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），失败走拒绝路径；操作类型（apply/move/set）是 LLM 的输出空间，实体 id 只能取自可见实体索引，不限制玩家输入语言。
 
+## 2.5 已落地的 GameDef 表面契约
+
+- **`denyAll`**：声明在 GameDef 上的独立终端法则，不属于 opLaws；任何法则都未表态且无具体理由时兜底（状态不变）。
+- **`internalProps`**：内部属性（如 `burnTicks`、`actor` 标记）不进 LLM 序列化 / changes / 表达校验，从源头杜绝泄漏。
+- **`summarize`**：确定性回退摘要钩子（游戏腔调、可读），缺省用引擎的通用 JSON 序列化。
+- **`deniedBy: "law" | "denyAll"`**：否决来源语义标记；`sim probe` 依此报告法则缺口，不依赖理由字符串匹配。
+- **`--game` / 游戏注册表**：`src/games/registry.ts` 按 id 解析 GameDef，`loop`/`sim` 工具均已参数化，不再硬编码 cave。
+- **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`validateText`（表达层语义断言钩子）、`settableProps`（set 白名单）。
+
 ## 3. 持久化边界
 
 模拟层状态是 JSON 可序列化的，SQLite 不存热状态，存存档与审计：
@@ -45,6 +54,6 @@
 
 1. **SQLite 驱动**：优先 `node:sqlite`（Node 22.5+ 内置、零原生编译、零 rebuild），需实测 API 是否够用（同步 API、参数化、事务）。不够再退 `better-sqlite3`（原生模块，需 electron-rebuild 对齐 ABI）。
 2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
-3. **模拟层细节**：原子操作集（apply/move/set 是否够，社会性原子如 communicate/alter_relation 是否补）、法则网络的数据结构（law → 裁决的声明格式）、法则完整性检查工具（对可见实体穷举 apply/move/set，报告落到 denyAll 的操作）。
-4. **解析与忠实性**：自由文本意图的解析质量（含无选中情形，§2-6）、实体索引进 prompt 的注入方式、双 pass 分离与表达层后置校验器（DESIGN.md §4.3：叙述实体 ⊆ 可见实体；断言预算 = 状态蕴含的旧事实允许 + changes 是唯一新事实来源）——均待原型实测。
+3. **模拟层细节（部分已定）**：原子操作集（apply/move/set 是否够，社会性原子如 communicate/alter_relation 是否补）待定；法则网络数据结构（law → 裁决的声明格式）待定；法则完整性检查工具已实现（`sim probe --game`，按 `deniedBy === "denyAll"` 报告缺口，值域从世界推导）。
+4. **解析与忠实性（部分已定）**：自由文本意图的解析质量（含无选中情形，§2-6）、实体索引进 prompt 的注入方式——待原型实测；双 pass 分离与表达层后置校验器已实现（DESIGN.md §4.3：叙述实体 ⊆ 可见实体；通用禁止词表从世界派生 + `validateText` 游戏钩子 + `internalProps` 隔离）。
 5. **跨回合指代**（DESIGN.md §11）：活动实体索引 / 权重偏好，待原型验证。

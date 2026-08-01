@@ -1,8 +1,63 @@
-import type { Change, Delta, GameDef, LawCtx, OpLaw, TickLaw, World } from "../core/sim.ts";
-import { accessible, entity, prop, requireOp } from "../core/sim.ts";
+import type { Change, Delta, GameDef, LawCtx, OpLaw, PropValue, TickLaw, World } from "../core/sim.ts";
+import { accessible, entity, prop, requireOp, visibleIds } from "../core/sim.ts";
 
 function n(c: LawCtx, id: string): string {
 	return entity(c.world, id)?.name ?? id;
+}
+
+const MATERIAL_LABELS: Record<string, string> = {
+	copper: "铜", bone: "骨", wood: "木", iron: "铁", stone: "石", wax: "蜡", steel: "钢", ash: "灰烬",
+};
+
+const PROP_LABELS: Record<string, string> = {
+	burning: "燃烧状态", lit: "明火", open: "开合", material: "材质", in: "位置",
+	attachedTo: "固定", jammed: "卡住", wedgedBy: "楔住", flammable: "可燃性",
+};
+
+function summarizeCave(input: { world: World; changes: Change[]; actor: string }): string {
+	const { world, changes, actor } = input;
+	const lines: string[] = [];
+	const player = entity(world, actor);
+	const loc = player?.props["in"] as string | null;
+	const place = entity(world, loc ?? "")?.name ?? "原地";
+	lines.push(`你站在${place}。`);
+	for (const id of visibleIds(world, actor)) {
+		if (id === actor) continue;
+		const e = entity(world, id);
+		if (!e) continue;
+		if (e.props.space === true) continue;
+		const bits: string[] = [];
+		if (e.props.lit === true) bits.push("燃着");
+		if (e.props.burning === true) bits.push("正在燃烧");
+		if (e.props.open === true) bits.push("开着");
+		else if (e.props.openable === true) bits.push("关着");
+		if (e.props.attachedTo != null) bits.push("固定在别处");
+		if (e.props.material === "ash") bits.push("已成灰烬");
+		else if (typeof e.props.material === "string") bits.push(`${MATERIAL_LABELS[e.props.material] ?? e.props.material}质`);
+		const container = e.props["in"] as string | null;
+		if (container && container !== actor) {
+			const parent = entity(world, container);
+			if (parent) bits.push(`在${parent.name}里`);
+		}
+		lines.push(`- ${e.name}${bits.length ? `（${bits.join("，")}）` : ""}`);
+	}
+	const fmt = (v: PropValue): string => {
+		if (v === null) return "无";
+		if (v === true) return "有";
+		if (v === false) return "无";
+		if (typeof v === "string") {
+			const hit = entity(world, v);
+			if (hit) return hit.name;
+			return MATERIAL_LABELS[v] ?? v;
+		}
+		return String(v);
+	};
+	for (const ch of changes) {
+		const e = entity(world, ch.entity);
+		const label = PROP_LABELS[ch.prop] ?? ch.prop;
+		lines.push(`变更：${e?.name ?? ch.entity}的${label} ${fmt(ch.from)} → ${fmt(ch.to)}`);
+	}
+	return lines.join("\n");
 }
 
 const MATERIAL_HARDNESS: Record<string, number> = {
@@ -358,10 +413,13 @@ export const cave: GameDef = {
 			{ id: "crowbar", name: "铁钎", props: { in: "cave", material: "iron", grabbable: true } },
 		],
 	},
-	opLaws: [wedge, moveLaw, detach, open, close, pry, ignite, extinguish, denyAll],
+	opLaws: [wedge, moveLaw, detach, open, close, pry, ignite, extinguish],
 	tickLaws: [kindle, spread, burnout],
+	denyAll,
 	settableProps: ["open", "attachedTo", "lit"],
+	internalProps: ["actor", "burnTicks"],
 	validateText: validateCaveText,
+	summarize: summarizeCave,
 	hint: `世界法则（模拟层强制执行）：
 1. 火源（lit=true）作用于可燃物（flammable=true）：可点燃蜡烛（lightable=true，点燃后 lit=true），或让普通可燃物燃烧（burning=true）；燃烧会随时间蔓延到同处或容器内的可燃物，并最终烧成灰烬（material=ash）。
 2. 燃着的火（lit 且非蜡烛类）放进可燃容器，容器会被引燃（如把火把放进木箱）。
