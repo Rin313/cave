@@ -41,6 +41,22 @@
 				{ "name": "把蜡烛抽出来", "op": { "kind": "move", "entity": "candle", "dest": "cave" }, "expect": { "ok": true, "reason": "放到" } },
 				{ "name": "门解卡，可以打开", "op": { "kind": "set", "entity": "door", "prop": "open", "value": true }, "expect": { "ok": true, "reason": "打开" } }
 			]
+		},
+		{
+			"name": "涌现：铁钎撬开木箱，但撬不动石门",
+			"steps": [
+				{ "name": "用铁钎撬开木箱（硬物 > 木）", "op": { "kind": "apply", "source": "crowbar", "target": "chest" }, "expect": { "ok": true, "reason": "撬开", "state": { "chest.open": true } } },
+				{ "name": "用铁钎撬石门失败（iron < stone）", "op": { "kind": "apply", "source": "crowbar", "target": "door" }, "expect": { "ok": false, "reason": "硬度" } }
+			]
+		},
+		{
+			"name": "涌现：燃着的火把放进木箱会被引燃",
+			"steps": [
+				{ "name": "打开木箱", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true } },
+				{ "name": "把燃着的火把放进木箱", "op": { "kind": "move", "entity": "torch", "dest": "chest" }, "expect": { "ok": true, "reason": "放进" } },
+				{ "name": "tick：火把引燃木箱", "tick": 1, "expect": { "ok": true, "reason": "点燃", "state": { "chest.burning": true } } },
+				{ "name": "tick：木箱烧成灰烬", "tick": 3, "expect": { "ok": true, "reason": "灰烬", "state": { "chest.material": "ash", "chest.burning": false } } }
+			]
 		}
 	]
 }

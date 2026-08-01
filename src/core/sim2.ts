@@ -69,6 +69,10 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
+export function requireOp<K extends Op["kind"]>(c: LawCtx, kind: K): Extract<Op, { kind: K }> | null {
+	return c.op?.kind === kind ? (c.op as Extract<Op, { kind: K }>) : null;
+}
+
 export function prop(world: World, id: string, name: string): PropValue {
 	return entity(world, id)?.props[name] ?? null;
 }

@@ -106,14 +106,19 @@ export class Engine2 {
 					break;
 				case "turn_end":
 					if (!this.phase.inAct) break;
+					let anyResult = false;
 					for (const tr of event.toolResults) {
 						if (tr.toolName !== ACT_TOOL) continue;
 						const text = toolResultText(tr.content);
 						if (!text) continue;
 						const results = parseResults(text);
 						if (!results) continue;
-						this.outcome = { kind: results.some((r) => r.ok) ? "applied" : "rejected", results };
+						anyResult = true;
+						this.outcome.results.push(...results);
 						this.emit({ type: "tool_result", results });
+					}
+					if (anyResult) {
+						this.outcome.kind = this.outcome.results.some((r) => r.ok) ? "applied" : "rejected";
 					}
 					break;
 			}

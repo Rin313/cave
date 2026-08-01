@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { Simulation } from "../core/sim2.ts";
 import type { Op, PropValue } from "../core/sim2.ts";
-import { caveSim2 } from "../games/cave.sim2.ts";
+import { caveSim2, isGenericDeny } from "../games/cave.sim2.ts";
 
 type OpLike =
 	| { kind: "apply"; source: string; target: string }
@@ -165,6 +165,80 @@ function parseOpToken(token: string): Op {
 	throw new Error(`无法解析操作：${token}（支持 apply S T / move X D / set X P V / tick N）`);
 }
 
+const BOOL_PROPS = ["open", "lit", "burning", "jammed", "flammable", "lightable", "openable", "grabbable", "wedgeable"];
+
+function describeOp(op: Op): string {
+	if (op.kind === "apply") return `apply ${op.source} ${op.target}`;
+	if (op.kind === "move") return `move ${op.entity} ${op.dest}`;
+	return `set ${op.entity} ${op.prop} ${JSON.stringify(op.value)}`;
+}
+
+async function cmdProbe(): Promise<void> {
+	const sim = new Simulation(caveSim2, 1);
+	const ids = [...sim.visibleIds].filter((id) => id !== "player");
+	const itemIds = ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true);
+	const gaps: { op: string; reason: string }[] = [];
+	const seen = new Set<string>();
+
+	const probeOp = (op: Op) => {
+		const fresh = new Simulation(caveSim2, 1);
+		const r = fresh.apply(op);
+		if (!r.ok && isGenericDeny(r.reason)) gaps.push({ op: describeOp(op), reason: r.reason });
+	};
+
+	const unique = (op: Op) => {
+		const key = describeOp(op);
+		if (seen.has(key)) return;
+		seen.add(key);
+		probeOp(op);
+	};
+
+	for (const s of itemIds) {
+		for (const t of ids) {
+			if (s === t) continue;
+			unique({ kind: "apply", source: s, target: t });
+		}
+	}
+	for (const e of itemIds) {
+		for (const d of ids) {
+			if (e === d) continue;
+			unique({ kind: "move", entity: e, dest: d });
+		}
+	}
+	for (const e of itemIds) {
+		for (const p of BOOL_PROPS) {
+			unique({ kind: "set", entity: e, prop: p, value: true });
+			unique({ kind: "set", entity: e, prop: p, value: false });
+		}
+		unique({ kind: "set", entity: e, prop: "attachedTo", value: null });
+		for (const m of ["wood", "iron", "stone", "ash", "steel"]) {
+			unique({ kind: "set", entity: e, prop: "material", value: m });
+		}
+		for (const d of ids) {
+			unique({ kind: "set", entity: e, prop: "in", value: d });
+		}
+	}
+
+	const applyMoveGaps = gaps.filter((g) => g.op.startsWith("apply") || g.op.startsWith("move"));
+	const setGaps = gaps.filter((g) => g.op.startsWith("set"));
+	const byProp = new Map<string, { n: number; examples: string[] }>();
+	for (const g of setGaps) {
+		const prop = g.op.match(/set \S+ (\S+) /)?.[1] ?? "?";
+		const e = byProp.get(prop) ?? { n: 0, examples: [] };
+		e.n += 1;
+		if (e.examples.length < 3) e.examples.push(g.op);
+		byProp.set(prop, e);
+	}
+	console.log(`=== 法则完整性探测（${seen.size} 个典型 op）===`);
+	console.log(`apply/move 缺口: ${applyMoveGaps.length}`);
+	for (const g of applyMoveGaps) console.log(`  [GAP] ${g.op} → ${g.reason}`);
+	console.log(`set 缺口（按属性分组）: ${setGaps.length}`);
+	for (const [prop, e] of [...byProp.entries()].sort((a, b) => b[1].n - a[1].n)) {
+		console.log(`  ${prop.padEnd(12)} ×${e.n}  例: ${e.examples.join(" | ")}`);
+	}
+	console.log(gaps.length === 0 ? "\n无缺口。法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
+}
+
 async function cmdRun(tokens: string[]): Promise<void> {
 	const sim = new Simulation(caveSim2, 1);
 	console.log("=== 初始世界 ===");
@@ -198,10 +272,15 @@ async function main(): Promise<void> {
 		await cmdRun(rest);
 		return;
 	}
+	if (cmd === "probe") {
+		await cmdProbe();
+		return;
+	}
 	console.log(`用法:
   sim2 scenario [<scenario.json>]   运行法则引擎场景验证（默认 scenarios/sim2.cave.json）
   sim2 run <op> [<op>...]           按顺序执行操作并展示世界与变更
     op: apply <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
+  sim2 probe                        穷举可见实体的 op 组合，报告落到通用 denyAll 的法则缺口
 `);
 }
 

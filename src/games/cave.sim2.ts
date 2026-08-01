@@ -1,15 +1,30 @@
 import type { Delta, GameDef, LawCtx, OpLaw, TickLaw } from "../core/sim2.ts";
-import { accessible, entity, prop } from "../core/sim2.ts";
+import { accessible, entity, prop, requireOp } from "../core/sim2.ts";
 
 function n(c: LawCtx, id: string): string {
 	return entity(c.world, id)?.name ?? id;
 }
 
-const HARD_MATERIALS = ["copper", "stone", "iron", "steel"];
+const MATERIAL_HARDNESS: Record<string, number> = {
+	wax: 0,
+	copper: 1,
+	bone: 2,
+	wood: 3,
+	iron: 4,
+	stone: 5,
+	steel: 6,
+};
+
+const HARD_MIN = 4;
+
+function hardness(c: LawCtx, id: string): number {
+	const m = String(prop(c.world, id, "material") ?? "");
+	return MATERIAL_HARDNESS[m] ?? 0;
+}
 
 const wedge: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "move") return { granted: false };
+	const op = requireOp(c, "move");
+	if (!op) return { granted: false };
 	const x = op.entity;
 	const d = op.dest;
 	if (prop(c.world, x, "wedgeable") !== true) return { granted: false };
@@ -18,6 +33,8 @@ const wedge: OpLaw = (c) => {
 	const acc = accessible(c.world, x, c.actor);
 	if (!acc.ok) return { granted: false, denyReason: acc.reason };
 	if (de.props.jammed === true) return { granted: false, denyReason: `${n(c, d)}的门缝里已经塞着东西了。` };
+	// 简化：楔入物不改变其位置（仍留在持有者处），只记录 door.jammed/wedgedBy 两个状态位；
+	// 移动楔入物到任意位置都会解卡（见 moveLaw 的 wedgedBy 清理）。
 	return {
 		granted: true,
 		changes: [
@@ -29,8 +46,8 @@ const wedge: OpLaw = (c) => {
 };
 
 const moveLaw: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "move") return { granted: false };
+	const op = requireOp(c, "move");
+	if (!op) return { granted: false };
 	const x = op.entity;
 	const d = op.dest;
 	const acc = accessible(c.world, x, c.actor);
@@ -63,8 +80,8 @@ const moveLaw: OpLaw = (c) => {
 };
 
 const detach: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "set") return { granted: false };
+	const op = requireOp(c, "set");
+	if (!op) return { granted: false };
 	if (op.prop !== "attachedTo" || op.value !== null) return { granted: false };
 	const x = op.entity;
 	if (prop(c.world, x, "attachedTo") == null) return { granted: false, denyReason: `它没有被固定住。` };
@@ -81,8 +98,9 @@ const detach: OpLaw = (c) => {
 };
 
 const open: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "set" || op.prop !== "open" || op.value !== true) return { granted: false };
+	const op = requireOp(c, "set");
+	if (!op) return { granted: false };
+	if (op.prop !== "open" || op.value !== true) return { granted: false };
 	const x = op.entity;
 	if (prop(c.world, x, "openable") !== true) return { granted: false, denyReason: `${n(c, x)}打不开。` };
 	if (prop(c.world, x, "open") === true) return { granted: false, denyReason: `它已经开了。` };
@@ -91,8 +109,9 @@ const open: OpLaw = (c) => {
 };
 
 const close: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "set" || op.prop !== "open" || op.value !== false) return { granted: false };
+	const op = requireOp(c, "set");
+	if (!op) return { granted: false };
+	if (op.prop !== "open" || op.value !== false) return { granted: false };
 	const x = op.entity;
 	if (prop(c.world, x, "openable") !== true) return { granted: false };
 	if (prop(c.world, x, "open") !== true) return { granted: false, denyReason: `它已经关着。` };
@@ -100,23 +119,32 @@ const close: OpLaw = (c) => {
 };
 
 const pry: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "apply") return { granted: false };
+	const op = requireOp(c, "apply");
+	if (!op) return { granted: false };
 	const s = op.source;
 	const t = op.target;
 	if (prop(c.world, t, "openable") !== true) return { granted: false };
-	if (prop(c.world, t, "open") === true) return { granted: false };
+	if (prop(c.world, t, "open") === true) return { granted: false, denyReason: `${n(c, t)}已经开着。` };
+	if (prop(c.world, t, "jammed") === true) return { granted: false, denyReason: `${n(c, t)}被东西卡住，撬不开。` };
 	if (prop(c.world, s, "lit") === true) return { granted: false };
-	if (!HARD_MATERIALS.includes(String(prop(c.world, s, "material")))) return { granted: false };
+	if (hardness(c, s) < HARD_MIN) {
+		return { granted: false, denyReason: `${n(c, s)}太软，撬不动${n(c, t)}。` };
+	}
+	if (hardness(c, s) <= hardness(c, t)) {
+		return { granted: false, denyReason: `${n(c, s)}的硬度不足以撬开${n(c, t)}。` };
+	}
+	const acc = accessible(c.world, s, c.actor);
+	if (!acc.ok) return { granted: false, denyReason: acc.reason };
 	return {
-		granted: false,
-		denyReason: `你用${n(c, s)}撬了撬${n(c, t)}的门缝，但${n(c, s)}太软，${n(c, t)}纹丝不动。`,
+		granted: true,
+		changes: [{ entity: t, prop: "open", to: true }],
+		reason: `你用${n(c, s)}撬开了${n(c, t)}。`,
 	};
 };
 
 const ignite: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "apply") return { granted: false };
+	const op = requireOp(c, "apply");
+	if (!op) return { granted: false };
 	const s = op.source;
 	const t = op.target;
 	if (prop(c.world, s, "lit") !== true) return { granted: false, denyReason: `${n(c, s)}没有火。` };
@@ -140,8 +168,9 @@ const ignite: OpLaw = (c) => {
 };
 
 const extinguish: OpLaw = (c) => {
-	const op = c.op;
-	if (op?.kind !== "set" || op.prop !== "lit" || op.value !== false) return { granted: false };
+	const op = requireOp(c, "set");
+	if (!op) return { granted: false };
+	if (op.prop !== "lit" || op.value !== false) return { granted: false };
 	const x = op.entity;
 	if (prop(c.world, x, "lit") !== true) return { granted: false, denyReason: `它没有在燃烧。` };
 	if (prop(c.world, x, "burning") === true) return { granted: false, denyReason: `火已经烧起来了，吹不灭。` };
@@ -158,6 +187,26 @@ const denyAll: OpLaw = (c) => {
 		return { granted: false, denyReason: `你无法把${n(c, op.entity)}放到${n(c, op.dest)}。` };
 	}
 	return { granted: false, denyReason: `这世界不这样运转——${n(c, op.entity)}的${op.prop}无法被改变。` };
+};
+
+const kindle: TickLaw = (c) => {
+	const changes: Delta[] = [];
+	const reasons: string[] = [];
+	for (const x of c.world.entities) {
+		if (x.props.lit !== true) continue;
+		if (x.props.burning === true) continue;
+		if (x.props.lightable === true) continue;
+		const hostId = x.props["in"] as string | null;
+		if (!hostId) continue;
+		const host = entity(c.world, hostId);
+		if (!host || host.props.flammable !== true) continue;
+		if (host.props.burning === true || host.props.lit === true) continue;
+		changes.push({ entity: host.id, prop: "burning", to: true });
+		changes.push({ entity: host.id, prop: "lit", to: true });
+		reasons.push(`${x.name}的火焰点燃了${host.name}！`);
+	}
+	if (!changes.length) return { granted: false };
+	return { granted: true, changes, reason: reasons.join(" ") };
 };
 
 const spread: TickLaw = (c) => {
@@ -203,6 +252,12 @@ const burnout: TickLaw = (c) => {
 	return { granted: true, changes, reason: reasons.join(" ") };
 };
 
+const GENERIC_DENY_PATTERNS = ["你把", "你无法把", "这世界不这样运转"];
+
+export function isGenericDeny(reason: string): boolean {
+	return GENERIC_DENY_PATTERNS.some((p) => reason.startsWith(p));
+}
+
 export const caveSim2: GameDef = {
 	id: "cave",
 	title: "地窖（法则引擎）",
@@ -218,15 +273,15 @@ export const caveSim2: GameDef = {
 			{ id: "candle", name: "蜡烛", props: { in: "chest", material: "wax", flammable: true, grabbable: true, wedgeable: true, lightable: true, lit: false } },
 			{ id: "chest", name: "木箱", props: { in: "cave", material: "wood", flammable: true, openable: true, open: false, container: true } },
 			{ id: "door", name: "石门", props: { in: "cave", material: "stone", openable: true, open: false, isDoor: true } },
+			{ id: "crowbar", name: "铁钎", props: { in: "cave", material: "iron", grabbable: true } },
 		],
 	},
 	opLaws: [wedge, moveLaw, detach, open, close, pry, ignite, extinguish, denyAll],
-	tickLaws: [spread, burnout],
+	tickLaws: [kindle, spread, burnout],
 	hint: `世界法则（模拟层强制执行）：
 1. 火源（lit=true）作用于可燃物（flammable=true）：可点燃蜡烛（lightable=true，点燃后 lit=true），或让普通可燃物燃烧（burning=true）；燃烧会随时间蔓延到同处或容器内的可燃物，并最终烧成灰烬（material=ash）。
-2. 可开启物（openable=true）可被打开/关闭；被卡住（jammed=true）时打不开。
-3. 物品可被拿起（move 到玩家）、放下（move 到场景）、放入（move 到打开的容器）、解下（把 attachedTo 设为 null）。
-4. 硬物（金属/石材）可用于撬可开启物，撬动与否由双方材质决定。`,
+2. 燃着的火（lit 且非蜡烛类）放进可燃容器，容器会被引燃（如把火把放进木箱）。
+3. 可开启物（openable=true）可被打开/关闭；被卡住（jammed=true）时打不开。
+4. 物品可被拿起（move 到玩家）、放下（move 到场景）、放入（move 到打开的容器）、解下（把 attachedTo 设为 null）。
+5. 硬物（iron/steel 材质，如铁钎）可撬开比它软的可开启物（如木箱）；撬不动比它硬的（石门是 stone）。`,
 };
-
-export default caveSim2;
