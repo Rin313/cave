@@ -194,13 +194,11 @@ export class Simulation {
 		const visible = this.state.entities.filter((e) => this.isVisible(e.id));
 		return JSON.stringify(
 			{
-				room: this.state.roomId,
-				player: this.state.player,
 				entities: visible.map((e) => ({
 					id: e.id,
 					name: e.name,
 					attrs: e.attrs,
-					location: e.location,
+					location: e.location === this.state.roomId ? null : e.location === this.state.player ? "inventory" : e.location,
 				})),
 			},
 			null,

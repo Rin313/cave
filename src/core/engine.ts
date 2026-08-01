@@ -177,10 +177,12 @@ function buildSystemPrompt(config: GameConfig): string {
 	const intents = config.intents.map((i) => `- ${i.label}: ${i.description}`).join("\n");
 	return `你是文字游戏引擎。每个回合你会收到 [当前状态]（JSON，唯一真相源）和玩家的操作文本。
 
-1. 若操作匹配意图表中的某个意图，调用 apply_intent：intent 必须是意图表中的一个标签，entity_ids 只能从当前状态可见实体中选择。
+状态说明：entities 是当前所有可见实体。location 为 null 表示实体就在房间中；为 "inventory" 表示由玩家携带；其余值是该实体内部（值为其 id）。实体 id 只是内部标识，仅用于工具调用，不出现在叙述中。
+
+1. 若操作匹配意图表中的某个意图，调用 apply_intent：intent 必须是意图表中的一个标签，entity_ids 必须取自已可见实体的 id。
 2. 工具返回执行结果与执行后的新状态（JSON，唯一真相源）。ok=true 表示状态已改变，你基于新状态叙述操作的结果；ok=false 表示操作不成立，你写一段文学性反应。
 3. 若操作无法匹配意图表中任何一个意图、解析不出实体、或语境荒谬，不要调用工具，直接写文学性反应。
-4. 叙述只能引用状态中真实存在的实体和属性，禁止发明不存在的物体、人物、现象；不得提及意图表标签、实体ID、状态字段或工具调用。
+4. 叙述只能引用状态中真实存在的实体和属性，禁止发明不存在的物体、人物、现象；叙述一律使用实体的名称（name），不得写出实体 id、意图表标签、状态字段或工具调用。
 
 意图表：
 ${intents}`;
@@ -191,7 +193,7 @@ function buildIntentTool(sim: Simulation, phase: { inAct: boolean }) {
 	return defineTool({
 		name: INTENT_TOOL,
 		label: "施放意图",
-		description: "执行玩家的操作意图：intent 命中意图表，entity_ids 只能从当前状态可见实体中选择。",
+		description: "执行玩家的操作意图：intent 命中意图表，entity_ids 必须取自已可见实体的 id。",
 		parameters: Type.Object({
 			intent: Type.Union(intents.map((i) => Type.Literal(i.label))),
 			entity_ids: Type.Array(Type.String({ description: "实体ID，只能从当前状态可见实体中选择" })),

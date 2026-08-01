@@ -1,0 +1,46 @@
+{
+	"game": "cave",
+	"name": "法则引擎涌现验证",
+	"seed": 7,
+	"scenarios": [
+		{
+			"name": "基础流程：取戒 → 开箱 → 拿蜡 → 点燃 → 放下",
+			"steps": [
+				{ "name": "直接拿戒指失败（固定在骷髅上）", "op": { "kind": "move", "entity": "ring", "dest": "player" }, "expect": { "ok": false, "reason": "固定" } },
+				{ "name": "解下铜戒", "op": { "kind": "set", "entity": "ring", "prop": "attachedTo", "value": null }, "expect": { "ok": true, "reason": "解下" } },
+				{ "name": "戒指已到手", "op": { "kind": "move", "entity": "ring", "dest": "player" }, "expect": { "ok": true, "reason": "手中" } },
+				{ "name": "打开木箱", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true, "reason": "打开" } },
+				{ "name": "取出蜡烛", "op": { "kind": "move", "entity": "candle", "dest": "player" }, "expect": { "ok": true, "reason": "拿起" } },
+				{ "name": "用火把点燃蜡烛", "op": { "kind": "apply", "source": "torch", "target": "candle" }, "expect": { "ok": true, "reason": "点燃" } },
+				{ "name": "把火把放在地上", "op": { "kind": "move", "entity": "torch", "dest": "cave" }, "expect": { "ok": true, "reason": "放到" } }
+			]
+		},
+		{
+			"name": "涌现：点燃木箱 → 火蔓延 → 内容物被烧毁",
+			"steps": [
+				{ "name": "点燃木箱（从未写过的交互）", "op": { "kind": "apply", "source": "torch", "target": "chest" }, "expect": { "ok": true, "reason": "燃" } },
+				{ "name": "tick：火焰蔓延到箱内蜡烛", "tick": 1, "expect": { "ok": true, "reason": "蔓延" } },
+				{ "name": "tick：火继续烧", "tick": 1, "expect": { "ok": true } },
+				{ "name": "tick：木箱与蜡烛烧成灰烬", "tick": 1, "expect": { "ok": true, "reason": "灰烬", "state": { "chest.material": "ash", "candle.material": "ash", "chest.burning": false } } }
+			]
+		},
+		{
+			"name": "涌现：用铜戒撬门失败（拒绝带理由）",
+			"steps": [
+				{ "name": "用铜戒撬石门", "op": { "kind": "apply", "source": "ring", "target": "door" }, "expect": { "ok": false, "reason": "撬" } }
+			]
+		},
+		{
+			"name": "涌现：蜡烛塞进门缝 → 门卡住 → 抽出后恢复",
+			"steps": [
+				{ "name": "关着木箱里的蜡烛拿不到", "op": { "kind": "move", "entity": "candle", "dest": "player" }, "expect": { "ok": false, "reason": "关着" } },
+				{ "name": "打开木箱", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true } },
+				{ "name": "取出蜡烛", "op": { "kind": "move", "entity": "candle", "dest": "player" }, "expect": { "ok": true } },
+				{ "name": "把蜡烛塞进门缝", "op": { "kind": "move", "entity": "candle", "dest": "door" }, "expect": { "ok": true, "reason": "卡住" } },
+				{ "name": "门被卡住，打不开", "op": { "kind": "set", "entity": "door", "prop": "open", "value": true }, "expect": { "ok": false, "reason": "卡住" } },
+				{ "name": "把蜡烛抽出来", "op": { "kind": "move", "entity": "candle", "dest": "cave" }, "expect": { "ok": true, "reason": "放到" } },
+				{ "name": "门解卡，可以打开", "op": { "kind": "set", "entity": "door", "prop": "open", "value": true }, "expect": { "ok": true, "reason": "打开" } }
+			]
+		}
+	]
+}
