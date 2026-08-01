@@ -57,6 +57,15 @@
 				{ "name": "tick：火把引燃木箱", "tick": 1, "expect": { "ok": true, "reason": "点燃", "state": { "chest.burning": true } } },
 				{ "name": "tick：木箱烧成灰烬", "tick": 3, "expect": { "ok": true, "reason": "灰烬", "state": { "chest.material": "ash", "chest.burning": false } } }
 			]
+		},
+		{
+			"name": "set 白名单：结构性属性拒绝直接写入",
+			"steps": [
+				{ "name": "set 直接改材质被拒", "op": { "kind": "set", "entity": "chest", "prop": "material", "value": "gold" }, "expect": { "ok": false, "reason": "无法被改变" } },
+				{ "name": "set 直接传送被拒", "op": { "kind": "set", "entity": "torch", "prop": "in", "value": "player" }, "expect": { "ok": false, "reason": "无法被改变" } },
+				{ "name": "set open 仍允许（法则声明的可写属性）", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true } },
+				{ "name": "set 解戒仍允许", "op": { "kind": "set", "entity": "ring", "prop": "attachedTo", "value": null }, "expect": { "ok": true } }
+			]
 		}
 	]
 }

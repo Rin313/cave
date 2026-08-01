@@ -1,4 +1,4 @@
-import type { Delta, GameDef, LawCtx, OpLaw, TickLaw } from "../core/sim.ts";
+import type { Change, Delta, GameDef, LawCtx, OpLaw, TickLaw, World } from "../core/sim.ts";
 import { accessible, entity, prop, requireOp } from "../core/sim.ts";
 
 function n(c: LawCtx, id: string): string {
@@ -258,6 +258,88 @@ export function isGenericDeny(reason: string): boolean {
 	return GENERIC_DENY_PATTERNS.some((p) => reason.startsWith(p));
 }
 
+const STRONG_FIRE_CLAIMS = ["焦烟", "冒烟", "火舌", "烧焦", "烧成灰烬"];
+const WEAK_FIRE_CLAIMS = ["燃烧", "点燃", "燃起", "烧起来"];
+const HAND_CLAIMS = ["手中", "手上", "掌心", "手里", "握"];
+const NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾", "不曾"];
+const PUNCT = /[，。；！？、—\s]/;
+
+function negatedBefore(s: string, p: number): boolean {
+	return NEGATIONS.some((n) => s.slice(Math.max(0, p - 3), p).includes(n));
+}
+
+function claimAsserted(s: string, claim: string): boolean {
+	let idx = 0;
+	while ((idx = s.indexOf(claim, idx)) !== -1) {
+		if (!negatedBefore(s, idx)) return true;
+		idx += claim.length;
+	}
+	return false;
+}
+
+function nearBefore(s: string, name: string, p: number): boolean {
+	const from = Math.max(0, p - 4);
+	const i = s.lastIndexOf(name, p - 1);
+	if (i === -1 || i < from) return false;
+	return !PUNCT.test(s.slice(i + name.length, p));
+}
+
+function nearAfter(s: string, name: string, p: number, claimLen: number): boolean {
+	const to = Math.min(s.length, p + claimLen + 4);
+	const i = s.indexOf(name, p + claimLen);
+	if (i === -1 || i + name.length > to) return false;
+	return !PUNCT.test(s.slice(p + claimLen, i));
+}
+
+export function validateCaveText(input: { text: string; world: World; changes: Change[]; actor: string }): string | null {
+	const { text, world, actor } = input;
+	const isFire = (id: string) => prop(world, id, "lit") === true || prop(world, id, "burning") === true || prop(world, id, "material") === "ash";
+	const isHeld = (id: string) => prop(world, id, "in") === actor;
+	const nonFire = world.entities.filter((e) => e.id !== actor && e.props.space !== true && !isFire(e.id));
+	const nonHeld = world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && !isHeld(e.id));
+	const fireError = (t: typeof nonFire[number]) => `描述虚构了「${t.name}」的燃烧/点燃/烧焦，但当前状态并非如此。`;
+
+	for (const s of text.split(/[。！？!?；;]/)) {
+		for (const claim of STRONG_FIRE_CLAIMS) {
+			if (!claimAsserted(s, claim)) continue;
+			const t = nonFire.find((e) => s.includes(e.name));
+			if (t) return fireError(t);
+		}
+		for (const claim of WEAK_FIRE_CLAIMS) {
+			let idx = 0;
+			while ((idx = s.indexOf(claim, idx)) !== -1) {
+				if (negatedBefore(s, idx)) {
+					idx += claim.length;
+					continue;
+				}
+				if (s[idx + claim.length] === "的") {
+					const after = s.slice(idx + claim.length + 1, idx + claim.length + 4);
+					const t = nonFire.find((e) => after.startsWith(e.name));
+					if (t) return fireError(t);
+					idx += claim.length;
+					continue;
+				}
+				const t = nonFire.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
+				if (t) return fireError(t);
+				idx += claim.length;
+			}
+		}
+		for (const claim of HAND_CLAIMS) {
+			let idx = 0;
+			while ((idx = s.indexOf(claim, idx)) !== -1) {
+				if (negatedBefore(s, idx)) {
+					idx += claim.length;
+					continue;
+				}
+				const t = nonHeld.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
+				if (t) return `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`;
+				idx += claim.length;
+			}
+		}
+	}
+	return null;
+}
+
 export const cave: GameDef = {
 	id: "cave",
 	title: "地窖（法则引擎）",
@@ -278,6 +360,8 @@ export const cave: GameDef = {
 	},
 	opLaws: [wedge, moveLaw, detach, open, close, pry, ignite, extinguish, denyAll],
 	tickLaws: [kindle, spread, burnout],
+	settableProps: ["open", "attachedTo", "lit"],
+	validateText: validateCaveText,
 	hint: `世界法则（模拟层强制执行）：
 1. 火源（lit=true）作用于可燃物（flammable=true）：可点燃蜡烛（lightable=true，点燃后 lit=true），或让普通可燃物燃烧（burning=true）；燃烧会随时间蔓延到同处或容器内的可燃物，并最终烧成灰烬（material=ash）。
 2. 燃着的火（lit 且非蜡烛类）放进可燃容器，容器会被引燃（如把火把放进木箱）。

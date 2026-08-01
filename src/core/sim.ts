@@ -54,6 +54,10 @@ export interface GameDef {
 	opLaws: OpLaw[];
 	tickLaws?: TickLaw[];
 	hint?: string;
+	/** set 只允许写入这些属性；未声明即全部拒绝（结构性属性必须走 apply/move）。未设置时退回纯法则裁决。 */
+	settableProps?: string[];
+	/** 表达层后置校验钩子：返回错误信息或 null。text 中出现的实体/断言不得与 world + changes 矛盾。 */
+	validateText?: (input: { text: string; world: World; changes: Change[]; actor: string }) => string | null;
 }
 
 export type StepOp = Op | { kind: "tick"; n: number };
@@ -161,6 +165,13 @@ export class Simulation {
 	}
 
 	apply(op: Op): StepResult {
+		if (op.kind === "set" && this.def.settableProps && !this.def.settableProps.includes(op.prop)) {
+			const e = entity(this.world, op.entity);
+			const reason = `世界不这样运转——${e?.name ?? op.entity}的${op.prop}无法被改变。`;
+			const sr: StepResult = { ok: false, reason, changes: [], op };
+			this.log.push(sr);
+			return sr;
+		}
 		const ctx: LawCtx = { world: this.world, op, actor: this.actor, rng: this.rand };
 		let denial: string | null = null;
 		for (const law of this.def.opLaws) {

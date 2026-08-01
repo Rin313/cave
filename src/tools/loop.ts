@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
-import type { World } from "../core/sim.ts";
+import type { Change, World } from "../core/sim.ts";
 import { cave } from "../games/cave.ts";
 
 interface RunMeta {
@@ -84,14 +84,27 @@ function out(obj: unknown): void {
 	process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
 }
 
-async function renderScene(engine: Engine, instruction: string): Promise<string> {
-	let text = "";
+interface ValidationFailure {
+	round: number;
+	error: string;
+	attempt: string;
+}
+
+function collectEvents(engine: Engine): { unsub: () => void; texts: string[]; validations: ValidationFailure[] } {
+	const texts: string[] = [];
+	const validations: ValidationFailure[] = [];
 	const unsub = engine.subscribe((e) => {
-		if (e.type === "text_delta") text += e.delta;
+		if (e.type === "text_delta") texts.push(e.delta);
+		else if (e.type === "validation") validations.push({ round: e.round, error: e.error, attempt: e.attempt });
 	});
-	await engine.render(instruction);
+	return { unsub, texts, validations };
+}
+
+async function renderScene(engine: Engine, instruction: string, changes: Change[] = []): Promise<{ text: string; validations: ValidationFailure[] }> {
+	const { unsub, texts, validations } = collectEvents(engine);
+	await engine.render(instruction, changes);
 	unsub();
-	return text;
+	return { text: texts.join(""), validations };
 }
 
 async function cmdStart(game: string, runId: string): Promise<void> {
@@ -102,7 +115,7 @@ async function cmdStart(game: string, runId: string): Promise<void> {
 	const sessionManager = SessionManager.create(process.cwd(), dir);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
-		const scene = await renderScene(engine, "请用文学笔触描写当前场景。");
+		const { text: scene, validations } = await renderScene(engine, "请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
 			game,
 			runId,
@@ -113,8 +126,8 @@ async function cmdStart(game: string, runId: string): Promise<void> {
 		};
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		saveState(dir, sim);
-		appendTranscript(dir, { turn: 1, phase: "start", scene });
-		out({ run: runId, turn: 1, phase: "start", scene, world: sim.snapshot() });
+		appendTranscript(dir, { turn: 1, phase: "start", scene, validations });
+		out({ run: runId, turn: 1, phase: "start", scene, validations, world: sim.snapshot() });
 	} finally {
 		engine.dispose();
 	}
@@ -132,10 +145,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 	const sessionManager = SessionManager.open(meta.sessionFile);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
-		const texts: string[] = [];
-		const unsub = engine.subscribe((e) => {
-			if (e.type === "text_delta") texts.push(e.delta);
-		});
+		const { unsub, texts, validations } = collectEvents(engine);
 		const outcome = await engine.act({ intent, selection });
 		const narration = texts.join("");
 		unsub();
@@ -150,8 +160,10 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			intent,
 			selection: selection ?? null,
 			kind: outcome.kind,
+			refusal: outcome.refusal ?? null,
 			results: outcome.results,
 			narration,
+			validations,
 		});
 		out({
 			run: runId,
@@ -160,8 +172,10 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			intent,
 			selection: selection ?? null,
 			kind: outcome.kind,
+			refusal: outcome.refusal ?? null,
 			results: outcome.results,
 			narration,
+			validations,
 			world: sim.snapshot(),
 		});
 	} finally {
@@ -181,17 +195,11 @@ async function cmdRender(runId: string, instruction: string, gameHint?: string):
 	const sessionManager = SessionManager.open(meta.sessionFile);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
-		const texts: string[] = [];
-		const unsub = engine.subscribe((e) => {
-			if (e.type === "text_delta") texts.push(e.delta);
-		});
-		await engine.render(instruction);
-		unsub();
-		const scene = texts.join("");
+		const { text: scene, validations } = await renderScene(engine, instruction);
 		meta.turn += 1;
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
-		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene });
-		out({ run: runId, turn: meta.turn, phase: "render", scene });
+		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations });
+		out({ run: runId, turn: meta.turn, phase: "render", scene, validations });
 	} finally {
 		engine.dispose();
 	}
@@ -210,13 +218,11 @@ async function cmdWait(runId: string, n: number, gameHint?: string): Promise<voi
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
 		const results = sim.tick(n);
-		const texts: string[] = [];
-		const unsub = engine.subscribe((e) => {
-			if (e.type === "text_delta") texts.push(e.delta);
-		});
-		await engine.render("时间流逝。请用文学笔触描写当前场景发生的变化。");
-		unsub();
-		const scene = texts.join("");
+		const { text: scene, validations } = await renderScene(
+			engine,
+			"时间流逝。请用文学笔触描写当前场景发生的变化。",
+			results.flatMap((r) => r.changes),
+		);
 		meta.turn += 1;
 		meta.sessionFile = engine.sessionFile;
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
@@ -227,6 +233,7 @@ async function cmdWait(runId: string, n: number, gameHint?: string): Promise<voi
 			ticks: n,
 			events: results,
 			scene,
+			validations,
 			world: sim.snapshot(),
 		});
 		out({
@@ -236,6 +243,7 @@ async function cmdWait(runId: string, n: number, gameHint?: string): Promise<voi
 			ticks: n,
 			events: results,
 			scene,
+			validations,
 			world: sim.snapshot(),
 		});
 	} finally {
