@@ -1,0 +1,85 @@
+{
+	"game": "cave",
+	"name": "地窖状态机单元验证",
+	"mode": "unit",
+	"steps": [
+		{
+			"name": "初始状态：戒指附于骷髅，不可直接拿起（需先解下）",
+			"intent": "take",
+			"entity_ids": ["ring"],
+			"expect": { "ok": false }
+		},
+		{
+			"name": "解下铜戒",
+			"intent": "detach",
+			"entity_ids": ["ring"],
+			"expect": { "ok": true, "state": { "ring.location": "player" } }
+		},
+		{
+			"name": "戒指已在手中，重复拿取失败",
+			"intent": "take",
+			"entity_ids": ["ring"],
+			"expect": { "ok": false }
+		},
+		{
+			"name": "关着的木箱不能放入物品",
+			"intent": "move",
+			"entity_ids": ["ring", "chest"],
+			"expect": { "ok": false, "state": { "ring.location": "player" } }
+		},
+		{
+			"name": "打开木箱",
+			"intent": "open",
+			"entity_ids": ["chest"],
+			"expect": { "ok": true, "state": { "chest.open": true } }
+		},
+		{
+			"name": "木箱开后，蜡烛可见可拿",
+			"intent": "take",
+			"entity_ids": ["candle"],
+			"expect": { "ok": true, "state": { "candle.location": "player" } }
+		},
+		{
+			"name": "有火把在场，点燃蜡烛",
+			"intent": "light",
+			"entity_ids": ["candle"],
+			"expect": { "ok": true, "state": { "candle.lit": true } }
+		},
+		{
+			"name": "打不开骷髅",
+			"intent": "open",
+			"entity_ids": ["skeleton"],
+			"expect": { "ok": false }
+		},
+		{
+			"name": "把点燃的蜡烛放回已打开的木箱（move 目标为容器）",
+			"intent": "move",
+			"entity_ids": ["candle", "chest"],
+			"expect": { "ok": true, "state": { "candle.location": "chest" } }
+		},
+		{
+			"name": "开门",
+			"intent": "open",
+			"entity_ids": ["door"],
+			"expect": { "ok": true, "state": { "door.open": true } }
+		},
+		{
+			"name": "组合铜戒与骷髅被拒绝（无意义组合）",
+			"intent": "combine",
+			"entity_ids": ["ring", "skeleton"],
+			"expect": { "ok": false }
+		},
+		{
+			"name": "把蜡烛移到非容器（骷髅）被拒绝",
+			"intent": "move",
+			"entity_ids": ["candle", "skeleton"],
+			"expect": { "ok": false, "state": { "candle.location": "chest" } }
+		},
+		{
+			"name": "拿取火把",
+			"intent": "take",
+			"entity_ids": ["torch"],
+			"expect": { "ok": true, "state": { "torch.location": "player" } }
+		}
+	]
+}

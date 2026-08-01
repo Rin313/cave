@@ -1,0 +1,17 @@
+{
+	"name": "cave",
+	"private": true,
+	"version": "0.1.0",
+	"description": "语言游戏引擎：确定性状态机 + pi SDK 双出口闭环",
+	"type": "module",
+	"scripts": {
+	"start": "node src/ui/cli.ts",
+	"loop": "node src/tools/loop.ts",
+	"verify:unit": "node src/tools/verify.ts scenarios/cave.unit.json",
+	"verify": "npm run verify:unit"
+	},
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "0.83.0",
+		"typebox": "1.3.7"
+	}
+}
