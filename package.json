@@ -5,12 +5,9 @@
 	"description": "语言游戏引擎：确定性状态机 + pi SDK 双出口闭环",
 	"type": "module",
 	"scripts": {
-	"loop": "node src/tools/loop.ts",
-	"verify:unit": "node src/tools/verify.ts scenarios/cave.unit.json",
-	"verify": "npm run verify:unit",
-	"sim2:verify": "node src/tools/sim2.ts scenario",
-	"sim2": "node src/tools/sim2.ts run",
-	"loop2": "node src/tools/loop2.ts"
+	"verify": "node src/tools/sim.ts scenario",
+	"sim": "node src/tools/sim.ts",
+	"loop": "node src/tools/loop.ts"
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "0.83.0",

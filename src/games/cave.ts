@@ -1,5 +1,5 @@
-import type { Delta, GameDef, LawCtx, OpLaw, TickLaw } from "../core/sim2.ts";
-import { accessible, entity, prop, requireOp } from "../core/sim2.ts";
+import type { Delta, GameDef, LawCtx, OpLaw, TickLaw } from "../core/sim.ts";
+import { accessible, entity, prop, requireOp } from "../core/sim.ts";
 
 function n(c: LawCtx, id: string): string {
 	return entity(c.world, id)?.name ?? id;
@@ -258,7 +258,7 @@ export function isGenericDeny(reason: string): boolean {
 	return GENERIC_DENY_PATTERNS.some((p) => reason.startsWith(p));
 }
 
-export const caveSim2: GameDef = {
+export const cave: GameDef = {
 	id: "cave",
 	title: "地窖（法则引擎）",
 	playerId: "player",

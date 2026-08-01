@@ -1,208 +1,219 @@
-import type { ActionResult, Condition, Effect, Entity, EntityRef, GameConfig, GameState, IntentDef, Primitive } from "./types.ts";
+export type PropValue = string | number | boolean | null;
+
+export interface Entity {
+	id: string;
+	name: string;
+	props: Record<string, PropValue>;
+}
+
+export interface World {
+	entities: Entity[];
+	time: number;
+}
+
+export type Op =
+	| { kind: "apply"; source: string; target: string }
+	| { kind: "move"; entity: string; dest: string }
+	| { kind: "set"; entity: string; prop: string; value: PropValue };
+
+export interface Delta {
+	entity: string;
+	prop: string;
+	to: PropValue;
+}
+
+export interface Change {
+	entity: string;
+	prop: string;
+	from: PropValue;
+	to: PropValue;
+}
+
+export interface LawCtx {
+	world: World;
+	op: Op | null;
+	actor: string;
+	rng: () => number;
+}
+
+export interface LawResult {
+	granted: boolean;
+	reason?: string;
+	denyReason?: string;
+	changes?: Delta[];
+}
+
+export type OpLaw = (ctx: LawCtx) => LawResult;
+export type TickLaw = (ctx: LawCtx) => LawResult;
+
+export interface GameDef {
+	id: string;
+	title: string;
+	playerId: string;
+	world: World;
+	opLaws: OpLaw[];
+	tickLaws?: TickLaw[];
+	hint?: string;
+}
+
+export type StepOp = Op | { kind: "tick"; n: number };
+
+export interface StepResult {
+	ok: boolean;
+	reason: string;
+	changes: Change[];
+	op: StepOp;
+}
+
+export function entity(world: World, id: string): Entity | undefined {
+	return world.entities.find((e) => e.id === id);
+}
+
+export function requireOp<K extends Op["kind"]>(c: LawCtx, kind: K): Extract<Op, { kind: K }> | null {
+	return c.op?.kind === kind ? (c.op as Extract<Op, { kind: K }>) : null;
+}
+
+export function prop(world: World, id: string, name: string): PropValue {
+	return entity(world, id)?.props[name] ?? null;
+}
+
+export function mulberry32(seed: number): () => number {
+	let a = seed >>> 0;
+	return () => {
+		a = (a + 0x6d2b79f5) | 0;
+		let t = Math.imul(a ^ (a >>> 15), 1 | a);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+export function accessible(world: World, id: string, actor: string): { ok: boolean; reason: string } {
+	const e = entity(world, id);
+	if (!e) return { ok: false, reason: "这里没有这个东西。" };
+	let cur = e.props["in"] as string | null;
+	const seen = new Set<string>();
+	while (cur != null && cur !== actor) {
+		if (seen.has(cur)) return { ok: false, reason: "位置存在循环引用。" };
+		seen.add(cur);
+		const parent = entity(world, cur);
+		if (!parent) return { ok: false, reason: "它不在这里。" };
+		if (parent.props.space === true) {
+			return parent.id === (entity(world, actor)?.props["in"] as string)
+				? { ok: true, reason: "" }
+				: { ok: false, reason: "它不在这里。" };
+		}
+		if (parent.props.openable === true && parent.props.open !== true) {
+			return { ok: false, reason: `${parent.name}是关着的。` };
+		}
+		cur = parent.props["in"] as string | null;
+	}
+	return { ok: true, reason: "" };
+}
+
+export function visibleIds(world: World, actor: string): Set<string> {
+	const vis = new Set<string>([actor]);
+	for (const e of world.entities) {
+		if (e.props.space === true) vis.add(e.id);
+		if (accessible(world, e.id, actor).ok) vis.add(e.id);
+	}
+	return vis;
+}
+
+const INTERNAL_PROPS = new Set(["actor", "burnTicks"]);
+
+export function serialize(world: World, actor: string): string {
+	const vis = visibleIds(world, actor);
+	const items = world.entities
+		.filter((e) => vis.has(e.id))
+		.map((e) => ({
+			id: e.id,
+			name: e.name,
+			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !INTERNAL_PROPS.has(k))),
+		}));
+	return JSON.stringify({ time: world.time, entities: items }, null, 2);
+}
 
 export class Simulation {
-	readonly config: GameConfig;
-	state: GameState;
+	readonly def: GameDef;
+	readonly world: World;
+	readonly log: StepResult[] = [];
+	private rand: () => number;
 
-	constructor(config: GameConfig) {
-		this.config = config;
-		this.state = {
-			configId: config.id,
-			roomId: config.roomId,
-			player: config.playerId,
-			entities: config.entities.map((e) => ({ ...e, attrs: { ...e.attrs } })),
-		};
+	constructor(def: GameDef, seed = 1) {
+		this.def = def;
+		this.world = JSON.parse(JSON.stringify(def.world)) as World;
+		this.rand = mulberry32(seed);
 	}
 
-	reset(): void {
-		this.state = {
-			configId: this.config.id,
-			roomId: this.config.roomId,
-			player: this.config.playerId,
-			entities: this.config.entities.map((e) => ({ ...e, attrs: { ...e.attrs } })),
-		};
+	get actor(): string {
+		return this.def.playerId;
 	}
 
-	entity(id: string): Entity | undefined {
-		return this.state.entities.find((e) => e.id === id);
+	get visibleIds(): Set<string> {
+		return visibleIds(this.world, this.actor);
 	}
 
-	intent(label: string): IntentDef | undefined {
-		return this.config.intents.find((i) => i.label === label);
+	static fromWorld(def: GameDef, world: World, seed = 1): Simulation {
+		const s = new Simulation(def, seed);
+		s.world.entities = JSON.parse(JSON.stringify(world.entities)) as Entity[];
+		s.world.time = world.time;
+		return s;
 	}
 
-	isVisible(id: string): boolean {
-		const e = this.entity(id);
-		if (!e) return false;
-		if (e.location === this.state.roomId || e.location === this.state.player) return true;
-		const host = this.entity(e.location);
-		if (!host || !this.isVisible(host.id)) return false;
-		if ("open" in host.attrs) return host.attrs.open === true;
-		return true;
-	}
-
-	visibleEntityIds(): string[] {
-		return this.state.entities.filter((e) => this.isVisible(e.id)).map((e) => e.id);
-	}
-
-	private resolveRef(ref: EntityRef, ids: string[]): Entity | undefined {
-		if (ref === "self" || ref === "a") return this.entity(ids[0]);
-		if (ref === "b") return this.entity(ids[1]);
-		return this.entity(ref);
-	}
-
-	canHold(id: string): boolean {
-		if (id === this.state.roomId || id === this.state.player) return true;
-		const e = this.entity(id);
-		return !!e && e.attrs.open === true;
-	}
-
-	evaluateCondition(cond: Condition, ids: string[]): boolean {
-		switch (cond.op) {
-			case "visible":
-				return !!this.resolveRef(cond.entity, ids) && this.isVisible(this.resolveRef(cond.entity, ids)!.id);
-			case "has": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && cond.attr in e.attrs;
+	apply(op: Op): StepResult {
+		const ctx: LawCtx = { world: this.world, op, actor: this.actor, rng: this.rand };
+		let denial: string | null = null;
+		for (const law of this.def.opLaws) {
+			const res = law(ctx);
+			if (res.granted) {
+				const changes = this.commit(res.changes ?? []);
+				const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, op };
+				this.log.push(sr);
+				return sr;
 			}
-			case "lacks": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && !(cond.attr in e.attrs);
-			}
-			case "equals": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && e.attrs[cond.attr] === cond.value;
-			}
-			case "not_equals": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && e.attrs[cond.attr] !== cond.value;
-			}
-			case "located": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && e.location === cond.at;
-			}
-			case "not_located": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && e.location !== cond.at;
-			}
-			case "container": {
-				const e = this.resolveRef(cond.entity, ids);
-				return !!e && this.canHold(e.id);
-			}
-			case "exists_with":
-				return this.state.entities.some((e) => {
-					if (cond.exclude) {
-						const ex = this.resolveRef(cond.exclude, ids);
-						if (ex && e.id === ex.id) return false;
-					}
-					return e.attrs[cond.attr] === cond.value;
-				});
-			case "all":
-				return cond.conditions.every((c) => this.evaluateCondition(c, ids));
-			case "any":
-				return cond.conditions.some((c) => this.evaluateCondition(c, ids));
+			if (res.denyReason != null && denial == null) denial = res.denyReason;
 		}
+		const sr: StepResult = { ok: false, reason: denial ?? "世界没有回应这个操作。", changes: [], op };
+		this.log.push(sr);
+		return sr;
 	}
 
-	applyEffects(effects: Effect[], ids: string[]): boolean {
-		let mutated = false;
-		for (const fx of effects) {
-			switch (fx.op) {
-				case "move": {
-					const e = this.resolveRef(fx.entity, ids);
-					if (e) {
-						const target = this.resolveRef(fx.to, ids);
-						const dest = target?.id ?? fx.to;
-						if (dest !== e.location && this.canHold(dest)) {
-							e.location = dest;
-							mutated = true;
-						}
-					}
-					break;
+	tick(n = 1): StepResult[] {
+		const out: StepResult[] = [];
+		for (let i = 0; i < n; i++) {
+			this.world.time += 1;
+			for (const law of this.def.tickLaws ?? []) {
+				const ctx: LawCtx = { world: this.world, op: null, actor: this.actor, rng: this.rand };
+				const res = law(ctx);
+				if (res.granted && (res.changes?.length ?? 0) > 0) {
+					const changes = this.commit(res.changes ?? []);
+					const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, op: { kind: "tick", n: this.world.time } };
+					this.log.push(sr);
+					out.push(sr);
 				}
-				case "set": {
-					const e = this.resolveRef(fx.entity, ids);
-					if (e && e.attrs[fx.attr] !== fx.value) {
-						e.attrs[fx.attr] = fx.value;
-						mutated = true;
-					}
-					break;
-				}
-				case "unset": {
-					const e = this.resolveRef(fx.entity, ids);
-					if (e && fx.attr in e.attrs) {
-						delete e.attrs[fx.attr];
-						mutated = true;
-					}
-					break;
-				}
-				case "if":
-					if (fx.conditions.every((c) => this.evaluateCondition(c, ids))) {
-						if (this.applyEffects(fx.then, ids)) mutated = true;
-					}
-					break;
 			}
 		}
-		return mutated;
+		return out;
 	}
 
-	renderMessage(template: string, ids: string[]): string {
-		const names = ids.map((id) => this.entity(id)?.name ?? id);
-		return template
-			.replace(/\{self\}/g, names[0] ?? "")
-			.replace(/\{a\}/g, names[0] ?? "")
-			.replace(/\{b\}/g, names[1] ?? "");
-	}
-
-	applyIntent(label: string, ids: string[]): ActionResult {
-		const intent = this.intent(label);
-		if (!intent) return { ok: false, message: `意图 ${label} 不在意图表中。`, intent: label, entityIds: ids };
-		if (ids.length !== intent.arity) {
-			return { ok: false, message: `实体数量不符：${label} 需要 ${intent.arity} 个。`, intent: intent.label, entityIds: ids };
-		}
-		if (new Set(ids).size !== ids.length) {
-			return { ok: false, message: `实体重复：${label} 不能对同一个实体重复指定。`, intent: intent.label, entityIds: ids };
-		}
-		for (const id of ids) {
-			if (!this.isVisible(id)) {
-				return { ok: false, message: `实体 ${id} 不可见。`, intent: intent.label, entityIds: ids };
-			}
-		}
-		const ok = intent.conditions.every((c) => this.evaluateCondition(c, ids));
-		if (!ok) {
-			return { ok: false, message: this.renderMessage(intent.messages.fail, ids), intent: intent.label, entityIds: ids };
-		}
-		const mutated = this.applyEffects(intent.effects, ids);
-		if (!mutated) {
-			return { ok: false, message: this.renderMessage(intent.messages.fail, ids), intent: intent.label, entityIds: ids };
-		}
-		const result: ActionResult = { ok: true, message: this.renderMessage(intent.messages.ok, ids), intent: intent.label, entityIds: ids };
-		return result;
-	}
-
-	snapshot(): GameState {
-		return JSON.parse(JSON.stringify(this.state)) as GameState;
-	}
-
-	static fromState(config: GameConfig, state: GameState): Simulation {
-		const sim = new Simulation(config);
-		sim.state = JSON.parse(JSON.stringify(state)) as GameState;
-		return sim;
+	snapshot(): World {
+		return JSON.parse(JSON.stringify(this.world)) as World;
 	}
 
 	serialize(): string {
-		const visible = this.state.entities.filter((e) => this.isVisible(e.id));
-		return JSON.stringify(
-			{
-				entities: visible.map((e) => ({
-					id: e.id,
-					name: e.name,
-					attrs: e.attrs,
-					location: e.location === this.state.roomId ? null : e.location === this.state.player ? "inventory" : e.location,
-				})),
-			},
-			null,
-			2,
-		);
+		return serialize(this.world, this.actor);
+	}
+
+	private commit(deltas: Delta[]): Change[] {
+		const changes: Change[] = [];
+		for (const d of deltas) {
+			const e = entity(this.world, d.entity);
+			if (!e) continue;
+			const from = e.props[d.prop] ?? null;
+			if (from === d.to) continue;
+			e.props[d.prop] = d.to;
+			changes.push({ entity: d.entity, prop: d.prop, from, to: d.to });
+		}
+		return changes;
 	}
 }

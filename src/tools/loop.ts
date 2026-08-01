@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
-import type { GameState } from "../core/types.ts";
-import { loadGame } from "../games/index.ts";
+import type { World } from "../core/sim.ts";
+import { cave } from "../games/cave.ts";
 
 interface RunMeta {
 	game: string;
@@ -39,8 +39,8 @@ function loadMeta(dir: string): RunMeta {
 	return JSON.parse(readFileSync(metaPath(dir), "utf8")) as RunMeta;
 }
 
-function loadState(dir: string): GameState {
-	return JSON.parse(readFileSync(statePath(dir), "utf8")) as GameState;
+function loadState(dir: string): World {
+	return JSON.parse(readFileSync(statePath(dir), "utf8")) as World;
 }
 
 function saveState(dir: string, sim: Simulation): void {
@@ -97,10 +97,10 @@ async function renderScene(engine: Engine, instruction: string): Promise<string>
 async function cmdStart(game: string, runId: string): Promise<void> {
 	const dir = runDir(game, runId);
 	mkdirSync(dir, { recursive: true });
-	const config = await loadGame(game);
-	const sim = new Simulation(config);
+	const def = cave;
+	const sim = new Simulation(def);
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	const engine = await Engine.create(config, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
 		const scene = await renderScene(engine, "请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
@@ -114,14 +114,7 @@ async function cmdStart(game: string, runId: string): Promise<void> {
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: 1, phase: "start", scene });
-		out({
-			run: runId,
-			turn: 1,
-			phase: "start",
-			scene,
-			visible_entities: sim.visibleEntityIds(),
-			state: sim.snapshot(),
-		});
+		out({ run: runId, turn: 1, phase: "start", scene, world: sim.snapshot() });
 	} finally {
 		engine.dispose();
 	}
@@ -131,13 +124,13 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 	const dir = locateRunDir(runId, gameHint);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
-	const config = await loadGame(meta.game);
-	const sim = Simulation.fromState(config, loadState(dir));
+	const def = cave;
+	const sim = Simulation.fromWorld(def, loadState(dir));
 	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
 		throw new Error(`run "${runId}" 缺少 session 文件（${meta.sessionFile ?? "(无)"}），请重新 start`);
 	}
 	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(config, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
 		const texts: string[] = [];
 		const unsub = engine.subscribe((e) => {
@@ -157,8 +150,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			intent,
 			selection: selection ?? null,
 			kind: outcome.kind,
-			intent_label: outcome.intent ?? null,
-			result: outcome.result ?? null,
+			results: outcome.results,
 			narration,
 		});
 		out({
@@ -168,11 +160,9 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			intent,
 			selection: selection ?? null,
 			kind: outcome.kind,
-			intent_label: outcome.intent ?? null,
-			result: outcome.result ?? null,
+			results: outcome.results,
 			narration,
-			visible_entities: sim.visibleEntityIds(),
-			state: sim.snapshot(),
+			world: sim.snapshot(),
 		});
 	} finally {
 		engine.dispose();
@@ -183,25 +173,70 @@ async function cmdRender(runId: string, instruction: string, gameHint?: string):
 	const dir = locateRunDir(runId, gameHint);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
-	const config = await loadGame(meta.game);
-	const sim = Simulation.fromState(config, loadState(dir));
+	const def = cave;
+	const sim = Simulation.fromWorld(def, loadState(dir));
 	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(config, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
-		const scene = await renderScene(engine, instruction);
+		const texts: string[] = [];
+		const unsub = engine.subscribe((e) => {
+			if (e.type === "text_delta") texts.push(e.delta);
+		});
+		await engine.render(instruction);
+		unsub();
+		const scene = texts.join("");
 		meta.turn += 1;
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene });
+		out({ run: runId, turn: meta.turn, phase: "render", scene });
+	} finally {
+		engine.dispose();
+	}
+}
+
+async function cmdWait(runId: string, n: number, gameHint?: string): Promise<void> {
+	const dir = locateRunDir(runId, gameHint);
+	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
+	const meta = loadMeta(dir);
+	const def = cave;
+	const sim = Simulation.fromWorld(def, loadState(dir));
+	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
+		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
+	}
+	const sessionManager = SessionManager.open(meta.sessionFile);
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
+	try {
+		const results = sim.tick(n);
+		const texts: string[] = [];
+		const unsub = engine.subscribe((e) => {
+			if (e.type === "text_delta") texts.push(e.delta);
+		});
+		await engine.render("时间流逝。请用文学笔触描写当前场景发生的变化。");
+		unsub();
+		const scene = texts.join("");
+		meta.turn += 1;
+		meta.sessionFile = engine.sessionFile;
+		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
+		saveState(dir, sim);
+		appendTranscript(dir, {
+			turn: meta.turn,
+			phase: "wait",
+			ticks: n,
+			events: results,
+			scene,
+			world: sim.snapshot(),
+		});
 		out({
 			run: runId,
 			turn: meta.turn,
-			phase: "render",
+			phase: "wait",
+			ticks: n,
+			events: results,
 			scene,
-			visible_entities: sim.visibleEntityIds(),
-			state: sim.snapshot(),
+			world: sim.snapshot(),
 		});
 	} finally {
 		engine.dispose();
@@ -212,15 +247,8 @@ async function cmdState(runId: string, gameHint?: string): Promise<void> {
 	const dir = locateRunDir(runId, gameHint);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
-	const config = await loadGame(meta.game);
-	const sim = Simulation.fromState(config, loadState(dir));
-	out({
-		run: runId,
-		turn: meta.turn,
-		sessionFile: meta.sessionFile,
-		visible_entities: sim.visibleEntityIds(),
-		state: sim.snapshot(),
-	});
+	const sim = Simulation.fromWorld(cave, loadState(dir));
+	out({ run: runId, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() });
 }
 
 async function cmdReset(runId: string, game?: string): Promise<void> {
@@ -237,47 +265,44 @@ async function main() {
 	const [cmd, ...rest] = process.argv.slice(2);
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  loop start [--game <id>] [--run <id>]
-  loop act <意图文本> [--select <选中文本>] [--run <id>] [--game <id>]
-  loop render [--instruction <指令>] [--run <id>] [--game <id>]
-  loop state [--run <id>] [--game <id>]
-  loop reset [--run <id>] [--game <id>]
-
-选项:
-  --game <id>        游戏 id（start 必需；其余命令省略时按 run 自动定位）
-  --run <id>         run 标识，默认 "default"
-  --select <文本>    act 的可选选中文本
-  --instruction <指令>  render 的渲染指令（默认"请用文学笔触重新描写当前场景。"）
+  loop start [--run <id>]
+  loop act <意图文本> [--select <选中文本>] [--run <id>]
+  loop render [--instruction <指令>] [--run <id>]
+  loop state [--run <id>]
+  loop wait <n> [--run <id>]
+  loop reset [--run <id>]
 
 环境变量: CAVE_PROVIDER CAVE_MODEL CAVE_THINKING
 `);
 		return;
 	}
 	const runId = argValue("--run") ?? "default";
-	const game = argValue("--game");
 	const selection = argValue("--select");
 	const instruction = argValue("--instruction") ?? "请用文学笔触重新描写当前场景。";
 
 	switch (cmd) {
-		case "start": {
-			if (!game) throw new Error("start 需要 --game <id>");
-			await cmdStart(game, runId);
+		case "start":
+			await cmdStart("cave", runId);
 			return;
-		}
 		case "act": {
 			const intent = rest[0];
-			if (!intent) throw new Error("act 需要意图文本，例如: loop act \"解下铜戒\"");
-			await cmdAct(runId, intent, selection, game);
+			if (!intent) throw new Error("act 需要意图文本");
+			await cmdAct(runId, intent, selection, "cave");
 			return;
 		}
-		case "render":
-			await cmdRender(runId, instruction, game);
-			return;
+        case "render":
+            await cmdRender(runId, instruction, "cave");
+            return;
+        case "wait": {
+            const n = Number(rest[0] ?? 1);
+            await cmdWait(runId, n, "cave");
+            return;
+        }
 		case "state":
-			await cmdState(runId, game);
+			await cmdState(runId, "cave");
 			return;
 		case "reset":
-			await cmdReset(runId, game);
+			await cmdReset(runId, "cave");
 			return;
 		default:
 			throw new Error(`未知命令: ${cmd}`);

@@ -46,5 +46,5 @@
 1. **SQLite 驱动**：优先 `node:sqlite`（Node 22.5+ 内置、零原生编译、零 rebuild），需实测 API 是否够用（同步 API、参数化、事务）。不够再退 `better-sqlite3`（原生模块，需 electron-rebuild 对齐 ABI）。
 2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
 3. **模拟层细节**：原子操作集（apply/move/set 是否够，社会性原子如 communicate/alter_relation 是否补）、法则网络的数据结构（law → 裁决的声明格式）、法则完整性检查工具（对可见实体穷举 apply/move/set，报告落到 denyAll 的操作）。
-4. **解析与忠实性**：自由文本意图的解析质量（含无选中情形，§2-6）、实体索引进 prompt 的注入方式、双 pass 分离与表达层后置校验器（DESIGN.md §4.3，叙述实体 ⊆ 可见实体、无 changes 之外的事实）——均待原型实测。
+4. **解析与忠实性**：自由文本意图的解析质量（含无选中情形，§2-6）、实体索引进 prompt 的注入方式、双 pass 分离与表达层后置校验器（DESIGN.md §4.3：叙述实体 ⊆ 可见实体；断言预算 = 状态蕴含的旧事实允许 + changes 是唯一新事实来源）——均待原型实测。
 5. **跨回合指代**（DESIGN.md §11）：活动实体索引 / 权重偏好，待原型验证。

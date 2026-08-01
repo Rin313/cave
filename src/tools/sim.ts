@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { Simulation } from "../core/sim2.ts";
-import type { Op, PropValue } from "../core/sim2.ts";
-import { caveSim2, isGenericDeny } from "../games/cave.sim2.ts";
+import { Simulation } from "../core/sim.ts";
+import type { Op, PropValue } from "../core/sim.ts";
+import { cave, isGenericDeny } from "../games/cave.ts";
 
 type OpLike =
 	| { kind: "apply"; source: string; target: string }
@@ -74,7 +74,7 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	return failures.length ? failures.join("; ") : "ok";
 }
 
-function runScenario(scenario: Scenario, def: typeof caveSim2, seed: number): ScenarioReport {
+function runScenario(scenario: Scenario, def: typeof cave, seed: number): ScenarioReport {
 	const sim = new Simulation(def, seed);
 	const reports: StepReport[] = [];
 	for (const [i, step] of scenario.steps.entries()) {
@@ -127,7 +127,7 @@ function runScenario(scenario: Scenario, def: typeof caveSim2, seed: number): Sc
 
 async function cmdScenario(scenarioPath: string): Promise<void> {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
-	const reports = file.scenarios.map((s) => runScenario(s, caveSim2, file.seed ?? 1));
+	const reports = file.scenarios.map((s) => runScenario(s, cave, file.seed ?? 1));
 
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);
@@ -143,7 +143,7 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 	}
 	console.log(`\nRESULT: ${passed}/${total} PASS`);
 
-	const reportFile = join("reports", `${basename(scenarioPath, ".json")}.sim2.report.json`);
+	const reportFile = join("reports", `${basename(scenarioPath, ".json")}.report.json`);
 	mkdirSync(dirname(reportFile), { recursive: true });
 	writeFileSync(reportFile, JSON.stringify({ scenario: basename(scenarioPath), game: file.game, passed, total, scenarios: reports }, null, 2), "utf8");
 	console.log(`REPORT: ${reportFile}`);
@@ -174,14 +174,14 @@ function describeOp(op: Op): string {
 }
 
 async function cmdProbe(): Promise<void> {
-	const sim = new Simulation(caveSim2, 1);
+	const sim = 	new Simulation(cave, 1);
 	const ids = [...sim.visibleIds].filter((id) => id !== "player");
 	const itemIds = ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true);
 	const gaps: { op: string; reason: string }[] = [];
 	const seen = new Set<string>();
 
 	const probeOp = (op: Op) => {
-		const fresh = new Simulation(caveSim2, 1);
+		const fresh = 	new Simulation(cave, 1);
 		const r = fresh.apply(op);
 		if (!r.ok && isGenericDeny(r.reason)) gaps.push({ op: describeOp(op), reason: r.reason });
 	};
@@ -240,7 +240,7 @@ async function cmdProbe(): Promise<void> {
 }
 
 async function cmdRun(tokens: string[]): Promise<void> {
-	const sim = new Simulation(caveSim2, 1);
+	const sim = 	new Simulation(cave, 1);
 	console.log("=== 初始世界 ===");
 	console.log(sim.serialize());
 	for (const token of tokens) {
@@ -265,7 +265,7 @@ async function cmdRun(tokens: string[]): Promise<void> {
 async function main(): Promise<void> {
 	const [cmd, ...rest] = process.argv.slice(2);
 	if (cmd === "scenario") {
-		await cmdScenario(rest[0] ?? "scenarios/sim2.cave.json");
+		await cmdScenario(rest[0] ?? "scenarios/cave.json");
 		return;
 	}
 	if (cmd === "run") {
@@ -277,10 +277,10 @@ async function main(): Promise<void> {
 		return;
 	}
 	console.log(`用法:
-  sim2 scenario [<scenario.json>]   运行法则引擎场景验证（默认 scenarios/sim2.cave.json）
-  sim2 run <op> [<op>...]           按顺序执行操作并展示世界与变更
+  sim scenario [<scenario.json>]    运行法则引擎场景验证（默认 scenarios/cave.json）
+  sim run <op> [<op>...]            按顺序执行操作并展示世界与变更
     op: apply <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
-  sim2 probe                        穷举可见实体的 op 组合，报告落到通用 denyAll 的法则缺口
+  sim probe                         穷举可见实体的 op 组合，报告落到通用 denyAll 的法则缺口
 `);
 }
 
