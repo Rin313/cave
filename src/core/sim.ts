@@ -56,6 +56,32 @@ export interface RuleCtx {
 	action: Action | null;
 	actor: string;
 	rng: () => number;
+	def: GameDef;
+}
+
+/** core 产出的用户可见文案：游戏可经 GameDef.messages 覆写，缺省中文兜底。 */
+export interface Messages {
+	/** 所有法则均未表态时的兜底回应。 */
+	noResponse: string;
+	/** 动词不存在（core 校验层拒绝，非规则产出）。 */
+	unknownVerb: (verb: string) => string;
+	/** 参数不在动词 schema 声明范围内（core 校验层拒绝）。 */
+	invalidParams: (label: string, known: string) => string;
+	/** 实体参数不可见/不存在（core 校验层拒绝）。 */
+	invisibleEntity: (ids: string[]) => string;
+	/** 标准库 inTreeReach 的可达性理由（作为 denial.reason 的缺省）。 */
+	reachMissing: string;
+	reachCycle: string;
+	reachNotHere: string;
+	reachClosed: (name: string) => string;
+	/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
+	defaultReason: string;
+	/** 行动阶段门闩拦截（表达 pass 中误调 act 工具时的防御性拒绝）。 */
+	notInActionPhase: string;
+	/** 时间流逝动作（TICK_VERB）的世界腔描述。 */
+	timePassed: string;
+	/** 时间流逝产生变更时的 StepResult 理由。 */
+	timeChanged: string;
 }
 
 /** 法则背书的结构化新事实：表达层的合法新事实词汇，防止模型发明后果。 */
@@ -101,9 +127,6 @@ export type SystemDef = { id: string; run: Rule };
 /** 引擎保留伪动词：时间系统（tick）产出 StepResult 时的动作标识。
  *  不是游戏声明的动词，游戏不应声明同名动词；describeAction 据此渲染「时间流逝」。 */
 export const TICK_VERB = "tick";
-
-/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
-const DEFAULT_REASON = "……";
 
 export interface VerbDef {
 	label: string;
@@ -154,11 +177,32 @@ export interface GameDef {
 	/** 序列化投影：决定状态以什么形态进映射/表达 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;
-	/** 表达语言（缺省 "zh"）：决定表达校验的保留词策略。zh 启用英文实现词表（中文散文不会自然出现英文词）；
-	 *  设为 "en" 等语言时禁用英文实现词匹配，改为 JSON 结构泄漏检测，避免英文散文撞英文实现词（如 act/reason/focus）。 */
-	language?: "zh" | "en" | string;
-	/** 额外禁止词：游戏自定义的实现术语（内部概念名等），表达校验按词边界匹配，不进散文。 */
+	/** 额外禁止词：游戏自定义的实现术语（内部概念名等），表达校验按词边界匹配，不进散文。
+	 *  语言相关的词汇约束由游戏声明（引擎不感知语言）。 */
 	forbiddenTerms?: string[];
+	/** core 产出的用户可见文案覆写；缺省为 DEFAULT_MESSAGES（中文）。 */
+	messages?: Partial<Messages>;
+}
+
+/** core 文案缺省值（中文）。 */
+export const DEFAULT_MESSAGES: Messages = {
+	noResponse: "世界没有回应这个操作。",
+	unknownVerb: (verb) => `世界不认识「${verb}」这种操作。`,
+	invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
+	invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
+	reachMissing: "这里没有这个东西。",
+	reachCycle: "位置存在循环引用。",
+	reachNotHere: "它不在这里。",
+	reachClosed: (name) => `${name}是关着的。`,
+	defaultReason: "……",
+	notInActionPhase: "当前不在行动阶段，无法执行操作。",
+	timePassed: "时间流逝",
+	timeChanged: "时间流逝，世界发生了变化。",
+};
+
+/** 合并游戏覆写：缺省使用 DEFAULT_MESSAGES。 */
+export function messagesFor(def: GameDef): Messages {
+	return { ...DEFAULT_MESSAGES, ...def.messages };
 }
 
 export interface StepResult {
@@ -183,7 +227,7 @@ export function renderDenial(def: GameDef, denial: Denial, world: World): string
 	if (denial.reason != null) return denial.reason;
 	const tmpl = def.denialTemplates?.[denial.law];
 	if (tmpl) return tmpl(denial, world);
-	return "世界没有回应这个操作。";
+	return messagesFor(def).noResponse;
 }
 
 function splitPath(path: string): string[] {
@@ -271,25 +315,26 @@ export function restoreRng(snapshot: number): Rng {
 	return mulberry32(snapshot);
 }
 
-/** 标准库可达性：容器包含树语义（space / openable / open / in）。游戏可选接入。 */
-export function inTreeReach(world: World, actor: string, id: string): { ok: boolean; reason: string } {
+/** 标准库可达性：容器包含树语义（space / openable / open / in）。游戏可选接入。
+ *  理由文案可用 msgs 定制（缺省 DEFAULT_MESSAGES 中文）。 */
+export function inTreeReach(world: World, actor: string, id: string, msgs: Messages = DEFAULT_MESSAGES): { ok: boolean; reason: string } {
 	const e = entity(world, id);
-	if (!e) return { ok: false, reason: "这里没有这个东西。" };
+	if (!e) return { ok: false, reason: msgs.reachMissing };
 	let cur = e.props["in"] as string | null;
 	const seen = new Set<string>();
 	while (cur != null && cur !== actor) {
-		if (seen.has(cur)) return { ok: false, reason: "位置存在循环引用。" };
+		if (seen.has(cur)) return { ok: false, reason: msgs.reachCycle };
 		seen.add(cur);
 		const parent = entity(world, cur);
-		if (!parent) return { ok: false, reason: "它不在这里。" };
+		if (!parent) return { ok: false, reason: msgs.reachNotHere };
 		if (parent.props.space === true) {
 			return parent.id === (entity(world, actor)?.props["in"] as string)
 				? { ok: true, reason: "" }
-				: { ok: false, reason: "它不在这里。" };
+				: { ok: false, reason: msgs.reachNotHere };
 		}
 		if (parent.props.openable === true && parent.props.open !== true) {
 			if (parent.props.wedgedBy === id) return { ok: true, reason: "" };
-			return { ok: false, reason: `${parent.name}是关着的。` };
+			return { ok: false, reason: msgs.reachClosed(parent.name) };
 		}
 		cur = parent.props["in"] as string | null;
 	}
@@ -385,18 +430,18 @@ export class Simulation {
 	private adjudicateRaw(action: Action, rng: Rng | (() => number)): RawResult {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
-			return { ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], deltas: [], action, deniedBy: "rule" };
+			return { ok: false, reason: messagesFor(this.def).unknownVerb(action.verb), changes: [], deltas: [], action, deniedBy: "rule" };
 		}
 		const inst = this.probeSkipInstruments ? null : this.instrumentViolation(action, verb);
 		if (inst) {
 			return { ok: false, reason: renderDenial(this.def, inst, this.world), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}
-		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, rng };
+		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, rng, def: this.def };
 		let denial: Denial | null = null;
 		for (const rule of verb.rules) {
 			const res = rule(ctx);
 			if (res.granted) {
-				return { ok: true, reason: res.reason ?? DEFAULT_REASON, changes: [], deltas: res.changes ?? [], action, facts: res.facts, involved: res.involved };
+				return { ok: true, reason: res.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: res.changes ?? [], action, facts: res.facts, involved: res.involved };
 			}
 			if (res.denial != null && denial == null) denial = res.denial;
 		}
@@ -491,6 +536,7 @@ export class Simulation {
 		const out: string[] = [];
 		let checks = 0;
 		const seen = new Set<string>();
+		const defaultReason = messagesFor(this.def).defaultReason;
 		const verbEntries = Object.entries(this.def.verbs);
 		const perVerbBudget = verbEntries.length ? Math.ceil(maxChecks / verbEntries.length) : maxChecks;
 		for (const [verbName, verb] of verbEntries) {
@@ -529,7 +575,7 @@ export class Simulation {
 					checks++;
 					verbChecks++;
 					const r = this.check({ verb: verbName, params: { ...acc } });
-					if (r.ok && r.reason !== DEFAULT_REASON && !seen.has(r.reason)) {
+					if (r.ok && r.reason !== defaultReason && !seen.has(r.reason)) {
 						seen.add(r.reason);
 						out.push(r.reason);
 					}
@@ -553,7 +599,7 @@ export class Simulation {
 			}
 			return String(v);
 		};
-		if (action.verb === TICK_VERB) return "时间流逝";
+		if (action.verb === TICK_VERB) return messagesFor(this.def).timePassed;
 		if (!verb) return `「${action.verb}」`;
 		const entityParams = new Set(verb.entityParams ?? []);
 		const propParams = verb.propParams ?? [];
@@ -580,13 +626,13 @@ export class Simulation {
 	private runSystems(silent = false): StepResult[] {
 		const out: StepResult[] = [];
 		for (const sys of this.def.systems ?? []) {
-			const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, rng: this.rand };
+			const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, rng: this.rand, def: this.def };
 			const res = sys.run(ctx);
 			if (res.granted && (res.changes?.length ?? 0) > 0) {
 				const changes = this.commit(res.changes ?? []);
 				const sr: StepResult = {
 					ok: true,
-					reason: res.reason ?? DEFAULT_REASON,
+					reason: res.reason ?? messagesFor(this.def).defaultReason,
 					changes,
 					action: { verb: TICK_VERB, params: { n: this.world.time } },
 					facts: res.facts,

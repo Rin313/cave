@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
 import { Type } from "typebox";
-import { Simulation, TICK_VERB, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, TICK_VERB, messagesFor, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -83,13 +83,6 @@ function coerceValue(v: unknown): PropValue {
 	}
 	return String(v);
 }
-
-/** 引擎保留词：表达文本中出现即判定为泄漏。 */
-const ENGINE_RESERVED_TERMS = new Set([
-	"act", "actions", "params", "verb", "refusal", "label", "reason", "entities", "props",
-	"results", "ok", "changes", "granted", "denyReason", "facts", "kind", "tags",
-	"focus", "traces",
-]);
 
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
 interface ActGate {
@@ -267,7 +260,7 @@ export class Engine {
 	async render(instruction: string, changes: Change[] = []): Promise<void> {
 		const state = this.sim.digest();
 		const results: StepResult[] = changes.length
-			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, action: { verb: TICK_VERB, params: { n: this.sim.world.time } } }]
+			? [{ ok: true, reason: messagesFor(this.def).timeChanged, changes, action: { verb: TICK_VERB, params: { n: this.sim.world.time } } }]
 			: [];
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const narration = await this.expressionPass(
@@ -383,24 +376,24 @@ export class Engine {
 		return null;
 	}
 
-	/** 通用泄漏检查：由世界状态派生禁止词表，无需任何游戏专有知识。
-	 *  词边界策略：含非 ASCII 的术语用 includes（\b 对中文无效）；纯 ASCII 用词边界（避免命中英文子串）。
-	 *  语言策略：zh（缺省）启用英文实现词保留词表（中文散文不会自然出现英文词）；
-	 *  非 zh 语言禁用该词表（英文散文会撞 act/reason/focus 等英文词），改由 JSON 结构检测兜底。 */
+	/** 通用泄漏检查：只禁止与语言无关的实现工件，无需任何游戏专有知识与语言设定。
+	 *   - 结构化形态：JSON 键值对、声明头 [facts: 复现——任何语言下都是实现痕迹。
+	 *   - 「实现形状」的标识符：实体 id / 属性名中非纯小写单词者（含大写/数字/下划线等，如 wooden_chest、wedgedBy、burnTicks），
+	 *     在任何语言都不是自然词；纯小写自然词（chest / open）与散文同词，不作禁止。
+	 *   - 语言相关词汇约束是游戏的事：经 GameDef.forbiddenTerms / validateText 声明，引擎不感知语言。
+	 *  词边界策略：含非 ASCII 的术语用 includes（\b 对中文无效）；纯 ASCII 用词边界（避免命中英文子串）。 */
 	private leakageCheck(text: string): string | null {
 		if (/"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*(?=["{[]|true|false|null|-?\d)/.test(text)) {
 			return "出现了工具调用或状态格式（JSON 键）。";
 		}
 		if (text.includes("[facts:")) return "正文中出现了声明头 [facts: ...]。";
+		const isImplShape = (s: string) => !/^[a-z]+$/.test(s);
 		const forbidden = new Set<string>();
 		for (const e of this.sim.world.entities) {
-			if (e.id.toLowerCase() !== e.name.toLowerCase()) forbidden.add(e.id);
-			for (const k of Object.keys(e.props)) forbidden.add(k);
+			if (isImplShape(e.id) && !e.name.toLowerCase().includes(e.id.toLowerCase())) forbidden.add(e.id);
+			for (const k of Object.keys(e.props)) if (isImplShape(k)) forbidden.add(k);
 		}
 		for (const t of this.def.forbiddenTerms ?? []) forbidden.add(t);
-		if (this.def.language == null || this.def.language === "zh") {
-			for (const t of ENGINE_RESERVED_TERMS) forbidden.add(t);
-		}
 		for (const t of forbidden) {
 			const hit = /[^\x00-\x7F]/.test(t) ? text.includes(t) : new RegExp(`\\b${t}\\b`).test(text);
 			if (hit) return `出现了实体 id 或实现术语：「${t}」。`;
@@ -575,7 +568,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 							text: JSON.stringify({
 								results: [{
 									ok: false,
-									reason: "当前不在行动阶段，无法执行操作。",
+									reason: messagesFor(def).notInActionPhase,
 									changes: [],
 									action: { verb: "refused", params: {} },
 									deniedBy: "rule" as const,
@@ -595,19 +588,19 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				};
 				const verb = def.verbs[action.verb];
 				if (!verb) {
-					return { ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], action, deniedBy: "rule" };
+					return { ok: false, reason: messagesFor(def).unknownVerb(action.verb), changes: [], action, deniedBy: "rule" };
 				}
 				const validator = verbValidators.get(action.verb)!;
 				if (!validator.Check(action.params)) {
 					const known = Object.keys((verb.schema as { properties?: Record<string, unknown> }).properties ?? {}).join("/");
-					return { ok: false, reason: `「${verb.label}」的参数不在声明范围内（可接受：${known}）。`, changes: [], action, deniedBy: "rule" };
+					return { ok: false, reason: messagesFor(def).invalidParams(verb.label, known), changes: [], action, deniedBy: "rule" };
 				}
 				const invalid = (verb.entityParams ?? []).filter((p) => {
 					const id = action.params[p];
 					return typeof id === "string" && id.length > 0 && !vis.has(id);
 				});
 				if (invalid.length) {
-					return { ok: false, reason: `实体 ${invalid.join("、")} 不可见或不存在。`, changes: [], action, deniedBy: "rule" };
+					return { ok: false, reason: messagesFor(def).invisibleEntity(invalid), changes: [], action, deniedBy: "rule" };
 				}
 				return sim.apply(action);
 			};

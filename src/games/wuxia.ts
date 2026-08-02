@@ -1,5 +1,5 @@
 import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
-import { D, entity, inTreeReach, inTreeVisible, prop } from "../core/sim.ts";
+import { D, entity, inTreeReach, inTreeVisible, messagesFor, prop } from "../core/sim.ts";
 import { Type } from "typebox";
 
 const MEDITATE_GAIN = 6;
@@ -37,7 +37,7 @@ function isNpcHere(c: RuleCtx, id: string): boolean {
 
 /** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
 function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id);
+	const acc = inTreeReach(c.world, c.actor, id, messagesFor(c.def));
 	if (acc.ok) return null;
 	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
 }

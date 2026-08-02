@@ -1,5 +1,5 @@
 import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
-import { D, entity, inTreeReach, inTreeVisible, prop } from "../core/sim.ts";
+import { D, entity, inTreeReach, inTreeVisible, messagesFor, prop } from "../core/sim.ts";
 import { Type } from "typebox";
 
 /** 实体名解析：world 版（拒绝模板用）。 */
@@ -18,7 +18,7 @@ function param(a: Action | null, key: string): string {
 
 /** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
 function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id);
+	const acc = inTreeReach(c.world, c.actor, id, messagesFor(c.def));
 	if (acc.ok) return null;
 	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
 }

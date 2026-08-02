@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult, VerbDef } from "../core/sim.ts";
-import { getDefaultGameId, getGame } from "../games/registry.ts";
-import { fixConsole, flagBool, flagStr, out, parseArgs, type ParsedArgs } from "./cli.ts";
+import { getGame } from "../games/registry.ts";
+import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
 	verb: string;
@@ -355,24 +354,27 @@ async function main(): Promise<void> {
 	const a: ParsedArgs = parseArgs(argv);
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  sim scenario [<scenario.json>] [--game <id>]    运行法则引擎场景验证（默认 scenarios/cave.json）
-  sim run <action> [<action>...] [--game <id>] [--json] [--world]    按顺序执行动作并展示结果
+  sim scenario <scenario.json>    运行法则引擎场景验证（场景文件内声明 game）
+  sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
-  sim probe [--game <id>] [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
+  sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
 `);
 		return;
 	}
-	const gameId = flagStr(a, "game") ?? getDefaultGameId();
 	const positionals = a.positionals;
 	if (cmd === "scenario") {
-		await cmdScenario(positionals[0] ?? "scenarios/cave.json");
+		const path = positionals[0];
+		if (!path) throw new Error("scenario 需要场景文件路径（如 scenarios/cave.json）");
+		await cmdScenario(path);
 		return;
 	}
 	if (cmd === "run") {
+		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
 		await cmdRun(positionals, gameId, { json: flagBool(a, "json"), world: flagBool(a, "world") });
 		return;
 	}
 	if (cmd === "probe") {
+		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
 		const max = Number(flagStr(a, "max") ?? 10000);
 		await cmdProbe(gameId, Number.isFinite(max) && max > 0 ? max : 10000);
 		return;

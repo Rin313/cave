@@ -4,8 +4,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
 import type { Change, StepResult, World } from "../core/sim.ts";
-import { getDefaultGameId, getGame } from "../games/registry.ts";
-import { fixConsole, flagBool, flagStr, out, parseArgs, type ParsedArgs } from "./cli.ts";
+import { getGame } from "../games/registry.ts";
+import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
 	game: string;
@@ -301,28 +301,30 @@ async function main() {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
 	const opts: CmdOpts = { json: flagBool(a, "json"), world: flagBool(a, "world") };
-	const runId = flagStr(a, "run") ?? "default";
-	const gameId = flagStr(a, "game");
-	const positionals = a.positionals;
 
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  loop start [--run <id>] [--game <id>] [--json] [--world]
-  loop act <意图文本> [--select <选中文本>] [--run <id>] [--game <id>] [--json] [--world]
-  loop render [--instruction <指令>] [--run <id>] [--game <id>] [--json] [--world]
-  loop state [--run <id>] [--game <id>] [--json] [--world]
-  loop wait <n> [--run <id>] [--game <id>] [--json] [--world]
-  loop reset [<run id>] [--run <id>] [--game <id>]
+  loop start --run <id> --game <id> [--json] [--world]
+  loop act <意图文本> --run <id> [--select <选中文本>] [--game <id>] [--json] [--world]
+  loop render --run <id> [--instruction <指令>] [--game <id>] [--json] [--world]
+  loop state --run <id> [--game <id>] [--json] [--world]
+  loop wait <n> --run <id> [--game <id>] [--json] [--world]
+  loop reset --run <id> [--game <id>]
 
 意图文本可省略引号（多个位置参数自动拼接）；--json 输出完整结构化结果，缺省精简输出（不含 world）。
+--game 在 act/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 CAVE_PROVIDER）
 `);
 		return;
 	}
 
+	const runId = requireFlag(a, "run", "用 --run <id> 指定回合记录");
+	const gameId = flagStr(a, "game");
+	const positionals = a.positionals;
+
 	switch (cmd) {
 		case "start":
-			await cmdStart(gameId ?? getDefaultGameId(), runId, opts);
+			await cmdStart(requireFlag(a, "game", "用 --game <id> 指定游戏"), runId, opts);
 			return;
 		case "act": {
 			const intent = flagStr(a, "intent") ?? joinIntent(positionals);
@@ -341,11 +343,9 @@ async function main() {
 		case "state":
 			await cmdState(runId, gameId, opts);
 			return;
-		case "reset": {
-			const target = positionals[0] ?? flagStr(a, "run") ?? "default";
-			await cmdReset(target, gameId);
+		case "reset":
+			await cmdReset(runId, gameId);
 			return;
-		}
 		default:
 			throw new Error(`未知命令: ${cmd}`);
 	}

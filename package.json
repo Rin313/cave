@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-	"verify": "node src/tools/sim.ts scenario",
+	"verify": "node src/tools/sim.ts scenario scenarios/cave.json",
 	"sim": "node src/tools/sim.ts",
 	"loop": "node src/tools/loop.ts"
 	},
