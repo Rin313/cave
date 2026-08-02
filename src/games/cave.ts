@@ -141,6 +141,7 @@ const wedge: Rule = (c) => {
 		granted: true,
 		involved: [x, d],
 		changes: [
+			D.set(x, "in", d),
 			D.set(d, "jammed", true),
 			D.set(d, "wedgedBy", x),
 		],

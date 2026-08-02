@@ -288,6 +288,7 @@ export function inTreeReach(world: World, actor: string, id: string): { ok: bool
 				: { ok: false, reason: "它不在这里。" };
 		}
 		if (parent.props.openable === true && parent.props.open !== true) {
+			if (parent.props.wedgedBy === id) return { ok: true, reason: "" };
 			return { ok: false, reason: `${parent.name}是关着的。` };
 		}
 		cur = parent.props["in"] as string | null;

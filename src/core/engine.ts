@@ -8,6 +8,7 @@ import {
 	type CreateAgentSessionOptions,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
+import { Compile } from "typebox/compile";
 import { Type } from "typebox";
 import { Simulation, TICK_VERB, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 
@@ -542,6 +543,12 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 			),
 		),
 	);
+	/** 每个动词的参数校验器（strict：schema 未声明的参数一律打回）。SDK 不校验工具参数，需引擎自检。 */
+	const verbValidators = new Map<string, ReturnType<typeof Compile>>();
+	for (const [name, v] of Object.entries(def.verbs)) {
+		const props = (v.schema as { properties?: Record<string, unknown> }).properties ?? {};
+		verbValidators.set(name, Compile(Type.Object(props, { additionalProperties: false })));
+	}
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
@@ -589,6 +596,11 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				const verb = def.verbs[action.verb];
 				if (!verb) {
 					return { ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], action, deniedBy: "rule" };
+				}
+				const validator = verbValidators.get(action.verb)!;
+				if (!validator.Check(action.params)) {
+					const known = Object.keys((verb.schema as { properties?: Record<string, unknown> }).properties ?? {}).join("/");
+					return { ok: false, reason: `「${verb.label}」的参数不在声明范围内（可接受：${known}）。`, changes: [], action, deniedBy: "rule" };
 				}
 				const invalid = (verb.entityParams ?? []).filter((p) => {
 					const id = action.params[p];

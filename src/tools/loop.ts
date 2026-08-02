@@ -312,7 +312,7 @@ async function main() {
   loop render [--instruction <指令>] [--run <id>] [--game <id>] [--json] [--world]
   loop state [--run <id>] [--game <id>] [--json] [--world]
   loop wait <n> [--run <id>] [--game <id>] [--json] [--world]
-  loop reset [--run <id>] [--game <id>]
+  loop reset [<run id>] [--run <id>] [--game <id>]
 
 意图文本可省略引号（多个位置参数自动拼接）；--json 输出完整结构化结果，缺省精简输出（不含 world）。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 CAVE_PROVIDER）
@@ -341,9 +341,11 @@ async function main() {
 		case "state":
 			await cmdState(runId, gameId, opts);
 			return;
-		case "reset":
-			await cmdReset(runId, gameId);
+		case "reset": {
+			const target = positionals[0] ?? flagStr(a, "run") ?? "default";
+			await cmdReset(target, gameId);
 			return;
+		}
 		default:
 			throw new Error(`未知命令: ${cmd}`);
 	}
