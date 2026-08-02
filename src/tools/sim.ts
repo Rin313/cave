@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Simulation, propGet } from "../core/sim.ts";
-import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
-import { getGame } from "../games/registry.ts";
+import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
+import type { Action, GameDef, PropValue, StepResult, VerbDef } from "../core/sim.ts";
+import { getDefaultGameId, getGame } from "../games/registry.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
@@ -150,25 +150,42 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 	process.exit(passed === total ? 0 : 1);
 }
 
-/** 把 token 参数解析为动作；实体参数接受 id 或 name（按世界实体匹配），缺失/未知抛错。 */
-function parseActionToken(token: string, def: GameDef): Action {
-	const [verb, ...rest] = token.split(/\s+/);
-	const resolve = (v: string | undefined): string => {
-		if (!v) throw new Error(`动作「${token}」缺少实体参数`);
-		const hit = def.world.entities.find((e) => e.name === v || e.id === v);
-		return hit ? hit.id : v;
-	};
-	if (verb === "move") return { verb: "move", params: { entity: resolve(rest[0]), dest: resolve(rest[1]) } };
-	if (verb === "use") return { verb: "use", params: { source: resolve(rest[0]), target: resolve(rest[1]) } };
-	if (verb === "set") {
-		let value: unknown = rest[2];
-		if (value === "true") value = true;
-		else if (value === "false") value = false;
-		else if (value === "null") value = null;
-		else if (value !== undefined && !Number.isNaN(Number(value))) value = Number(value);
-		return { verb: "set", params: { entity: resolve(rest[0]), prop: rest[1], value: parseValue(value) } };
+/** 标量参数解析：true/false/null/数字/字符串（实体参数不走这里）。 */
+function parseScalar(s: string): PropValue {
+	if (s === "true") return true;
+	if (s === "false") return false;
+	if (s === "null") return null;
+	if (s.trim() !== "" && !Number.isNaN(Number(s))) return Number(s);
+	return s;
+}
+
+/** 实体参数解析：按 id 或 name 匹配当前世界的实体（不存在的字符串原样返回）。 */
+function resolveEntity(v: string, sim: Simulation): string {
+	const hit = sim.world.entities.find((e) => e.name === v || e.id === v);
+	return hit ? hit.id : v;
+}
+
+/** 从游戏声明的动词表解析 CLI 动作：实体参数（entityParams）按 id/name 解析，
+ *  其余参数按动词 schema 的属性顺序解析为标量。动词与参数名不再硬编码。 */
+function parseActionToken(token: string, sim: Simulation): Action {
+	const [verbName, ...rest] = token.split(/\s+/);
+	const verb = sim.def.verbs[verbName];
+	if (!verb) {
+		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；tick N 流逝时间；实体参数可用名称或 id）`);
 	}
-	throw new Error(`无法解析动作：${token}（支持 use S T / move X D / set X P V / tick N，实体可用名称）`);
+	const props = (verb.schema as { properties?: Record<string, unknown> }).properties;
+	const paramOrder = props ? Object.keys(props) : [];
+	if (rest.length > paramOrder.length) {
+		throw new Error(`动词「${verbName}」最多接受 ${paramOrder.length} 个参数（${paramOrder.join(" ")}），得到 ${rest.length} 个`);
+	}
+	const entityParams = verb.entityParams ?? [];
+	const params: Record<string, PropValue> = {};
+	rest.forEach((raw, i) => {
+		const p = paramOrder[i];
+		if (p === undefined) return;
+		params[p] = entityParams.includes(p) ? resolveEntity(raw, sim) : parseScalar(raw);
+	});
+	return { verb: verbName, params };
 }
 
 function describeAction(action: Action, def: GameDef): string {
@@ -178,48 +195,51 @@ function describeAction(action: Action, def: GameDef): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: string }[]; latent: { op: string; ruleGranted: string }[]; seen: number } {
+function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; latent: { verb: string; op: string; ruleGranted: string }[]; seen: number; truncated: boolean } {
 	const sim = new Simulation(def, 1);
 	const ids = [...sim.visible()].filter((id) => id !== def.playerId);
-	const itemIds = ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true);
-	const gaps: { op: string; reason: string; law?: string }[] = [];
+	/** 动作参数候选域：游戏可经 GameDef.probeScope 裁剪；缺省 = 可见实体 - 玩家 - space 标记的场景实体。 */
+	const scope = def.probeScope
+		? new Set(def.probeScope(sim.world, def.playerId))
+		: new Set(ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true));
+	const gaps: { verb: string; op: string; reason: string; law?: string }[] = [];
 	/** 规则会在不可持握工具上授予的潜在洞（作者漏声明 instrumentParams）。 */
-	const latent: { op: string; ruleGranted: string }[] = [];
+	const latent: { verb: string; op: string; ruleGranted: string }[] = [];
 	const seen = new Set<string>();
+	let truncated = false;
 
-	/** 有意义的缺口：实体确实拥有该属性、不是无变更空操作、且值类型匹配（布尔属性不吃字符串等）。 */
-	const isMeaningfulGap = (action: Action): boolean => {
-		if (!("prop" in action.params) || !("entity" in action.params)) return true;
-		const e = sim.world.entities.find((x) => x.id === action.params.entity);
-		const prop = String(action.params.prop ?? "");
+	/** 有意义的缺口：声明了 propParams（set 类）的动词，只报告实体确实拥有该属性、非空操作、值类型匹配；
+	 *  其余动词（use/move 等无 propParams）一律视为有意义。参数由动词元数据推导，不硬编码参数名。 */
+	const isMeaningfulGap = (verb: VerbDef, action: Action): boolean => {
+		const propParams = verb.propParams ?? [];
+		if (!propParams.length) return true;
+		const entityParam = (verb.entityParams ?? []).find((p) => p in action.params);
+		const propParam = propParams.find((p) => p in action.params);
+		if (!entityParam || !propParam) return true;
+		const e = sim.world.entities.find((x) => x.id === action.params[entityParam]);
+		const prop = String(action.params[propParam] ?? "");
 		if (!e || !(prop in e.props)) return false;
 		const cur = e.props[prop];
-		const val = action.params.value;
+		const valueParam = Object.keys(action.params).find((k) => k !== entityParam && !propParams.includes(k));
+		const val = valueParam ? action.params[valueParam] : undefined;
 		if (cur === val) return false;
 		if (typeof cur === "boolean" && (val !== true && val !== false)) return false;
 		if (typeof cur === "string" && (val === true || val === false || val === null)) return false;
 		return true;
 	};
 
-	const probeAction = (action: Action) => {
+	const probeAction = (verb: VerbDef, action: Action) => {
 		const fresh = new Simulation(def, 1);
 		const r = fresh.apply(action);
-		if (!r.ok && r.deniedBy === "denyAll" && isMeaningfulGap(action)) {
-			gaps.push({ op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
+		if (!r.ok && r.deniedBy === "denyAll" && isMeaningfulGap(verb, action)) {
+			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
 		}
 		if (!r.ok && r.denial?.law?.startsWith("instrument.")) {
 			const rb = fresh.probeGrant(action);
 			if (rb.ok) {
-				latent.push({ op: describeAction(action, def), ruleGranted: rb.reason });
+				latent.push({ verb: action.verb, op: describeAction(action, def), ruleGranted: rb.reason });
 			}
 		}
-	};
-
-	const unique = (action: Action) => {
-		const key = JSON.stringify(action);
-		if (seen.has(key)) return;
-		seen.add(key);
-		probeAction(action);
 	};
 
 	for (const verbName of Object.keys(def.verbs)) {
@@ -228,7 +248,7 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 		const candidates = verb.candidates?.(sim) ?? {};
 		const paramLists: Record<string, PropValue[]> = {};
 
-		for (const p of entityParams) paramLists[p] = [...itemIds];
+		for (const p of entityParams) paramLists[p] = [...scope];
 		for (const [p, vals] of Object.entries(candidates)) {
 			paramLists[p] = vals;
 		}
@@ -236,9 +256,22 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 		const keys = Object.keys(paramLists);
 		if (!keys.length) continue;
 
+		/** 组合预算：按动词均分 maxCombos，超出即截断（报告 truncated），防止大实体量游戏 20^n 级爆炸。 */
+		const verbNames = Object.keys(def.verbs);
+		const perVerbBudget = verbNames.length ? Math.max(1, Math.ceil(maxCombos / verbNames.length)) : maxCombos;
+		let verbChecks = 0;
 		const generate = (idx: number, acc: Record<string, PropValue>) => {
+			if (verbChecks >= perVerbBudget) {
+				truncated = true;
+				return;
+			}
 			if (idx === keys.length) {
-				unique({ verb: verbName, params: { ...acc } });
+				const action = { verb: verbName, params: { ...acc } };
+				const key = JSON.stringify(action);
+				if (seen.has(key)) return;
+				seen.add(key);
+				verbChecks++;
+				probeAction(verb, action);
 				return;
 			}
 			const p = keys[idx];
@@ -250,22 +283,22 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 		generate(0, {});
 	}
 
-	return { gaps, latent, seen: seen.size };
+	return { gaps, latent, seen: seen.size, truncated };
 }
 
-async function cmdProbe(gameId: string): Promise<void> {
+async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
-	const { gaps, latent, seen } = probeDef(def);
-	const applyMoveGaps = gaps.filter((g) => g.op.startsWith("use") || g.op.startsWith("move"));
-	const setGaps = gaps.filter((g) => g.op.startsWith("set"));
-	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型动作）===`);
-	console.log(`use/move 缺口: ${applyMoveGaps.length}`);
-	for (const g of applyMoveGaps) console.log(`  [GAP] ${g.op} → ${g.reason}`);
-	console.log(`set 缺口: ${setGaps.length}`);
-	for (const g of setGaps) console.log(`  [GAP] ${g.op} → ${g.reason}`);
+	const { gaps, latent, seen, truncated } = probeDef(def, maxCombos);
+	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型动作${truncated ? "，已按预算截断" : ""}）===`);
+	for (const verbName of Object.keys(def.verbs)) {
+		const vg = gaps.filter((g) => g.verb === verbName);
+		console.log(`「${verbName}」缺口: ${vg.length}`);
+		for (const g of vg) console.log(`  [GAP] ${g.op} → ${g.reason}`);
+	}
 	console.log(`规则未自行检查施动工具（运行时被动词级 instrument 前提拦截）: ${latent.length}`);
 	for (const l of latent) console.log(`  [LATENT] ${l.op} → 规则本身会授予「${l.ruleGranted}」`);
 	if (latent.length) console.log("  建议：在规则内部自行检查施动工具前提（或保持 instrumentParams 声明），否则一旦 instrument 拦截被绕开规则会开出荒谬授予。");
+	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或用 GameDef.probeScope 收窄候选域。");
 	console.log(gaps.length === 0 && latent.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
 	console.log("注：probe 只覆盖已声明 instrumentParams 的动词；若某动词漏声明施动工具前提且规则也未自检，此洞不会出现在报告（如 use 的 source 不可持握仍被授予）。请对 use 类动词逐一确认 instrumentParams 已声明。");
 }
@@ -277,13 +310,15 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 	for (const token of tokens) {
 		let results: StepResult[];
 		let actionDesc: string;
-		if (token === "tick" || token.startsWith("tick ")) {
+		const verbName = token.split(/\s+/)[0];
+		// tick 是引擎保留关键字（时间流逝）；若游戏声明了同名动词则走游戏动词
+		if (verbName === TICK_VERB && !sim.def.verbs[TICK_VERB]) {
 			const n = Number(token.split(/\s+/)[1] ?? 1);
 			actionDesc = `tick ${n}`;
 			results = sim.tick(n);
 		} else {
 			actionDesc = token;
-			results = [sim.apply(parseActionToken(token, def))];
+			results = [sim.apply(parseActionToken(token, sim))];
 		}
 		if (results.length === 0) {
 			console.log(`\n>>> ${actionDesc}`);
@@ -322,13 +357,12 @@ async function main(): Promise<void> {
 		process.stdout.write(`用法:
   sim scenario [<scenario.json>] [--game <id>]    运行法则引擎场景验证（默认 scenarios/cave.json）
   sim run <action> [<action>...] [--game <id>] [--json] [--world]    按顺序执行动作并展示结果
-    action: use <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
-    （实体参数可用名称或 id）
-  sim probe [--game <id>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（打印明细）
+    action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
+  sim probe [--game <id>] [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
 `);
 		return;
 	}
-	const gameId = flagStr(a, "game") ?? "cave";
+	const gameId = flagStr(a, "game") ?? getDefaultGameId();
 	const positionals = a.positionals;
 	if (cmd === "scenario") {
 		await cmdScenario(positionals[0] ?? "scenarios/cave.json");
@@ -339,7 +373,8 @@ async function main(): Promise<void> {
 		return;
 	}
 	if (cmd === "probe") {
-		await cmdProbe(gameId);
+		const max = Number(flagStr(a, "max") ?? 10000);
+		await cmdProbe(gameId, Number.isFinite(max) && max > 0 ? max : 10000);
 		return;
 	}
 	throw new Error(`未知命令: ${cmd}`);

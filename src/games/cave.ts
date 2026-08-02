@@ -489,6 +489,7 @@ const setVerb: VerbDef = {
 		value: Type.Any({ description: "新值（布尔 / 数字 / 字符串 / null）" }),
 	}),
 	entityParams: ["entity"],
+	propParams: ["prop"],
 	candidates: setCandidates,
 	rules: [detach, open, close, extinguish],
 };

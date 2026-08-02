@@ -4,7 +4,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
 import type { Change, StepResult, World } from "../core/sim.ts";
-import { getGame } from "../games/registry.ts";
+import { getDefaultGameId, getGame } from "../games/registry.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
@@ -68,11 +68,14 @@ function locateRunDir(runId: string, game?: string): string | null {
 	return null;
 }
 
-function engineOptsFromEnv() {
+/** 引擎配置的环境变量按游戏 id 命名空间读取：<GAME>_PROVIDER / <GAME>_MODEL / <GAME>_THINKING（如 CAVE_PROVIDER）。
+ *  多游戏并存时各自独立配置，互不覆盖。 */
+function engineOptsFromEnv(gameId: string) {
+	const prefix = gameId.toUpperCase();
 	return {
-		provider: process.env.CAVE_PROVIDER,
-		model: process.env.CAVE_MODEL,
-		thinkingLevel: process.env.CAVE_THINKING,
+		provider: process.env[`${prefix}_PROVIDER`],
+		model: process.env[`${prefix}_MODEL`],
+		thinkingLevel: process.env[`${prefix}_THINKING`],
 	};
 }
 
@@ -128,7 +131,7 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 	mkdirSync(dir, { recursive: true });
 	const sim = new Simulation(def);
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sim, sessionManager });
 	try {
 		const { text: scene, validations } = await renderScene(engine, "请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
@@ -137,7 +140,7 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 			createdAt: new Date().toISOString(),
 			turn: 1,
 			sessionFile: engine.sessionFile,
-			...engineOptsFromEnv(),
+			...engineOptsFromEnv(gameId),
 		};
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		saveState(dir, sim);
@@ -158,7 +161,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 		throw new Error(`run "${runId}" 缺少 session 文件（${meta.sessionFile ?? "(无)"}），请重新 start`);
 	}
 	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager });
 	try {
 		const { unsub, texts, validations, toolCalls } = collectEvents(engine);
 		const outcome = await engine.act({ intent, selection });
@@ -211,7 +214,7 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager });
 	try {
 		const { text: scene, validations } = await renderScene(engine, instruction);
 		meta.turn += 1;
@@ -233,7 +236,7 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager });
 	try {
 		const results = sim.tick(n);
 		const { text: scene, validations } = await renderScene(
@@ -312,14 +315,14 @@ async function main() {
   loop reset [--run <id>] [--game <id>]
 
 意图文本可省略引号（多个位置参数自动拼接）；--json 输出完整结构化结果，缺省精简输出（不含 world）。
-环境变量: CAVE_PROVIDER CAVE_MODEL CAVE_THINKING
+环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 CAVE_PROVIDER）
 `);
 		return;
 	}
 
 	switch (cmd) {
 		case "start":
-			await cmdStart(gameId ?? "cave", runId, opts);
+			await cmdStart(gameId ?? getDefaultGameId(), runId, opts);
 			return;
 		case "act": {
 			const intent = flagStr(a, "intent") ?? joinIntent(positionals);

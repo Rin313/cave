@@ -98,6 +98,13 @@ export type Rule = (ctx: RuleCtx) => RuleResult;
 /** 时间系统：每 tick 按注册顺序运行，产出 deltas。 */
 export type SystemDef = { id: string; run: Rule };
 
+/** 引擎保留伪动词：时间系统（tick）产出 StepResult 时的动作标识。
+ *  不是游戏声明的动词，游戏不应声明同名动词；describeAction 据此渲染「时间流逝」。 */
+export const TICK_VERB = "tick";
+
+/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
+const DEFAULT_REASON = "……";
+
 export interface VerbDef {
 	label: string;
 	description: string;
@@ -109,6 +116,9 @@ export interface VerbDef {
 	 *  核心在规则前跑共享前提检查：必须可持握（grabbable）且在可达范围；不满足直接拒绝，不进入规则。
 	 *  affordances 枚举自动跳过不可持握工具；probe 依此审计「规则授予但前提不满足」的潜在洞。 */
 	instrumentParams?: string[];
+	/** 属性选择参数：这些非实体参数的取值是实体属性名。core 据此做 propLabels 标签替换、
+	 *  affordances 按属性相关性排序、probe 的有意义缺口过滤——不再硬编码参数名 "prop"。 */
+	propParams?: string[];
 	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	rules: Rule[];
@@ -136,11 +146,19 @@ export interface GameDef {
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, actor: string) => string[];
+	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
+	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
+	probeScope?: (world: World, actor: string) => string[];
 	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
 	reactiveSystems?: boolean;
 	/** 序列化投影：决定状态以什么形态进映射/表达 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;
+	/** 表达语言（缺省 "zh"）：决定表达校验的保留词策略。zh 启用英文实现词表（中文散文不会自然出现英文词）；
+	 *  设为 "en" 等语言时禁用英文实现词匹配，改为 JSON 结构泄漏检测，避免英文散文撞英文实现词（如 act/reason/focus）。 */
+	language?: "zh" | "en" | string;
+	/** 额外禁止词：游戏自定义的实现术语（内部概念名等），表达校验按词边界匹配，不进散文。 */
+	forbiddenTerms?: string[];
 }
 
 export interface StepResult {
@@ -377,7 +395,7 @@ export class Simulation {
 		for (const rule of verb.rules) {
 			const res = rule(ctx);
 			if (res.granted) {
-				return { ok: true, reason: res.reason ?? "……", changes: [], deltas: res.changes ?? [], action, facts: res.facts, involved: res.involved };
+				return { ok: true, reason: res.reason ?? DEFAULT_REASON, changes: [], deltas: res.changes ?? [], action, facts: res.facts, involved: res.involved };
 			}
 			if (res.denial != null && denial == null) denial = res.denial;
 		}
@@ -477,9 +495,10 @@ export class Simulation {
 		for (const [verbName, verb] of verbEntries) {
 			const entityParams = verb.entityParams ?? [];
 			const candidates = verb.candidates?.(this) ?? {};
+			const propParams = verb.propParams ?? [];
 			const propDomain = new Set<string>();
 			for (const [p, vals] of Object.entries(candidates)) {
-				if (p !== "prop") continue;
+				if (!propParams.includes(p)) continue;
 				for (const v of vals) if (typeof v === "string") propDomain.add(v);
 			}
 			const rank = (id: string): number => {
@@ -509,7 +528,7 @@ export class Simulation {
 					checks++;
 					verbChecks++;
 					const r = this.check({ verb: verbName, params: { ...acc } });
-					if (r.ok && r.reason !== "……" && !seen.has(r.reason)) {
+					if (r.ok && r.reason !== DEFAULT_REASON && !seen.has(r.reason)) {
 						seen.add(r.reason);
 						out.push(r.reason);
 					}
@@ -533,11 +552,12 @@ export class Simulation {
 			}
 			return String(v);
 		};
-		if (action.verb === "tick") return "时间流逝";
+		if (action.verb === TICK_VERB) return "时间流逝";
 		if (!verb) return `「${action.verb}」`;
 		const entityParams = new Set(verb.entityParams ?? []);
+		const propParams = verb.propParams ?? [];
 		const parts = Object.entries(action.params).map(([k, v]) => {
-			if (k === "prop") return this.def.propLabels?.[String(v)] ?? String(v);
+			if (propParams.includes(k)) return this.def.propLabels?.[String(v)] ?? String(v);
 			if (entityParams.has(k)) return name(v);
 			if (typeof v === "string") return name(v);
 			return String(v);
@@ -565,9 +585,9 @@ export class Simulation {
 				const changes = this.commit(res.changes ?? []);
 				const sr: StepResult = {
 					ok: true,
-					reason: res.reason ?? "……",
+					reason: res.reason ?? DEFAULT_REASON,
 					changes,
-					action: { verb: "tick", params: { n: this.world.time } },
+					action: { verb: TICK_VERB, params: { n: this.world.time } },
 					facts: res.facts,
 					involved: res.involved,
 				};

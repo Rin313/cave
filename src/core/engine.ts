@@ -9,7 +9,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Simulation, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, TICK_VERB, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -266,7 +266,7 @@ export class Engine {
 	async render(instruction: string, changes: Change[] = []): Promise<void> {
 		const state = this.sim.digest();
 		const results: StepResult[] = changes.length
-			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, action: { verb: "tick", params: { n: this.sim.world.time } } }]
+			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, action: { verb: TICK_VERB, params: { n: this.sim.world.time } } }]
 			: [];
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const narration = await this.expressionPass(
@@ -382,17 +382,27 @@ export class Engine {
 		return null;
 	}
 
-	/** 通用泄漏检查：由世界状态派生禁止词表，无需任何游戏专有知识。 */
+	/** 通用泄漏检查：由世界状态派生禁止词表，无需任何游戏专有知识。
+	 *  词边界策略：含非 ASCII 的术语用 includes（\b 对中文无效）；纯 ASCII 用词边界（避免命中英文子串）。
+	 *  语言策略：zh（缺省）启用英文实现词保留词表（中文散文不会自然出现英文词）；
+	 *  非 zh 语言禁用该词表（英文散文会撞 act/reason/focus 等英文词），改由 JSON 结构检测兜底。 */
 	private leakageCheck(text: string): string | null {
-		const forbidden = new Set<string>(ENGINE_RESERVED_TERMS);
+		if (/"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*(?=["{[]|true|false|null|-?\d)/.test(text)) {
+			return "出现了工具调用或状态格式（JSON 键）。";
+		}
+		if (text.includes("[facts:")) return "正文中出现了声明头 [facts: ...]。";
+		const forbidden = new Set<string>();
 		for (const e of this.sim.world.entities) {
-			forbidden.add(e.id);
+			if (e.id.toLowerCase() !== e.name.toLowerCase()) forbidden.add(e.id);
 			for (const k of Object.keys(e.props)) forbidden.add(k);
 		}
+		for (const t of this.def.forbiddenTerms ?? []) forbidden.add(t);
+		if (this.def.language == null || this.def.language === "zh") {
+			for (const t of ENGINE_RESERVED_TERMS) forbidden.add(t);
+		}
 		for (const t of forbidden) {
-			if (new RegExp(`\\b${t}\\b`).test(text)) {
-				return `出现了实体 id 或实现术语：「${t}」。`;
-			}
+			const hit = /[^\x00-\x7F]/.test(t) ? text.includes(t) : new RegExp(`\\b${t}\\b`).test(text);
+			if (hit) return `出现了实体 id 或实现术语：「${t}」。`;
 		}
 		return null;
 	}
