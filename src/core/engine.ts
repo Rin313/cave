@@ -9,7 +9,7 @@ import {
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Simulation, serialize, type Change, type GameDef, type Op, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -25,14 +25,14 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 const ACT_TOOL = "act";
 
 export interface ActOutcome {
-	kind: "applied" | "rejected" | "refused";
+	kind: "applied" | "rejected" | "refused" | "partial";
 	results: StepResult[];
 	refusal?: { label: string; reason: string };
 }
 
 export type EngineEvent =
 	| { type: "text_delta"; delta: string }
-	| { type: "tool_call"; opCount: number }
+	| { type: "tool_call"; actionCount: number }
 	| { type: "tool_result"; results: StepResult[] }
 	| { type: "validation"; round: number; error: string; attempt: string };
 
@@ -72,35 +72,17 @@ function coerceValue(v: unknown): PropValue {
 	if (v === "false") return false;
 	if (v === "null") return null;
 	if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) return v;
+	if (Array.isArray(v)) return v.map(coerceValue);
+	if (typeof v === "object") {
+		return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, coerceValue(val)]));
+	}
 	return String(v);
-}
-
-interface OpParams {
-	op: string;
-	source?: string;
-	target?: string;
-	entity?: string;
-	dest?: string;
-	prop?: string;
-	value?: unknown;
-}
-
-function toOp(p: OpParams): Op {
-	if (p.op === "apply") return { kind: "apply", source: p.source ?? "", target: p.target ?? "" };
-	if (p.op === "move") return { kind: "move", entity: p.entity ?? "", dest: p.dest ?? "" };
-	return { kind: "set", entity: p.entity ?? "", prop: p.prop ?? "", value: coerceValue(p.value) };
-}
-
-function opIds(p: OpParams): string[] {
-	if (p.op === "apply") return [p.source ?? "", p.target ?? ""];
-	if (p.op === "move") return [p.entity ?? "", p.dest ?? ""];
-	return [p.entity ?? ""];
 }
 
 /** 引擎保留词：表达文本中出现即判定为泄漏。 */
 const ENGINE_RESERVED_TERMS = new Set([
-	"apply", "move", "set", "ops", "refusal", "label", "reason", "entities", "props",
-	"results", "ok", "changes", "granted", "denyReason", "act",
+	"act", "actions", "params", "verb", "refusal", "label", "reason", "entities", "props",
+	"results", "ok", "changes", "granted", "denyReason", "facts", "kind", "tags",
 ]);
 
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
@@ -148,13 +130,14 @@ export class Engine {
 					break;
 				case "tool_execution_start":
 					if (event.toolName === ACT_TOOL) {
-						const args = event.args as { ops?: unknown[] };
-						this.emit({ type: "tool_call", opCount: args.ops?.length ?? 0 });
+						const args = event.args as { actions?: unknown[] };
+						this.emit({ type: "tool_call", actionCount: args.actions?.length ?? 0 });
 					}
 					break;
 				case "turn_end":
 					if (!this.gate.active) break;
-					let anyResult = false;
+					let anyApplied = false;
+					let anyRejected = false;
 					for (const tr of event.toolResults) {
 						if (tr.toolName !== ACT_TOOL) continue;
 						const text = toolResultTextFrom(tr);
@@ -165,17 +148,19 @@ export class Engine {
 							this.outcome.kind = "refused";
 							this.outcome.refusal = resp.refusal;
 							this.emit({ type: "tool_result", results: [] });
-							anyResult = true;
 							continue;
 						}
 						const results = resp.results ?? [];
-						if (results.length) anyResult = true;
 						this.outcome.results.push(...results);
 						this.emit({ type: "tool_result", results });
+						for (const r of results) {
+							if (r.ok) anyApplied = true;
+							else anyRejected = true;
+						}
 					}
-					if (anyResult && this.outcome.results.length) {
-						this.outcome.kind = this.outcome.results.some((r) => r.ok) ? "applied" : "rejected";
-					}
+					if (anyApplied && anyRejected) this.outcome.kind = "partial";
+					else if (anyApplied) this.outcome.kind = "applied";
+					else if (anyRejected) this.outcome.kind = "rejected";
 					break;
 			}
 		});
@@ -226,7 +211,7 @@ export class Engine {
 			settingsManager,
 			sessionManager: options.sessionManager ?? SessionManager.inMemory(),
 			tools: [ACT_TOOL],
-			customTools: [buildActTool(sim, gate)],
+			customTools: [buildActTool(def, sim, gate)],
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
@@ -268,7 +253,7 @@ export class Engine {
 	async render(instruction: string, changes: Change[] = []): Promise<void> {
 		const state = this.sim.serialize();
 		const results: StepResult[] = changes.length
-			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, op: { kind: "tick", n: this.sim.world.time } }]
+			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, action: { verb: "tick", params: { n: this.sim.world.time } } }]
 			: [];
 		const narration = await this.expressionPass(
 			buildExpressionPrompt(this.sim, state, results, undefined, instruction, this.def.internalProps),
@@ -304,7 +289,7 @@ export class Engine {
 
 	private summarize(changes: Change[]): string {
 		if (this.def.summarize) return this.def.summarize({ world: this.sim.world, changes, actor: this.sim.actor });
-		return serialize(this.sim.world, this.sim.actor, this.def.internalProps);
+		return this.sim.serialize();
 	}
 
 	private validateNarration(text: string, changes: Change[]): string | null {
@@ -340,21 +325,27 @@ export class Engine {
 }
 
 function buildMappingPrompt(state: string, selectionLine: string, intent: string): string {
-	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为操作提案，并调用 act 工具。规则：
-1. 能解析出合理操作 → 调用 act，提交 ops 列表（apply/move/set），实体 id 只能取自已可见实体的 id。
-2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 ops，并用 refusal 字段给出 { label, reason }，reason 必须是符合世界观的解释，不得使用实现术语。
+	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
+1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
+2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label, reason }，reason 必须是符合世界观的解释，不得使用实现术语。
 3. 禁止在本阶段输出任何散文或解释文字。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
 	const hint = def.hint ? `${def.hint}\n` : "";
+	const verbs = Object.entries(def.verbs)
+		.map(([name, v]) => `- ${name}「${v.label}」：${v.description}${v.entityParams?.length ? `（实体参数：${v.entityParams.join("/")}，只能取可见实体 id）` : ""}`)
+		.join("\n");
 	return `你是文字游戏引擎。每个回合分两个阶段：
 
-阶段一（解析，调用 act 工具）：把玩家的操作意图解析为操作提案并调用 act 工具。能解析 → 提交 ops 列表（apply/move/set）；无法解析、实体不存在或语境荒谬 → 提交空的 ops 与结构化 refusal（label + 符合世界观的 reason）。此阶段禁止输出散文。
+阶段一（解析，调用 act 工具）：把玩家的操作意图解析为动作提案并调用 act 工具。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空的 actions 与结构化 refusal（label + 符合世界观的 reason）。此阶段禁止输出散文。
 
 阶段二（描写）：基于世界给出的当前状态与本回合变更，把场景写成面向玩家的文学散文。此阶段禁止调用工具。
 
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名；实体属性由当前游戏的法则网络定义，见下方提示。
+
+可用动词（模拟层强制执行）：
+${verbs}
 
 ${hint}
 描写阶段硬约束：
@@ -363,12 +354,25 @@ ${hint}
 - 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则。`;
 }
 
-function describeOp(sim: Simulation, op: StepResult["op"]): string {
-	const name = (id: string) => sim.world.entities.find((e) => e.id === id)?.name ?? id;
-	if (op.kind === "apply") return `用${name(op.source)}作用于${name(op.target)}`;
-	if (op.kind === "move") return `把${name(op.entity)}放到${name(op.dest)}`;
-	if (op.kind === "set") return `改变${name(op.entity)}的${sim.def.propLabels?.[op.prop] ?? "这项特性"}`;
-	return "时间流逝";
+function describeAction(sim: Simulation, action: Action): string {
+	const verb = sim.def.verbs[action.verb];
+	const name = (v: PropValue): string => {
+		if (typeof v === "string") {
+			const hit = sim.world.entities.find((e) => e.id === v);
+			if (hit) return hit.name;
+		}
+		return String(v);
+	};
+	if (action.verb === "tick") return "时间流逝";
+	if (!verb) return `「${action.verb}」`;
+	const entityParams = new Set(verb.entityParams ?? []);
+	const parts = Object.entries(action.params).map(([k, v]) => {
+		if (k === "prop") return sim.def.propLabels?.[String(v)] ?? String(v);
+		if (entityParams.has(k)) return name(v);
+		if (typeof v === "string") return name(v);
+		return String(v);
+	});
+	return parts.length ? `${verb.label} ${parts.join("，")}` : verb.label;
 }
 
 function fmtValue(sim: Simulation, v: PropValue): string {
@@ -398,7 +402,8 @@ function buildExpressionPrompt(
 				? `  ${visible.map((c) => `${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`).join("；")}`
 				: "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
-			lines.push(`- 尝试「${describeOp(sim, r.op)}」→ ${verdict}${changes}`);
+			const facts = r.facts?.length ? `  法则事实：${r.facts.join("；")}` : "";
+			lines.push(`- 尝试「${describeAction(sim, r.action)}」→ ${verdict}${changes}${facts}`);
 		}
 	} else if (refusal) {
 		lines.push(`世界拒绝了你的操作。${refusal.reason ? `理由：「${refusal.reason}」` : ""}`);
@@ -408,7 +413,7 @@ function buildExpressionPrompt(
 	lines.push(
 		"",
 		`${directive} 要求：`,
-		"1. 只描述状态中真实存在的事物与变化；新事实只能来自上面的「本回合尝试」。",
+		"1. 只描述状态中真实存在的事物与变化；新事实只能来自上面的「本回合尝试」或「法则事实」。",
 		"2. 玩家「尝试」过但被拒绝的操作，只描述这次尝试本身，不得声称其产生了后果（实体位置/属性未变）。",
 		"3. 不要发明不存在的物体、人物、现象或后果。",
 		"4. 一律使用实体的名称（name），不得出现实体 id、属性名、工具调用或任何实现术语。",
@@ -417,24 +422,25 @@ function buildExpressionPrompt(
 	return lines.join("\n");
 }
 
-function buildActTool(sim: Simulation, gate: ActGate) {
-	const opSchema = Type.Object({
-		op: Type.Union([Type.Literal("apply"), Type.Literal("move"), Type.Literal("set")]),
-		source: Type.Optional(Type.String({ description: "apply：施动实体 id" })),
-		target: Type.Optional(Type.String({ description: "apply：受动实体 id" })),
-		entity: Type.Optional(Type.String({ description: "move/set：目标实体 id" })),
-		dest: Type.Optional(Type.String({ description: "move：目标位置（玩家 id / 容器 id / 场景 id）" })),
-		prop: Type.Optional(Type.String({ description: "set：属性名" })),
-		value: Type.Optional(Type.Any({ description: "set：属性值（布尔/数字/字符串/null）" })),
-	});
+function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
+	const actionSchema = Type.Union(
+		Object.entries(def.verbs).map(([name, v]) =>
+			Type.Object(
+				{
+					verb: Type.Literal(name),
+					params: (v.schema as never),
+				},
+				{ additionalProperties: false },
+			),
+		),
+	);
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description:
-			"向世界提出操作（apply/move/set）或结构化拒绝。能解析操作 → 提交 ops；无法解析 → 提交空 ops 与 refusal。实体 id 必须取自已可见实体的 id；世界法则会按顺序裁决每个操作。",
+		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能解析操作 → 提交 actions；无法解析 → 提交空 actions 与 refusal。实体参数必须取自已可见实体的 id；世界法则会按顺序裁决每个动作。`,
 		parameters: Type.Object({
-			ops: Type.Optional(
-				Type.Array(opSchema, { description: "按顺序执行的操作提案列表；无法解析时应省略" }),
+			actions: Type.Optional(
+				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；无法解析时应省略" }),
 			),
 			refusal: Type.Optional(
 				Type.Object(
@@ -446,7 +452,7 @@ function buildActTool(sim: Simulation, gate: ActGate) {
 				),
 			),
 		}),
-		execute: async (_toolCallId, params: { ops?: OpParams[]; refusal?: { label: string; reason: string } }) => {
+		execute: async (_toolCallId, params: { actions?: unknown[]; refusal?: { label: string; reason: string } }) => {
 			if (!gate.active) {
 				return {
 					content: [
@@ -457,8 +463,8 @@ function buildActTool(sim: Simulation, gate: ActGate) {
 									ok: false,
 									reason: "当前不在行动阶段，无法执行操作。",
 									changes: [],
-									op: { kind: "set", entity: "", prop: "", value: null },
-									deniedBy: "law" as const,
+									action: { verb: "refused", params: {} },
+									deniedBy: "rule" as const,
 								}],
 							}),
 						},
@@ -466,19 +472,31 @@ function buildActTool(sim: Simulation, gate: ActGate) {
 					details: {},
 				};
 			}
-			if (params.refusal && !(params.ops?.length)) {
+			if (params.refusal && !(params.actions?.length)) {
 				return { content: [{ type: "text", text: JSON.stringify({ refusal: params.refusal }) }], details: {} };
 			}
-			const vis = sim.visibleIds;
+			const vis = sim.visible();
 			const results: StepResult[] = [];
-			for (const p of params.ops ?? []) {
-				const op = toOp(p);
-				const invalid = opIds(p).filter((id) => id && !vis.has(id));
-				if (invalid.length) {
-					results.push({ ok: false, reason: `实体 ${invalid.join("、")} 不可见或不存在。`, changes: [], op });
+			for (const raw of params.actions ?? []) {
+				const a = raw as { verb?: string; params?: Record<string, unknown> };
+				const action: Action = {
+					verb: a.verb ?? "",
+					params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
+				};
+				const verb = def.verbs[action.verb];
+				if (!verb) {
+					results.push({ ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], action, deniedBy: "rule" });
 					break;
 				}
-				results.push(sim.apply(op));
+				const invalid = (verb.entityParams ?? []).filter((p) => {
+					const id = action.params[p];
+					return typeof id === "string" && id.length > 0 && !vis.has(id);
+				});
+				if (invalid.length) {
+					results.push({ ok: false, reason: `实体 ${invalid.join("、")} 不可见或不存在。`, changes: [], action, deniedBy: "rule" });
+					break;
+				}
+				results.push(sim.apply(action));
 			}
 			return {
 				content: [

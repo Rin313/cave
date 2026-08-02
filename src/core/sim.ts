@@ -1,26 +1,24 @@
-export type PropValue = string | number | boolean | null;
+export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
 
 export interface Entity {
 	id: string;
 	name: string;
+	kind: string;
+	tags: string[];
 	props: Record<string, PropValue>;
 }
 
 export interface World {
-	entities: Entity[];
 	time: number;
+	entities: Entity[];
 }
 
-export type Op =
-	| { kind: "apply"; source: string; target: string }
-	| { kind: "move"; entity: string; dest: string }
-	| { kind: "set"; entity: string; prop: string; value: PropValue };
-
-export interface Delta {
-	entity: string;
-	prop: string;
-	to: PropValue;
-}
+/** 结构化变更原语：法则产出 deltas，模拟层裁定提交。prop 支持点路径（如 relations.guard.trust）。 */
+export type Delta =
+	| { op: "set"; entity: string; prop: string; value: PropValue }
+	| { op: "inc"; entity: string; prop: string; by: number }
+	| { op: "push"; entity: string; prop: string; value: PropValue }
+	| { op: "del"; entity: string; prop: string };
 
 export interface Change {
 	entity: string;
@@ -29,73 +27,130 @@ export interface Change {
 	to: PropValue;
 }
 
-export interface LawCtx {
+/** 动作提案：由游戏声明的动词表（verb）驱动，参数由动词 schema 约束。 */
+export interface Action {
+	verb: string;
+	params: Record<string, PropValue>;
+}
+
+export interface RuleCtx {
 	world: World;
-	op: Op | null;
+	action: Action | null;
 	actor: string;
 	rng: () => number;
 }
 
-export interface LawResult {
+export interface RuleResult {
 	granted: boolean;
 	reason?: string;
 	denyReason?: string;
 	changes?: Delta[];
+	/** 法则背书的新事实（表达层的合法新事实词汇，防止模型发明后果）。 */
+	facts?: string[];
 }
 
-export type OpLaw = (ctx: LawCtx) => LawResult;
-export type TickLaw = (ctx: LawCtx) => LawResult;
+export type Rule = (ctx: RuleCtx) => RuleResult;
+
+/** 时间系统：每 tick 按注册顺序运行，产出 deltas。 */
+export type SystemDef = { id: string; run: Rule };
+
+export interface VerbDef {
+	label: string;
+	description: string;
+	/** TypeBox object schema，引擎据此生成 act 工具参数校验。 */
+	schema: unknown;
+	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
+	entityParams?: string[];
+	/** 探测工具的非实体参数候选值；不提供则跳过该参数。 */
+	probe?: (sim: Simulation) => Record<string, PropValue[]>;
+	rules: Rule[];
+}
 
 export interface GameDef {
 	id: string;
 	title: string;
 	playerId: string;
+	verbs: Record<string, VerbDef>;
 	world: World;
-	opLaws: OpLaw[];
-	tickLaws?: TickLaw[];
-	/** 兜底法则：所有法则否决且无具体理由时调用。不提供则用引擎默认回应。 */
-	denyAll?: OpLaw;
+	systems?: SystemDef[];
+	/** 兜底法则：某动词所有法则未表态且无具体理由时调用。 */
+	denyAll?: Rule;
 	hint?: string;
-	/** set 只允许写入这些属性；未声明即全部拒绝（结构性属性必须走 apply/move）。未设置时退回纯法则裁决。 */
-	settableProps?: string[];
-	/** 属性展示名：拒绝/变更文本中属性名的世界化说法。未声明时用通用表述，绝不泄漏属性名。 */
+	/** 属性展示名：拒绝/变更文本中属性名的世界化说法。 */
 	propLabels?: Record<string, string>;
-	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验（如 burnTicks）。 */
+	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验。 */
 	internalProps?: string[];
-	/** 表达层后置校验钩子：返回错误信息或 null。text 中出现的实体/断言不得与 world + changes 矛盾。 */
+	/** 表达层后置校验钩子。 */
 	validateText?: (input: { text: string; world: World; changes: Change[]; actor: string }) => string | null;
-	/** 确定性回退摘要（表达层两次校验失败时展示给玩家）。缺省用引擎的通用 JSON 摘要。 */
+	/** 确定性回退摘要钩子。 */
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
+	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
+	grounding?: (world: World, actor: string) => string[];
 }
-
-export type StepOp = Op | { kind: "tick"; n: number };
 
 export interface StepResult {
 	ok: boolean;
 	reason: string;
 	changes: Change[];
-	op: StepOp;
-	/** 否决来源：具体法则给了世界性理由（law），还是所有法则都未表态落到兜底（denyAll）。 */
-	deniedBy?: "law" | "denyAll";
+	action: Action;
+	/** 否决来源：具体法则给了世界性理由（rule），还是所有法则都未表态落到兜底（denyAll）。 */
+	deniedBy?: "rule" | "denyAll";
+	facts?: string[];
 }
 
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-export function requireOp<K extends Op["kind"]>(c: LawCtx, kind: K): Extract<Op, { kind: K }> | null {
-	return c.op?.kind === kind ? (c.op as Extract<Op, { kind: K }>) : null;
+function splitPath(path: string): string[] {
+	return path.split(".");
 }
 
-export function prop(world: World, id: string, name: string): PropValue {
-	return entity(world, id)?.props[name] ?? null;
+export function propGet(e: Entity, path: string): PropValue {
+	let cur: PropValue = e.props;
+	for (const p of splitPath(path)) {
+		if (cur === null || typeof cur !== "object") return null;
+		if (Array.isArray(cur)) cur = cur[Number(p)] ?? null;
+		else cur = (cur as Record<string, PropValue>)[p] ?? null;
+	}
+	return cur;
 }
 
-/** 拒绝文本中属性的世界化表述：优先用游戏声明的展示名，缺省用通用说法，绝不泄漏属性键名。 */
-export function propDeny(def: GameDef, entityName: string, prop: string): string {
-	const noun = def.propLabels?.[prop] ?? "这项特性";
-	return `世界不这样运转——${entityName}的${noun}无法被改变。`;
+export function propSet(e: Entity, path: string, value: PropValue): void {
+	const parts = splitPath(path);
+	const last = parts.pop()!;
+	let cur: Record<string, PropValue> | PropValue[] = e.props;
+	for (let i = 0; i < parts.length; i++) {
+		const p = parts[i];
+		const idx = Number(p);
+		const next = parts[i + 1];
+		const nextIsNum = next !== undefined && !Number.isNaN(Number(next));
+		const target: PropValue | undefined = Array.isArray(cur) ? cur[idx] : (cur as Record<string, PropValue>)[p];
+		if (target === null || target === undefined || typeof target !== "object") {
+			const fresh: PropValue = nextIsNum ? [] : {};
+			if (Array.isArray(cur)) cur[idx] = fresh;
+			else (cur as Record<string, PropValue>)[p] = fresh;
+			cur = fresh as never;
+		} else {
+			cur = target as never;
+		}
+	}
+	if (Array.isArray(cur)) cur[Number(last)] = value;
+	else (cur as Record<string, PropValue>)[last] = value;
 }
+
+export function prop(world: World, id: string, path: string): PropValue {
+	const e = entity(world, id);
+	return e ? propGet(e, path) : null;
+}
+
+/** delta 构造器命名空间：法则用 D.set/inc/push/del 表达结构化变更。 */
+export const D = {
+	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
+	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
+	push: (entity: string, prop: string, value: PropValue): Delta => ({ op: "push", entity, prop, value }),
+	del: (entity: string, prop: string): Delta => ({ op: "del", entity, prop }),
+};
 
 export function mulberry32(seed: number): () => number {
 	let a = seed >>> 0;
@@ -107,7 +162,8 @@ export function mulberry32(seed: number): () => number {
 	};
 }
 
-export function accessible(world: World, id: string, actor: string): { ok: boolean; reason: string } {
+/** 标准库可达性：容器包含树语义（space / openable / open / in）。游戏可选接入。 */
+export function inTreeReach(world: World, actor: string, id: string): { ok: boolean; reason: string } {
 	const e = entity(world, id);
 	if (!e) return { ok: false, reason: "这里没有这个东西。" };
 	let cur = e.props["in"] as string | null;
@@ -130,23 +186,26 @@ export function accessible(world: World, id: string, actor: string): { ok: boole
 	return { ok: true, reason: "" };
 }
 
-export function visibleIds(world: World, actor: string): Set<string> {
+/** 标准库可见性：容器包含树语义下玩家可达的全部实体。 */
+export function inTreeVisible(world: World, actor: string): Set<string> {
 	const vis = new Set<string>([actor]);
 	for (const e of world.entities) {
 		if (e.props.space === true) vis.add(e.id);
-		if (accessible(world, e.id, actor).ok) vis.add(e.id);
+		if (inTreeReach(world, actor, e.id).ok) vis.add(e.id);
 	}
 	return vis;
 }
 
-export function serialize(world: World, actor: string, internalProps: readonly string[] = []): string {
-	const vis = visibleIds(world, actor);
+export function serialize(world: World, visible: Iterable<string>, internalProps: readonly string[] = []): string {
+	const vis = new Set(visible);
 	const internal = new Set(internalProps);
 	const items = world.entities
 		.filter((e) => vis.has(e.id))
 		.map((e) => ({
 			id: e.id,
 			name: e.name,
+			kind: e.kind,
+			tags: e.tags,
 			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 		}));
 	return JSON.stringify({ time: world.time, entities: items }, null, 2);
@@ -168,8 +227,9 @@ export class Simulation {
 		return this.def.playerId;
 	}
 
-	get visibleIds(): Set<string> {
-		return visibleIds(this.world, this.actor);
+	visible(): Set<string> {
+		if (this.def.grounding) return new Set(this.def.grounding(this.world, this.actor));
+		return new Set(this.world.entities.map((e) => e.id));
 	}
 
 	static fromWorld(def: GameDef, world: World, seed = 1): Simulation {
@@ -179,29 +239,28 @@ export class Simulation {
 		return s;
 	}
 
-	apply(op: Op): StepResult {
-		if (op.kind === "set" && this.def.settableProps && !this.def.settableProps.includes(op.prop)) {
-			const e = entity(this.world, op.entity);
-			const reason = propDeny(this.def, e?.name ?? op.entity, op.prop);
-			const sr: StepResult = { ok: false, reason, changes: [], op, deniedBy: "law" };
+	apply(action: Action): StepResult {
+		const verb = this.def.verbs[action.verb];
+		if (!verb) {
+			const sr: StepResult = { ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], action, deniedBy: "rule" };
 			this.log.push(sr);
 			return sr;
 		}
-		const ctx: LawCtx = { world: this.world, op, actor: this.actor, rng: this.rand };
+		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, rng: this.rand };
 		let denial: string | null = null;
-		for (const law of this.def.opLaws) {
-			const res = law(ctx);
+		for (const rule of verb.rules) {
+			const res = rule(ctx);
 			if (res.granted) {
 				const changes = this.commit(res.changes ?? []);
-				const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, op };
+				const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, action, facts: res.facts };
 				this.log.push(sr);
 				return sr;
 			}
 			if (res.denyReason != null && denial == null) denial = res.denyReason;
 		}
-		const deniedBy: "law" | "denyAll" = denial != null ? "law" : "denyAll";
+		const deniedBy: "rule" | "denyAll" = denial != null ? "rule" : "denyAll";
 		const reason = denial ?? (this.def.denyAll ? this.def.denyAll(ctx).denyReason : null) ?? "世界没有回应这个操作。";
-		const sr: StepResult = { ok: false, reason, changes: [], op, deniedBy };
+		const sr: StepResult = { ok: false, reason, changes: [], action, deniedBy };
 		this.log.push(sr);
 		return sr;
 	}
@@ -210,12 +269,18 @@ export class Simulation {
 		const out: StepResult[] = [];
 		for (let i = 0; i < n; i++) {
 			this.world.time += 1;
-			for (const law of this.def.tickLaws ?? []) {
-				const ctx: LawCtx = { world: this.world, op: null, actor: this.actor, rng: this.rand };
-				const res = law(ctx);
+			for (const sys of this.def.systems ?? []) {
+				const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, rng: this.rand };
+				const res = sys.run(ctx);
 				if (res.granted && (res.changes?.length ?? 0) > 0) {
 					const changes = this.commit(res.changes ?? []);
-					const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, op: { kind: "tick", n: this.world.time } };
+					const sr: StepResult = {
+						ok: true,
+						reason: res.reason ?? "……",
+						changes,
+						action: { verb: "tick", params: { n: this.world.time } },
+						facts: res.facts,
+					};
 					this.log.push(sr);
 					out.push(sr);
 				}
@@ -229,7 +294,7 @@ export class Simulation {
 	}
 
 	serialize(): string {
-		return serialize(this.world, this.actor, this.def.internalProps);
+		return serialize(this.world, this.visible(), this.def.internalProps);
 	}
 
 	private commit(deltas: Delta[]): Change[] {
@@ -237,10 +302,29 @@ export class Simulation {
 		for (const d of deltas) {
 			const e = entity(this.world, d.entity);
 			if (!e) continue;
-			const from = e.props[d.prop] ?? null;
-			if (from === d.to) continue;
-			e.props[d.prop] = d.to;
-			changes.push({ entity: d.entity, prop: d.prop, from, to: d.to });
+			if (d.op === "set") {
+				const from = propGet(e, d.prop);
+				if (from === d.value) continue;
+				propSet(e, d.prop, d.value);
+				changes.push({ entity: d.entity, prop: d.prop, from, to: d.value });
+			} else if (d.op === "inc") {
+				const from = Number(propGet(e, d.prop) ?? 0);
+				if (!Number.isFinite(from)) continue;
+				const to = from + d.by;
+				propSet(e, d.prop, to);
+				changes.push({ entity: d.entity, prop: d.prop, from, to });
+			} else if (d.op === "push") {
+				const prev = propGet(e, d.prop);
+				const arr = Array.isArray(prev) ? [...(prev as PropValue[])] : [];
+				arr.push(d.value);
+				propSet(e, d.prop, arr);
+				changes.push({ entity: d.entity, prop: d.prop, from: prev, to: arr });
+			} else if (d.op === "del") {
+				const from = propGet(e, d.prop);
+				if (from === null) continue;
+				propSet(e, d.prop, null);
+				changes.push({ entity: d.entity, prop: d.prop, from, to: null });
+			}
 		}
 		return changes;
 	}

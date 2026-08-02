@@ -6,19 +6,19 @@
 		{
 			"name": "基础流程：取戒 → 开箱 → 拿蜡 → 点燃 → 放下",
 			"steps": [
-				{ "name": "直接拿戒指失败（固定在骷髅上）", "op": { "kind": "move", "entity": "ring", "dest": "player" }, "expect": { "ok": false, "reason": "固定" } },
-				{ "name": "解下铜戒", "op": { "kind": "set", "entity": "ring", "prop": "attachedTo", "value": null }, "expect": { "ok": true, "reason": "解下" } },
-				{ "name": "戒指已到手", "op": { "kind": "move", "entity": "ring", "dest": "player" }, "expect": { "ok": true, "reason": "手中" } },
-				{ "name": "打开木箱", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true, "reason": "打开" } },
-				{ "name": "取出蜡烛", "op": { "kind": "move", "entity": "candle", "dest": "player" }, "expect": { "ok": true, "reason": "拿起" } },
-				{ "name": "用火把点燃蜡烛", "op": { "kind": "apply", "source": "torch", "target": "candle" }, "expect": { "ok": true, "reason": "点燃" } },
-				{ "name": "把火把放在地上", "op": { "kind": "move", "entity": "torch", "dest": "cave" }, "expect": { "ok": true, "reason": "放到" } }
+				{ "name": "直接拿戒指失败（固定在骷髅上）", "action": { "verb": "move", "params": { "entity": "ring", "dest": "player" } }, "expect": { "ok": false, "reason": "固定" } },
+				{ "name": "解下铜戒", "action": { "verb": "set", "params": { "entity": "ring", "prop": "attachedTo", "value": null } }, "expect": { "ok": true, "reason": "解下" } },
+				{ "name": "戒指已到手", "action": { "verb": "move", "params": { "entity": "ring", "dest": "player" } }, "expect": { "ok": true, "reason": "手中" } },
+				{ "name": "打开木箱", "action": { "verb": "set", "params": { "entity": "chest", "prop": "open", "value": true } }, "expect": { "ok": true, "reason": "打开" } },
+				{ "name": "取出蜡烛", "action": { "verb": "move", "params": { "entity": "candle", "dest": "player" } }, "expect": { "ok": true, "reason": "拿起" } },
+				{ "name": "用火把点燃蜡烛", "action": { "verb": "use", "params": { "source": "torch", "target": "candle" } }, "expect": { "ok": true, "reason": "点燃" } },
+				{ "name": "把火把放在地上", "action": { "verb": "move", "params": { "entity": "torch", "dest": "cave" } }, "expect": { "ok": true, "reason": "放到" } }
 			]
 		},
 		{
 			"name": "涌现：点燃木箱 → 火蔓延 → 内容物被烧毁",
 			"steps": [
-				{ "name": "点燃木箱（从未写过的交互）", "op": { "kind": "apply", "source": "torch", "target": "chest" }, "expect": { "ok": true, "reason": "燃" } },
+				{ "name": "点燃木箱（从未写过的交互）", "action": { "verb": "use", "params": { "source": "torch", "target": "chest" } }, "expect": { "ok": true, "reason": "燃" } },
 				{ "name": "tick：火焰蔓延到箱内蜡烛", "tick": 1, "expect": { "ok": true, "reason": "蔓延" } },
 				{ "name": "tick：火继续烧", "tick": 1, "expect": { "ok": true } },
 				{ "name": "tick：木箱与蜡烛烧成灰烬", "tick": 1, "expect": { "ok": true, "reason": "灰烬", "state": { "chest.material": "ash", "candle.material": "ash", "chest.burning": false } } }
@@ -27,33 +27,33 @@
 		{
 			"name": "涌现：用铜戒撬门失败（拒绝带理由）",
 			"steps": [
-				{ "name": "用铜戒撬石门", "op": { "kind": "apply", "source": "ring", "target": "door" }, "expect": { "ok": false, "reason": "撬" } }
+				{ "name": "用铜戒撬石门", "action": { "verb": "use", "params": { "source": "ring", "target": "door" } }, "expect": { "ok": false, "reason": "撬" } }
 			]
 		},
 		{
 			"name": "涌现：蜡烛塞进门缝 → 门卡住 → 抽出后恢复",
 			"steps": [
-				{ "name": "关着木箱里的蜡烛拿不到", "op": { "kind": "move", "entity": "candle", "dest": "player" }, "expect": { "ok": false, "reason": "关着" } },
-				{ "name": "打开木箱", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true } },
-				{ "name": "取出蜡烛", "op": { "kind": "move", "entity": "candle", "dest": "player" }, "expect": { "ok": true } },
-				{ "name": "把蜡烛塞进门缝", "op": { "kind": "move", "entity": "candle", "dest": "door" }, "expect": { "ok": true, "reason": "卡住" } },
-				{ "name": "门被卡住，打不开", "op": { "kind": "set", "entity": "door", "prop": "open", "value": true }, "expect": { "ok": false, "reason": "卡住" } },
-				{ "name": "把蜡烛抽出来", "op": { "kind": "move", "entity": "candle", "dest": "cave" }, "expect": { "ok": true, "reason": "放到" } },
-				{ "name": "门解卡，可以打开", "op": { "kind": "set", "entity": "door", "prop": "open", "value": true }, "expect": { "ok": true, "reason": "打开" } }
+				{ "name": "关着木箱里的蜡烛拿不到", "action": { "verb": "move", "params": { "entity": "candle", "dest": "player" } }, "expect": { "ok": false, "reason": "关着" } },
+				{ "name": "打开木箱", "action": { "verb": "set", "params": { "entity": "chest", "prop": "open", "value": true } }, "expect": { "ok": true } },
+				{ "name": "取出蜡烛", "action": { "verb": "move", "params": { "entity": "candle", "dest": "player" } }, "expect": { "ok": true } },
+				{ "name": "把蜡烛塞进门缝", "action": { "verb": "move", "params": { "entity": "candle", "dest": "door" } }, "expect": { "ok": true, "reason": "卡住" } },
+				{ "name": "门被卡住，打不开", "action": { "verb": "set", "params": { "entity": "door", "prop": "open", "value": true } }, "expect": { "ok": false, "reason": "卡住" } },
+				{ "name": "把蜡烛抽出来", "action": { "verb": "move", "params": { "entity": "candle", "dest": "cave" } }, "expect": { "ok": true, "reason": "放到" } },
+				{ "name": "门解卡，可以打开", "action": { "verb": "set", "params": { "entity": "door", "prop": "open", "value": true } }, "expect": { "ok": true, "reason": "打开" } }
 			]
 		},
 		{
 			"name": "涌现：铁钎撬开木箱，但撬不动石门",
 			"steps": [
-				{ "name": "用铁钎撬开木箱（硬物 > 木）", "op": { "kind": "apply", "source": "crowbar", "target": "chest" }, "expect": { "ok": true, "reason": "撬开", "state": { "chest.open": true } } },
-				{ "name": "用铁钎撬石门失败（iron < stone）", "op": { "kind": "apply", "source": "crowbar", "target": "door" }, "expect": { "ok": false, "reason": "硬度" } }
+				{ "name": "用铁钎撬开木箱（硬物 > 木）", "action": { "verb": "use", "params": { "source": "crowbar", "target": "chest" } }, "expect": { "ok": true, "reason": "撬开", "state": { "chest.open": true } } },
+				{ "name": "用铁钎撬石门失败（iron < stone）", "action": { "verb": "use", "params": { "source": "crowbar", "target": "door" } }, "expect": { "ok": false, "reason": "硬度" } }
 			]
 		},
 		{
 			"name": "涌现：燃着的火把放进木箱会被引燃",
 			"steps": [
-				{ "name": "打开木箱", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true } },
-				{ "name": "把燃着的火把放进木箱", "op": { "kind": "move", "entity": "torch", "dest": "chest" }, "expect": { "ok": true, "reason": "放进" } },
+				{ "name": "打开木箱", "action": { "verb": "set", "params": { "entity": "chest", "prop": "open", "value": true } }, "expect": { "ok": true } },
+				{ "name": "把燃着的火把放进木箱", "action": { "verb": "move", "params": { "entity": "torch", "dest": "chest" } }, "expect": { "ok": true, "reason": "放进" } },
 				{ "name": "tick：火把引燃木箱", "tick": 1, "expect": { "ok": true, "reason": "点燃", "state": { "chest.burning": true } } },
 				{ "name": "tick：木箱烧成灰烬", "tick": 3, "expect": { "ok": true, "reason": "灰烬", "state": { "chest.material": "ash", "chest.burning": false } } }
 			]
@@ -61,10 +61,10 @@
 		{
 			"name": "set 白名单：结构性属性拒绝直接写入",
 			"steps": [
-				{ "name": "set 直接改材质被拒", "op": { "kind": "set", "entity": "chest", "prop": "material", "value": "gold" }, "expect": { "ok": false, "reason": "无法被改变" } },
-				{ "name": "set 直接传送被拒", "op": { "kind": "set", "entity": "torch", "prop": "in", "value": "player" }, "expect": { "ok": false, "reason": "无法被改变" } },
-				{ "name": "set open 仍允许（法则声明的可写属性）", "op": { "kind": "set", "entity": "chest", "prop": "open", "value": true }, "expect": { "ok": true } },
-				{ "name": "set 解戒仍允许", "op": { "kind": "set", "entity": "ring", "prop": "attachedTo", "value": null }, "expect": { "ok": true } }
+				{ "name": "set 直接改材质被拒", "action": { "verb": "set", "params": { "entity": "chest", "prop": "material", "value": "gold" } }, "expect": { "ok": false, "reason": "无法被改变" } },
+				{ "name": "set 直接传送被拒", "action": { "verb": "set", "params": { "entity": "torch", "prop": "in", "value": "player" } }, "expect": { "ok": false, "reason": "无法被改变" } },
+				{ "name": "set open 仍允许（法则声明的可写属性）", "action": { "verb": "set", "params": { "entity": "chest", "prop": "open", "value": true } }, "expect": { "ok": true } },
+				{ "name": "set 解戒仍允许", "action": { "verb": "set", "params": { "entity": "ring", "prop": "attachedTo", "value": null } }, "expect": { "ok": true } }
 			]
 		}
 	]
