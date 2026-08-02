@@ -1,18 +1,32 @@
-import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, VerbDef, World } from "../core/sim.ts";
+import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
 import { D, entity, inTreeReach, inTreeVisible, prop } from "../core/sim.ts";
 import { Type } from "typebox";
 
+/** 实体名解析：world 版（拒绝模板用）。 */
+function name(w: World, id: string): string {
+	return entity(w, id)?.name ?? id;
+}
+
 function n(c: RuleCtx, id: string): string {
-	return entity(c.world, id)?.name ?? id;
+	return name(c.world, id);
 }
 
-function paramsOf(a: Action | null): Record<string, PropValue> {
-	return a?.params ?? {};
+/** 动作参数读取：取字符串参数（缺省 ""）。 */
+function param(a: Action | null, key: string): string {
+	return String(a?.params?.[key] ?? "");
 }
 
-/** 结构化拒绝构造：law + 施动/受动实体。散文由 GameDef.denialTemplates 渲染。 */
-function deny(law: string, subject?: string, object?: string): { granted: false; denial: Denial } {
-	return { granted: false, denial: { law, subject, object } };
+/** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
+function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
+	const acc = inTreeReach(c.world, c.actor, id);
+	if (acc.ok) return null;
+	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
+}
+
+/** 系统规则结果装配：无变更则不授予；有变更则授予并附 involved/facts/reason。 */
+function collectResult(changes: Delta[], involved: Set<string>, facts: { text: string; entities: string[] }[]): RuleResult {
+	if (!changes.length) return { granted: false };
+	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
 }
 
 const MATERIAL_LABELS: Record<string, string> = {
@@ -70,6 +84,33 @@ function summarizeCave(input: { world: World; changes: Change[]; actor: string }
 	return lines.join("\n");
 }
 
+/** 序列化投影（R6）：映射/表达 prompt 用的紧凑状态呈现。
+ *  保持 JSON 结构（映射层需实体 id 与属性做 grounding），但裁剪冗余（tags 省略）、
+ *  关系表合并呈现（社会/叙事状态进 prompt）、焦点实体置顶。缺省可由引擎 serialize() 兜底。 */
+function digestCave(sim: Simulation): string {
+	const vis = sim.visible();
+	const internal = new Set(sim.def.internalProps ?? []);
+	const focus = sim.focus ?? null;
+	const items = sim.world.entities
+		.filter((e) => vis.has(e.id))
+		.sort((a, b) => (a.id === focus ? -1 : b.id === focus ? 1 : 0))
+		.map((e) => ({
+			id: e.id,
+			name: e.name,
+			kind: e.kind,
+			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
+		}));
+	const rels = (sim.world.relations ?? [])
+		.filter((r) => vis.has(r.from) && vis.has(r.to))
+		.map((r) => ({
+			from: entity(sim.world, r.from)?.name ?? r.from,
+			to: entity(sim.world, r.to)?.name ?? r.to,
+			type: r.type,
+			value: r.value,
+		}));
+	return JSON.stringify({ time: sim.world.time, focus, traces: sim.world.traces ?? {}, relations: rels, entities: items }, null, 2);
+}
+
 const MATERIAL_HARDNESS: Record<string, number> = {
 	wax: 0,
 	copper: 1,
@@ -88,14 +129,13 @@ function hardness(c: RuleCtx, id: string): number {
 }
 
 const wedge: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const x = String(a.entity ?? "");
-	const d = String(a.dest ?? "");
+	const x = param(c.action, "entity");
+	const d = param(c.action, "dest");
 	if (prop(c.world, x, "wedgeable") !== true) return { granted: false };
 	const de = entity(c.world, d);
 	if (!de || de.props.isDoor !== true) return { granted: false };
-	const acc = inTreeReach(c.world, c.actor, x);
-	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: x, reason: acc.reason } };
+	const un = denyUnreachable(c, x);
+	if (un) return un;
 	if (de.props.jammed === true) return { granted: false, denial: { law: "wedge.jammed", subject: x, object: d } };
 	return {
 		granted: true,
@@ -109,11 +149,10 @@ const wedge: Rule = (c) => {
 };
 
 const moveLaw: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const x = String(a.entity ?? "");
-	const d = String(a.dest ?? "");
-	const acc = inTreeReach(c.world, c.actor, x);
-	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: x, reason: acc.reason } };
+	const x = param(c.action, "entity");
+	const d = param(c.action, "dest");
+	const un = denyUnreachable(c, x);
+	if (un) return un;
 	if (prop(c.world, x, "grabbable") !== true) {
 		return { granted: false, denial: { law: "move.grabbable", subject: x } };
 	}
@@ -142,30 +181,30 @@ const moveLaw: Rule = (c) => {
 };
 
 const detach: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const x = String(a.entity ?? "");
-	const p = String(a.prop ?? "");
-	const v = a.value ?? null;
+	const x = param(c.action, "entity");
+	const p = param(c.action, "prop");
+	const v = c.action?.params?.value ?? null;
 	if (p !== "attachedTo" || v !== null) return { granted: false };
 	if (prop(c.world, x, "attachedTo") == null) return { granted: false, denial: { law: "detach.none", subject: x } };
-	const acc = inTreeReach(c.world, c.actor, x);
-	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: x, reason: acc.reason } };
+	const un = denyUnreachable(c, x);
+	if (un) return un;
+	const holder = prop(c.world, x, "attachedTo") as string | null;
 	return {
 		granted: true,
-		involved: [x],
+		involved: holder ? [x, holder] : [x],
 		changes: [
 			D.set(x, "attachedTo", null),
 			D.set(x, "in", c.actor),
+			...((holder && holder !== c.actor ? [D.relSet(holder, c.actor, "记忆", true)] : []) as Delta[]),
 		],
 		reason: `你解下了${n(c, x)}，它落入了你的手中。`,
 	};
 };
 
 const open: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const x = String(a.entity ?? "");
-	const p = String(a.prop ?? "");
-	const v = a.value ?? null;
+	const x = param(c.action, "entity");
+	const p = param(c.action, "prop");
+	const v = c.action?.params?.value ?? null;
 	if (p !== "open" || v !== true) return { granted: false };
 	if (prop(c.world, x, "openable") !== true) return { granted: false, denial: { law: "open.notopenable", subject: x } };
 	if (prop(c.world, x, "open") === true) return { granted: false, denial: { law: "open.already", subject: x } };
@@ -174,10 +213,9 @@ const open: Rule = (c) => {
 };
 
 const close: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const x = String(a.entity ?? "");
-	const p = String(a.prop ?? "");
-	const v = a.value ?? null;
+	const x = param(c.action, "entity");
+	const p = param(c.action, "prop");
+	const v = c.action?.params?.value ?? null;
 	if (p !== "open" || v !== false) return { granted: false };
 	if (prop(c.world, x, "openable") !== true) return { granted: false };
 	if (prop(c.world, x, "open") !== true) return { granted: false, denial: { law: "close.closed", subject: x } };
@@ -185,9 +223,8 @@ const close: Rule = (c) => {
 };
 
 const pry: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const s = String(a.source ?? "");
-	const t = String(a.target ?? "");
+	const s = param(c.action, "source");
+	const t = param(c.action, "target");
 	if (prop(c.world, t, "openable") !== true) return { granted: false };
 	if (prop(c.world, t, "open") === true) return { granted: false, denial: { law: "pry.open", subject: s, object: t } };
 	if (prop(c.world, t, "jammed") === true) return { granted: false, denial: { law: "pry.jammed", subject: s, object: t } };
@@ -198,8 +235,8 @@ const pry: Rule = (c) => {
 	if (hardness(c, s) <= hardness(c, t)) {
 		return { granted: false, denial: { law: "pry.hardness", subject: s, object: t } };
 	}
-	const acc = inTreeReach(c.world, c.actor, s);
-	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: s, reason: acc.reason } };
+	const un = denyUnreachable(c, s);
+	if (un) return un;
 	return {
 		granted: true,
 		involved: [s, t],
@@ -209,12 +246,11 @@ const pry: Rule = (c) => {
 };
 
 const ignite: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const s = String(a.source ?? "");
-	const t = String(a.target ?? "");
+	const s = param(c.action, "source");
+	const t = param(c.action, "target");
 	if (prop(c.world, s, "lit") !== true) return { granted: false, denial: { law: "ignite.nolight", subject: s, object: t } };
-	const acc = inTreeReach(c.world, c.actor, t);
-	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: t, reason: acc.reason } };
+	const un = denyUnreachable(c, t);
+	if (un) return un;
 	if (prop(c.world, t, "flammable") !== true) return { granted: false, denial: { law: "ignite.notflammable", subject: s, object: t } };
 	if (prop(c.world, t, "lightable") === true && prop(c.world, t, "lit") !== true) {
 		return { granted: true, involved: [s, t], changes: [D.set(t, "lit", true)], reason: `你点燃了${n(c, t)}。` };
@@ -234,10 +270,9 @@ const ignite: Rule = (c) => {
 };
 
 const extinguish: Rule = (c) => {
-	const a = paramsOf(c.action);
-	const x = String(a.entity ?? "");
-	const p = String(a.prop ?? "");
-	const v = a.value ?? null;
+	const x = param(c.action, "entity");
+	const p = param(c.action, "prop");
+	const v = c.action?.params?.value ?? null;
 	if (p !== "lit" || v !== false) return { granted: false };
 	if (prop(c.world, x, "lit") !== true) return { granted: false, denial: { law: "extinguish.unlit", subject: x } };
 	if (prop(c.world, x, "burning") === true) return { granted: false, denial: { law: "extinguish.burning", subject: x } };
@@ -245,15 +280,14 @@ const extinguish: Rule = (c) => {
 };
 
 const denyAll: Rule = (c) => {
-	const a = paramsOf(c.action);
 	const verb = c.action?.verb ?? "";
 	if (verb === "use") {
-		return { granted: false, denial: { law: "denyAll.use", subject: String(a.source ?? ""), object: String(a.target ?? "") } };
+		return { granted: false, denial: { law: "denyAll.use", subject: param(c.action, "source"), object: param(c.action, "target") } };
 	}
 	if (verb === "move") {
-		return { granted: false, denial: { law: "denyAll.move", subject: String(a.entity ?? ""), object: String(a.dest ?? "") } };
+		return { granted: false, denial: { law: "denyAll.move", subject: param(c.action, "entity"), object: param(c.action, "dest") } };
 	}
-	return { granted: false, denial: { law: "denyAll.set", subject: String(a.entity ?? ""), prop: String(a.prop ?? "") } };
+	return { granted: false, denial: { law: "denyAll.set", subject: param(c.action, "entity"), prop: param(c.action, "prop") } };
 };
 
 const kindle: Rule = (c) => {
@@ -275,8 +309,7 @@ const kindle: Rule = (c) => {
 		involved.add(host.id);
 		facts.push({ text: `${x.name}的火焰点燃了${host.name}！`, entities: [x.id, host.id] });
 	}
-	if (!changes.length) return { granted: false };
-	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
+	return collectResult(changes, involved, facts);
 };
 
 const spread: Rule = (c) => {
@@ -302,8 +335,7 @@ const spread: Rule = (c) => {
 			facts.push({ text: `${b.name}的火焰蔓延到了${t.name}！`, entities: [b.id, t.id] });
 		}
 	}
-	if (!changes.length) return { granted: false };
-	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
+	return collectResult(changes, involved, facts);
 };
 
 const burnout: Rule = (c) => {
@@ -323,88 +355,90 @@ const burnout: Rule = (c) => {
 			facts.push({ text: `${b.name}烧成了灰烬。`, entities: [b.id] });
 		}
 	}
-	if (!changes.length) return { granted: false };
-	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
+	return collectResult(changes, involved, facts);
 };
 
 const STRONG_FIRE_CLAIMS = ["焦烟", "冒烟", "火舌", "烧焦", "烧成灰烬"];
 const WEAK_FIRE_CLAIMS = ["燃烧", "点燃", "燃起", "烧起来"];
 const HAND_CLAIMS = ["手中", "手上", "掌心", "手里", "握"];
 const NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾", "不曾"];
-const PUNCT = /[，。；！？、—\s]/;
+/** 子句边界：名字与断言之间出现这些才算"不相邻"（跨主语误报拦截）。空白不算边界。 */
+const PUNCT = /[，。；！？、—]/;
 
 function negatedBefore(s: string, p: number): boolean {
 	return NEGATIONS.some((n) => s.slice(Math.max(0, p - 3), p).includes(n));
 }
 
-function claimAsserted(s: string, claim: string): boolean {
-	let idx = 0;
-	while ((idx = s.indexOf(claim, idx)) !== -1) {
-		if (!negatedBefore(s, idx)) return true;
-		idx += claim.length;
-	}
-	return false;
-}
+const NEAR_WINDOW = 8;
 
 function nearBefore(s: string, name: string, p: number): boolean {
-	const from = Math.max(0, p - 4);
+	const from = Math.max(0, p - NEAR_WINDOW);
 	const i = s.lastIndexOf(name, p - 1);
 	if (i === -1 || i < from) return false;
 	return !PUNCT.test(s.slice(i + name.length, p));
 }
 
 function nearAfter(s: string, name: string, p: number, claimLen: number): boolean {
-	const to = Math.min(s.length, p + claimLen + 4);
+	const to = Math.min(s.length, p + claimLen + NEAR_WINDOW);
 	const i = s.indexOf(name, p + claimLen);
 	if (i === -1 || i + name.length > to) return false;
 	return !PUNCT.test(s.slice(p + claimLen, i));
 }
 
-export function validateCaveText(input: { text: string; world: World; changes: Change[]; actor: string }): string | null {
-	const { text, world, actor } = input;
-	const isFire = (id: string) => prop(world, id, "lit") === true || prop(world, id, "burning") === true || prop(world, id, "material") === "ash";
+/** 断言词命中扫描：在一个子句里逐词查找断言词，命中且近旁（NEAR_WINDOW 内、无标点隔断）有目标实体即报错。
+ *  deAfter 提供断言词紧后接「的」时的实体匹配（如「燃烧的蜡烛」）：命中才报错，未命中则跳过该断言词（不落入近旁匹配，避免「燃烧的锈门」误伤）。 */
+function scanClaims(
+	s: string,
+	claims: readonly string[],
+	targets: readonly { name: string }[],
+	error: (t: { name: string }) => string,
+	deAfter?: (after: string) => { name: string } | null,
+): string | null {
+	for (const claim of claims) {
+		let idx = 0;
+		while ((idx = s.indexOf(claim, idx)) !== -1) {
+			if (negatedBefore(s, idx)) {
+				idx += claim.length;
+				continue;
+			}
+			if (deAfter && s[idx + claim.length] === "的") {
+				const after = s.slice(idx + claim.length + 1, idx + claim.length + 4);
+				const hit = deAfter(after);
+				if (hit) return error(hit);
+				idx += claim.length;
+				continue;
+			}
+			const t = targets.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
+			if (t) return error(t);
+			idx += claim.length;
+		}
+	}
+	return null;
+}
+
+export function validateCaveText(input: { text: string; world: World; changes: Change[]; actor: string; pending: Change[] }): string | null {
+	const { text, world, actor, pending } = input;
+	const aboutToBurn = new Set(pending.filter((c) => c.prop === "burning" && c.to === true).map((c) => c.entity));
+	const isFire = (id: string) =>
+		prop(world, id, "lit") === true || prop(world, id, "burning") === true || prop(world, id, "material") === "ash";
 	const isHeld = (id: string) => prop(world, id, "in") === actor;
+	// STRONG 断言（焦烟/烧成灰烬等）只对「当前已燃」成立，不受 pending 豁免——下一 tick 不可能烧成灰烬
 	const nonFire = world.entities.filter((e) => e.id !== actor && e.props.space !== true && !isFire(e.id));
+	// WEAK 断言（燃烧/点燃等）可覆盖「即将燃」的实体（合法预言）
+	const nonFireWeak = world.entities.filter((e) => e.id !== actor && e.props.space !== true && !isFire(e.id) && !aboutToBurn.has(e.id));
 	const nonHeld = world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && !isHeld(e.id));
-	const fireError = (t: typeof nonFire[number]) => `描述虚构了「${t.name}」的燃烧/点燃/烧焦，但当前状态并非如此。`;
+	const fireError = (t: { name: string }) => `描述虚构了「${t.name}」的燃烧/点燃/烧焦，但当前状态并非如此。`;
+	const handError = (t: { name: string }) => `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`;
 
 	for (const s of text.split(/[。！？!?；;]/)) {
-		for (const claim of STRONG_FIRE_CLAIMS) {
-			if (!claimAsserted(s, claim)) continue;
-			const t = nonFire.find((e) => s.includes(e.name));
-			if (t) return fireError(t);
-		}
-		for (const claim of WEAK_FIRE_CLAIMS) {
-			let idx = 0;
-			while ((idx = s.indexOf(claim, idx)) !== -1) {
-				if (negatedBefore(s, idx)) {
-					idx += claim.length;
-					continue;
-				}
-				if (s[idx + claim.length] === "的") {
-					const after = s.slice(idx + claim.length + 1, idx + claim.length + 4);
-					const t = nonFire.find((e) => after.startsWith(e.name));
-					if (t) return fireError(t);
-					idx += claim.length;
-					continue;
-				}
-				const t = nonFire.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
-				if (t) return fireError(t);
-				idx += claim.length;
-			}
-		}
-		for (const claim of HAND_CLAIMS) {
-			let idx = 0;
-			while ((idx = s.indexOf(claim, idx)) !== -1) {
-				if (negatedBefore(s, idx)) {
-					idx += claim.length;
-					continue;
-				}
-				const t = nonHeld.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
-				if (t) return `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`;
-				idx += claim.length;
-			}
-		}
+		const strong = scanClaims(s, STRONG_FIRE_CLAIMS, nonFire, fireError);
+		if (strong) return strong;
+		const weak = scanClaims(s, WEAK_FIRE_CLAIMS, nonFireWeak, fireError, (after) => {
+			return nonFireWeak.find((e) => after.startsWith(e.name)) ?? null;
+		});
+		if (weak) return weak;
+		const hand = scanClaims(s, HAND_CLAIMS, nonHeld, handError);
+		if (hand) return hand;
 	}
 	return null;
 }
@@ -436,12 +470,13 @@ const moveVerb: VerbDef = {
 
 const useVerb: VerbDef = {
 	label: "作用",
-	description: "用一件东西作用于另一件东西（点燃 / 撬动）。",
+	description: "用一件东西作用于另一件东西（点燃 / 撬动）。施动的东西必须拿得动且够得着。",
 	schema: Type.Object({
-		source: Type.String({ description: "施动实体 id" }),
+		source: Type.String({ description: "施动实体 id（必须可持握且可达）" }),
 		target: Type.String({ description: "受动实体 id" }),
 	}),
 	entityParams: ["source", "target"],
+	instrumentParams: ["source"],
 	rules: [pry, ignite],
 };
 
@@ -489,30 +524,32 @@ export const cave: GameDef = {
 	denyAll,
 	denialTemplates: {
 		reach: (d, w) => d.reason ?? "它不在这里。",
-		"wedge.jammed": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}的门缝里已经塞着东西了。`,
-		"move.grabbable": (d, w) => `你搬不动${entity(w, d.subject ?? "")?.name ?? d.subject}。`,
-		"move.attached": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}被固定在别处，先解下来。`,
-		"move.dest": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}？这里没有这个东西。`,
-		"move.closed": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}是关着的，放不进去。`,
-		"move.capacity": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}放不下东西。`,
+		"wedge.jammed": (d, w) => `${name(w, d.object ?? "")}的门缝里已经塞着东西了。`,
+		"move.grabbable": (d, w) => `你搬不动${name(w, d.subject ?? "")}。`,
+		"move.attached": (d, w) => `${name(w, d.subject ?? "")}被固定在别处，先解下来。`,
+		"move.dest": (d, w) => `${name(w, d.object ?? "")}？这里没有这个东西。`,
+		"move.closed": (d, w) => `${name(w, d.object ?? "")}是关着的，放不进去。`,
+		"move.capacity": (d, w) => `${name(w, d.object ?? "")}放不下东西。`,
 		"detach.none": () => "它没有被固定住。",
-		"open.notopenable": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}打不开。`,
+		"open.notopenable": (d, w) => `${name(w, d.subject ?? "")}打不开。`,
 		"open.already": () => "它已经开了。",
-		"open.jammed": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}被东西卡住了，打不开。`,
+		"open.jammed": (d, w) => `${name(w, d.subject ?? "")}被东西卡住了，打不开。`,
 		"close.closed": () => "它已经关着。",
-		"pry.open": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}已经开着。`,
-		"pry.jammed": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}被东西卡住，撬不开。`,
-		"pry.soft": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}太软，撬不动${entity(w, d.object ?? "")?.name ?? d.object}。`,
-		"pry.hardness": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}的硬度不足以撬开${entity(w, d.object ?? "")?.name ?? d.object}。`,
-		"ignite.nolight": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}没有火。`,
-		"ignite.notflammable": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}烧不起来。`,
-		"ignite.burning": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}已经在燃烧。`,
+		"pry.open": (d, w) => `${name(w, d.object ?? "")}已经开着。`,
+		"pry.jammed": (d, w) => `${name(w, d.object ?? "")}被东西卡住，撬不开。`,
+		"pry.soft": (d, w) => `${name(w, d.subject ?? "")}太软，撬不动${name(w, d.object ?? "")}。`,
+		"pry.hardness": (d, w) => `${name(w, d.subject ?? "")}的硬度不足以撬开${name(w, d.object ?? "")}。`,
+		"ignite.nolight": (d, w) => `${name(w, d.subject ?? "")}没有火。`,
+		"ignite.notflammable": (d, w) => `${name(w, d.object ?? "")}烧不起来。`,
+		"ignite.burning": (d, w) => `${name(w, d.object ?? "")}已经在燃烧。`,
 		"extinguish.unlit": () => "它没有在燃烧。",
 		"extinguish.burning": () => "火已经烧起来了，吹不灭。",
-		"denyAll.use": (d, w) => `你把${entity(w, d.subject ?? "")?.name ?? d.subject}凑向${entity(w, d.object ?? "")?.name ?? d.object}，但什么也没有发生。`,
-		"denyAll.move": (d, w) => `你无法把${entity(w, d.subject ?? "")?.name ?? d.subject}放到${entity(w, d.object ?? "")?.name ?? d.object}。`,
+		"instrument.unholdable": (d, w) => `${name(w, d.subject ?? "")}太沉重，你拿不动它来施力。`,
+		"instrument.unreachable": (d, w) => `${name(w, d.subject ?? "")}在你够不到的地方，没法拿来使。`,
+		"denyAll.use": (d, w) => `你把${name(w, d.subject ?? "")}凑向${name(w, d.object ?? "")}，但什么也没有发生。`,
+		"denyAll.move": (d, w) => `你无法把${name(w, d.subject ?? "")}放到${name(w, d.object ?? "")}。`,
 		"denyAll.set": (d, w) => {
-			const subj = entity(w, d.subject ?? "")?.name ?? d.subject;
+			const subj = name(w, d.subject ?? "");
 			const label = PROP_LABELS[d.prop ?? ""];
 			return label ? `你试着改变${subj}的${label}，但它没有任何变化。` : `你试着改变${subj}，但它没有任何变化。`;
 		},
@@ -521,6 +558,7 @@ export const cave: GameDef = {
 	internalProps: ["actor", "burnTicks"],
 	validateText: validateCaveText,
 	summarize: summarizeCave,
+	digest: digestCave,
 	grounding: (world, actor) => [...inTreeVisible(world, actor)],
 	hint: `世界法则（模拟层强制执行）：
 1. 火源（lit=true）作用于可燃物（flammable=true）：可点燃蜡烛（lightable=true，点燃后 lit=true），或让普通可燃物燃烧（burning=true）；燃烧会随时间蔓延到同处或容器内的可燃物，并最终烧成灰烬（material=ash）。

@@ -8,17 +8,35 @@ export interface Entity {
 	props: Record<string, PropValue>;
 }
 
+/** 关系边：社会/叙事状态的原子原语（如"守卫 信任 玩家 10"、"她 记得 你 取走了戒指"）。 */
+export interface Rel {
+	from: string;
+	to: string;
+	type: string;
+	value: number | string | boolean;
+}
+
 export interface World {
 	time: number;
 	entities: Entity[];
+	/** 显著性焦点：本回合动作/拒绝涉及的实体，跨回合指代锚点。 */
+	focus?: string | null;
+	/** 拒绝痕迹：实体 id → 玩家累计尝试/被拒次数（rule 与 denyAll 拒绝时累加）。 */
+	traces?: Record<string, number>;
+	/** 关系边表：from→to 的 type 关系（信任/记忆/派系等）。游戏声明，规则以 deltas 变更。 */
+	relations?: Rel[];
 }
 
-/** 结构化变更原语：法则产出 deltas，模拟层裁定提交。prop 支持点路径（如 relations.guard.trust）。 */
+/** 结构化变更原语：法则产出 deltas，模拟层裁定提交。prop 支持点路径（如 relations.guard.trust）。
+ *  关系变更 prop 编码为 `rel:<type>@<to>`（entity 为 from 端点），表达层据此格式化。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "inc"; entity: string; prop: string; by: number }
 	| { op: "push"; entity: string; prop: string; value: PropValue }
-	| { op: "del"; entity: string; prop: string };
+	| { op: "del"; entity: string; prop: string }
+	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean }
+	| { op: "relInc"; from: string; to: string; type: string; by: number }
+	| { op: "relDel"; from: string; to: string; type: string };
 
 export interface Change {
 	entity: string;
@@ -87,6 +105,10 @@ export interface VerbDef {
 	schema: unknown;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
+	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
+	 *  核心在规则前跑共享前提检查：必须可持握（grabbable）且在可达范围；不满足直接拒绝，不进入规则。
+	 *  affordances 枚举自动跳过不可持握工具；probe 依此审计「规则授予但前提不满足」的潜在洞。 */
+	instrumentParams?: string[];
 	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	rules: Rule[];
@@ -108,12 +130,17 @@ export interface GameDef {
 	propLabels?: Record<string, string>;
 	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验。 */
 	internalProps?: string[];
-	/** 表达层后置校验钩子。 */
-	validateText?: (input: { text: string; world: World; changes: Change[]; actor: string }) => string | null;
+	/** 表达层后置校验钩子；pending 为即将发生（下一 tick）的变更，供钩子区分"预言"与"已发生"。 */
+	validateText?: (input: { text: string; world: World; changes: Change[]; actor: string; pending: Change[] }) => string | null;
 	/** 确定性回退摘要钩子。 */
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, actor: string) => string[];
+	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
+	reactiveSystems?: boolean;
+	/** 序列化投影：决定状态以什么形态进映射/表达 prompt。缺省 = serialize() 全量 JSON。
+	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
+	digest?: (sim: Simulation) => string;
 }
 
 export interface StepResult {
@@ -189,7 +216,20 @@ export const D = {
 	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
 	push: (entity: string, prop: string, value: PropValue): Delta => ({ op: "push", entity, prop, value }),
 	del: (entity: string, prop: string): Delta => ({ op: "del", entity, prop }),
+	relSet: (from: string, to: string, type: string, value: number | string | boolean): Delta => ({ op: "relSet", from, to, type, value }),
+	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
+	relDel: (from: string, to: string, type: string): Delta => ({ op: "relDel", from, to, type }),
 };
+
+/** 关系查询：from→to 的指定 type 的值（无则 null）。 */
+export function relVal(world: World, from: string, to: string, type: string): number | string | boolean | null {
+	return world.relations?.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
+}
+
+/** 关系查询：from 的全部关系边（可按 type 过滤）。 */
+export function relAll(world: World, from: string, type?: string): Rel[] {
+	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
+}
 
 /** 可快照/恢复的确定性随机数。快照后可克隆同一随机序列（dryTick 的「即将发生」预言用）。 */
 export interface Rng {
@@ -250,8 +290,10 @@ export function inTreeVisible(world: World, actor: string): Set<string> {
 export function serialize(world: World, visible: Iterable<string>, internalProps: readonly string[] = []): string {
 	const vis = new Set(visible);
 	const internal = new Set(internalProps);
+	const focus = world.focus ?? null;
 	const items = world.entities
 		.filter((e) => vis.has(e.id))
+		.sort((a, b) => (a.id === focus ? -1 : b.id === focus ? 1 : 0))
 		.map((e) => ({
 			id: e.id,
 			name: e.name,
@@ -259,7 +301,8 @@ export function serialize(world: World, visible: Iterable<string>, internalProps
 			tags: e.tags,
 			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 		}));
-	return JSON.stringify({ time: world.time, entities: items }, null, 2);
+	const rels = (world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
+	return JSON.stringify({ time: world.time, focus, traces: world.traces ?? {}, relations: rels, entities: items }, null, 2);
 }
 
 /** 裁决结果 + 未提交的 deltas（apply 用）；check 丢弃 deltas 作为只读裁决。 */
@@ -272,6 +315,8 @@ export class Simulation {
 	readonly world: World;
 	readonly log: StepResult[] = [];
 	private rand: Rng;
+	/** 探测模式：跳过施动工具前提（instrumentParams）检查，仅 probeGrant 临时开启，审计「规则本身是否会在不可持握工具上授予」。 */
+	private probeSkipInstruments = false;
 
 	constructor(def: GameDef, seed = 1) {
 		this.def = def;
@@ -292,6 +337,9 @@ export class Simulation {
 		const s = new Simulation(def, 1);
 		s.world.entities = JSON.parse(JSON.stringify(world.entities)) as Entity[];
 		s.world.time = world.time;
+		s.world.focus = world.focus ?? null;
+		s.world.traces = world.traces ? { ...world.traces } : undefined;
+		s.world.relations = world.relations ? JSON.parse(JSON.stringify(world.relations)) : undefined;
 		if (rng) s.rand = rng;
 		return s;
 	}
@@ -302,10 +350,27 @@ export class Simulation {
 		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial };
 	}
 
+	/** 探测专用：跳过施动工具前提（instrumentParams）检查的只读裁决。
+	 *  用于审计「规则本身是否会在不可持握/不可达工具上授予」（作者漏声明前提时的潜在洞）。
+	 *  只读、不入日志；probe 使用，游戏逻辑不得调用。 */
+	probeGrant(action: Action): StepResult {
+		const prev = this.probeSkipInstruments;
+		this.probeSkipInstruments = true;
+		try {
+			return this.check(action);
+		} finally {
+			this.probeSkipInstruments = prev;
+		}
+	}
+
 	private adjudicateRaw(action: Action, rng: Rng | (() => number)): RawResult {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
 			return { ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], deltas: [], action, deniedBy: "rule" };
+		}
+		const inst = this.probeSkipInstruments ? null : this.instrumentViolation(action, verb);
+		if (inst) {
+			return { ok: false, reason: renderDenial(this.def, inst, this.world), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}
 		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, rng };
 		let denial: Denial | null = null;
@@ -324,14 +389,80 @@ export class Simulation {
 		return { ok: false, reason, changes: [], deltas: [], action, deniedBy, denial: denial ?? denyAllDenial ?? undefined };
 	}
 
+	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（grabbable）且可达。
+	 *  只产出结构化拒绝（law + subject），散文由 GameDef.denialTemplates 渲染，core 不撰写理由。 */
+	private instrumentViolation(action: Action, verb: VerbDef): Denial | null {
+		for (const p of verb.instrumentParams ?? []) {
+			const id = action.params[p];
+			if (typeof id !== "string" || !id) continue;
+			if (!entity(this.world, id)) continue;
+			if (!this.wieldable(id)) {
+				if (prop(this.world, id, "grabbable") !== true) return { law: "instrument.unholdable", subject: id };
+				return { law: "instrument.unreachable", subject: id };
+			}
+		}
+		return null;
+	}
+
 	apply(action: Action): StepResult {
+		const beforeVisible = this.visible();
 		const r = this.adjudicateRaw(action, this.rand);
 		const changes = r.ok ? this.commit(r.deltas) : [];
-		const sr: StepResult = r.ok
+		let sr: StepResult = r.ok
 			? { ok: true, reason: r.reason, changes, action, facts: r.facts, involved: r.involved }
 			: { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial };
+
+		if (r.ok && this.def.reactiveSystems === true) {
+			const reactive = this.runSystems(true);
+			if (reactive.length) {
+				sr = {
+					...sr,
+					changes: [...sr.changes, ...reactive.flatMap((x) => x.changes)],
+					facts: [...(sr.facts ?? []), ...reactive.flatMap((x) => x.facts ?? [])],
+					involved: [...new Set([...(sr.involved ?? []), ...reactive.flatMap((x) => x.involved ?? [])])],
+				};
+			}
+		}
+
+		this.updateFocus(r, action, beforeVisible);
+
 		this.log.push(sr);
 		return sr;
+	}
+
+	/** 焦点与拒绝痕迹的确定性维护。 */
+	private updateFocus(r: { ok: boolean; denial?: Denial }, action: Action, beforeVisible: Set<string>): void {
+		if (r.ok) {
+			const revealed = [...this.visible()].filter((id) => id !== this.actor && !beforeVisible.has(id));
+			const id = revealed.length ? revealed[0] : this.firstEntityParam(action);
+			if (id) this.world.focus = id;
+		} else {
+			const subj = r.denial?.subject;
+			if (subj && this.world.entities.some((e) => e.id === subj)) {
+				this.world.focus = subj;
+				this.world.traces = this.world.traces ?? {};
+				this.world.traces[subj] = (this.world.traces[subj] ?? 0) + 1;
+			}
+		}
+	}
+
+	/** 取动作参数中第一个实体 id（作为焦点候选）。 */
+	private firstEntityParam(action: Action): string | null {
+		for (const v of Object.values(action.params)) {
+			if (typeof v === "string" && this.world.entities.some((e) => e.id === v)) return v;
+		}
+		return null;
+	}
+
+	/** 当前焦点实体（跨回合指代锚点）。 */
+	get focus(): string | null {
+		return this.world.focus ?? null;
+	}
+
+	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。 */
+	wieldable(id: string): boolean {
+		if (prop(this.world, id, "grabbable") !== true) return false;
+		return inTreeReach(this.world, this.actor, id).ok;
 	}
 
 	/** 动作空间接地：枚举 动词 × 可见实体 × 候选值，返回当前世界会授予的动作（世界腔理由，去重）。
@@ -360,10 +491,13 @@ export class Simulation {
 			};
 			const visibleIds = [...this.visible()];
 			const paramLists: Record<string, PropValue[]> = {};
+			const instruments = new Set(verb.instrumentParams ?? []);
 			for (const p of entityParams) {
-				paramLists[p] = propDomain.size
+				let ids = propDomain.size
 					? visibleIds.slice().sort((a, b) => rank(b) - rank(a))
 					: visibleIds;
+				if (instruments.has(p)) ids = ids.filter((id) => this.wieldable(id));
+				paramLists[p] = ids;
 			}
 			for (const [p, vals] of Object.entries(candidates)) paramLists[p] = vals;
 			const keys = Object.keys(paramLists);
@@ -415,22 +549,30 @@ export class Simulation {
 		const out: StepResult[] = [];
 		for (let i = 0; i < n; i++) {
 			this.world.time += 1;
-			for (const sys of this.def.systems ?? []) {
-				const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, rng: this.rand };
-				const res = sys.run(ctx);
-				if (res.granted && (res.changes?.length ?? 0) > 0) {
-					const changes = this.commit(res.changes ?? []);
-					const sr: StepResult = {
-						ok: true,
-						reason: res.reason ?? "……",
-						changes,
-						action: { verb: "tick", params: { n: this.world.time } },
-						facts: res.facts,
-						involved: res.involved,
-					};
-					this.log.push(sr);
-					out.push(sr);
-				}
+			out.push(...this.runSystems());
+		}
+		return out;
+	}
+
+	/** 按注册顺序运行全部系统一次，产出并提交 deltas（tick 与 reactive 共用）。
+	 *  silent=true 时不写日志（reactive 场景：事件已并入动作的 sr，避免重复记录）。 */
+	private runSystems(silent = false): StepResult[] {
+		const out: StepResult[] = [];
+		for (const sys of this.def.systems ?? []) {
+			const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, rng: this.rand };
+			const res = sys.run(ctx);
+			if (res.granted && (res.changes?.length ?? 0) > 0) {
+				const changes = this.commit(res.changes ?? []);
+				const sr: StepResult = {
+					ok: true,
+					reason: res.reason ?? "……",
+					changes,
+					action: { verb: "tick", params: { n: this.world.time } },
+					facts: res.facts,
+					involved: res.involved,
+				};
+				if (!silent) this.log.push(sr);
+				out.push(sr);
 			}
 		}
 		return out;
@@ -450,9 +592,44 @@ export class Simulation {
 		return serialize(this.world, this.visible(), this.def.internalProps);
 	}
 
+	/** 序列化投影：映射/表达 prompt 用的状态呈现。游戏可声明 def.digest 覆盖。 */
+	digest(): string {
+		if (this.def.digest) return this.def.digest(this);
+		return this.serialize();
+	}
+
 	private commit(deltas: Delta[]): Change[] {
 		const changes: Change[] = [];
+		const rels = (this.world.relations = this.world.relations ?? []);
+		const upsertRel = (from: string, to: string, type: string, value: number | string | boolean) => {
+			const hit = rels.find((r) => r.from === from && r.to === to && r.type === type);
+			if (hit) hit.value = value;
+			else rels.push({ from, to, type, value });
+		};
 		for (const d of deltas) {
+			if (d.op === "relSet") {
+				const from = relVal(this.world, d.from, d.to, d.type);
+				if (from === d.value) continue;
+				upsertRel(d.from, d.to, d.type, d.value);
+				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: d.value });
+				continue;
+			}
+			if (d.op === "relInc") {
+				const prev = Number(relVal(this.world, d.from, d.to, d.type) ?? 0);
+				if (!Number.isFinite(prev)) continue;
+				const to = prev + d.by;
+				upsertRel(d.from, d.to, d.type, to);
+				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from: prev, to });
+				continue;
+			}
+			if (d.op === "relDel") {
+				const from = relVal(this.world, d.from, d.to, d.type);
+				if (from === null) continue;
+				const idx = rels.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
+				if (idx >= 0) rels.splice(idx, 1);
+				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: null });
+				continue;
+			}
 			const e = entity(this.world, d.entity);
 			if (!e) continue;
 			if (d.op === "set") {

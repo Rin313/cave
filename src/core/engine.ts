@@ -87,6 +87,7 @@ function coerceValue(v: unknown): PropValue {
 const ENGINE_RESERVED_TERMS = new Set([
 	"act", "actions", "params", "verb", "refusal", "label", "reason", "entities", "props",
 	"results", "ok", "changes", "granted", "denyReason", "facts", "kind", "tags",
+	"focus", "traces",
 ]);
 
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
@@ -229,14 +230,15 @@ export class Engine {
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
 		this.outcome = { kind: "refused", results: [] };
 		this.gate.active = true;
-		const state = this.sim.serialize();
+		const state = this.sim.digest();
 		const affordances = this.sim.affordances();
 		const visibleBefore = this.sim.visible();
 		const selectionLine = action.selection
 			? `玩家选中了文本片段：「${action.selection}」`
 			: `玩家未选中任何文本`;
+		const focusName = this.sim.focus ? (this.sim.world.entities.find((e) => e.id === this.sim.focus)?.name ?? null) : null;
 		try {
-			await this.session.prompt(buildMappingPrompt(state, selectionLine, action.intent, affordances));
+			await this.session.prompt(buildMappingPrompt(state, selectionLine, action.intent, affordances, focusName));
 		} finally {
 			this.gate.active = false;
 		}
@@ -247,7 +249,7 @@ export class Engine {
 
 		const results = this.outcome.results;
 		const changes = results.flatMap((r) => r.changes);
-		const stateAfter = this.sim.serialize();
+		const stateAfter = this.sim.digest();
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const visibleAfter = this.sim.visible();
 		const revealed = [...visibleAfter].filter((id) => !visibleBefore.has(id));
@@ -262,7 +264,7 @@ export class Engine {
 	}
 
 	async render(instruction: string, changes: Change[] = []): Promise<void> {
-		const state = this.sim.serialize();
+		const state = this.sim.digest();
 		const results: StepResult[] = changes.length
 			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, action: { verb: "tick", params: { n: this.sim.world.time } } }]
 			: [];
@@ -308,8 +310,11 @@ export class Engine {
 		if (!decl.facts.length) return null;
 		const vis = this.sim.visible();
 		const touched = new Set<string>(involved);
+		const relTo = (prop: string): string | null => /^rel:([^@]+)@(.+)$/.exec(prop)?.[1] ?? null;
 		for (const c of [...changes, ...pending]) {
 			touched.add(c.entity);
+			const relT = relTo(c.prop);
+			if (relT && this.sim.world.entities.some((e) => e.id === relT)) touched.add(relT);
 			if (typeof c.from === "string") touched.add(c.from);
 			if (typeof c.to === "string") touched.add(c.to);
 		}
@@ -344,7 +349,7 @@ export class Engine {
 			if (!decl) return { text, err: "缺少首行 [facts: ...] 结构化声明。" };
 			const declErr = this.validateDeclaration(decl, visible, pending, involved);
 			if (declErr) return { text, err: declErr };
-			const bodyErr = this.validateNarration(decl.body, visible);
+			const bodyErr = this.validateNarration(decl.body, visible, pending);
 			if (bodyErr) return { text: decl.body, err: bodyErr };
 			return { text: decl.body, err: null };
 		};
@@ -365,13 +370,13 @@ export class Engine {
 		return this.sim.serialize();
 	}
 
-	private validateNarration(text: string, changes: Change[]): string | null {
+	private validateNarration(text: string, changes: Change[], pending: Change[]): string | null {
 		if (!text.trim()) return "叙述为空。";
 		const leaked = this.leakageCheck(text);
 		if (leaked) return leaked;
 		const hook = this.def.validateText;
 		if (hook) {
-			const err = hook({ text, world: this.sim.world, changes, actor: this.sim.actor });
+			const err = hook({ text, world: this.sim.world, changes, actor: this.sim.actor, pending });
 			if (err) return err;
 		}
 		return null;
@@ -397,11 +402,14 @@ export class Engine {
 	}
 }
 
-function buildMappingPrompt(state: string, selectionLine: string, intent: string, affordances: string[] = []): string {
+function buildMappingPrompt(state: string, selectionLine: string, intent: string, affordances: string[] = [], focusName: string | null = null): string {
 	const aff = affordances.length
 		? `[动作空间] 世界法则当前会授予这些动作（也可提出动作空间之外的动作，世界将逐一裁决，可能被拒绝）：\n${affordances.map((a) => `- ${a}`).join("\n")}\n\n`
 		: "";
-	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${aff}${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
+	const focusLine = focusName
+		? `[焦点] ${focusName} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。若玩家未指定实体，指代「它/那个」优先考虑它；但以玩家显式提到的实体为准。\n\n`
+		: "";
+	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${aff}${focusLine}${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
 1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
 2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label }。
 3. 禁止在本阶段输出任何散文或解释文字。`;
@@ -439,6 +447,16 @@ function fmtValue(sim: Simulation, v: PropValue): string {
 	return String(v);
 }
 
+/** 变更的世界腔描述：rel 变更（prop 编码 `rel:<type>@<to>`）格式化为「from 对 to 的 type」，其余保持 entity.prop。 */
+function fmtChange(sim: Simulation, c: Change): string {
+	const m = /^rel:([^@]+)@(.+)$/.exec(c.prop);
+	if (m) {
+		const [type, to] = [m[1], m[2]];
+		return `${fmtValue(sim, c.entity)} 对 ${fmtValue(sim, to)} 的${type} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
+	}
+	return `${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
+}
+
 function buildExpressionPrompt(
 	sim: Simulation,
 	state: string,
@@ -452,12 +470,16 @@ function buildExpressionPrompt(
 ): string {
 	const internal = new Set(internalProps);
 	const lines: string[] = [`[当前状态]（JSON，唯一真相源）：`, state, ""];
+	if (sim.focus) {
+		const e = sim.world.entities.find((x) => x.id === sim.focus);
+		if (e) lines.push(`[焦点] ${e.name} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。叙述可围绕它展开，也可如实描写场景中其他可见实体；不得因此虚构该实体的任何状态。`, "");
+	}
 	if (results.length) {
 		lines.push("本回合尝试：");
 		for (const r of results) {
 			const visible = r.changes.filter((c) => !internal.has(c.prop));
 			const changes = visible.length
-				? `  ${visible.map((c) => `${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`).join("；")}`
+				? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}`
 				: "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
 			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
@@ -473,7 +495,7 @@ function buildExpressionPrompt(
 	if (pendingVisible.length) {
 		lines.push("即将发生（下一时刻）：");
 		for (const c of pendingVisible) {
-			lines.push(`  ${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`);
+			lines.push(`  ${fmtChange(sim, c)}`);
 		}
 	}
 	const revealedVisible = revealed.filter((id) => sim.world.entities.some((e) => e.id === id));
@@ -493,6 +515,7 @@ function buildExpressionPrompt(
 		"4. 不要发明不存在的物体、人物、现象或后果。",
 		"5. 一律使用实体的名称（name），不得出现实体 id、属性名、工具调用或任何实现术语。",
 		"6. 输出纯散文，不要调用任何工具。",
+		"7. 「即将发生」区列出的变更，只可叙述为尚未发生的征兆或预兆（如「木箱将燃」「将要烧成灰烬」），不得写成已发生的事实。",
 	);
 	return lines.join("\n");
 }
@@ -576,7 +599,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 			return {
 				content: [
 					{ type: "text", text: JSON.stringify({ results }) },
-					{ type: "text", text: `执行后的新状态（JSON，唯一真相源）：\n${sim.serialize()}` },
+					{ type: "text", text: `执行后的新状态（JSON，唯一真相源）：\n${sim.digest()}` },
 				],
 				details: {},
 			};

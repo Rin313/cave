@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Simulation, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
@@ -147,11 +147,6 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 		}
 	}
 	console.log(`\nRESULT: ${passed}/${total} PASS`);
-
-	const reportFile = join("reports", `${basename(scenarioPath, ".json")}.report.json`);
-	mkdirSync(dirname(reportFile), { recursive: true });
-	writeFileSync(reportFile, JSON.stringify({ scenario: basename(scenarioPath), game: file.game, passed, total, scenarios: reports }, null, 2), "utf8");
-	console.log(`REPORT: ${reportFile}`);
 	process.exit(passed === total ? 0 : 1);
 }
 
@@ -183,11 +178,13 @@ function describeAction(action: Action, def: GameDef): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: string }[]; seen: number } {
+function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: string }[]; latent: { op: string; ruleGranted: string }[]; seen: number } {
 	const sim = new Simulation(def, 1);
 	const ids = [...sim.visible()].filter((id) => id !== def.playerId);
 	const itemIds = ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true);
 	const gaps: { op: string; reason: string; law?: string }[] = [];
+	/** 规则会在不可持握工具上授予的潜在洞（作者漏声明 instrumentParams）。 */
+	const latent: { op: string; ruleGranted: string }[] = [];
 	const seen = new Set<string>();
 
 	/** 有意义的缺口：实体确实拥有该属性、不是无变更空操作、且值类型匹配（布尔属性不吃字符串等）。 */
@@ -209,6 +206,12 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 		const r = fresh.apply(action);
 		if (!r.ok && r.deniedBy === "denyAll" && isMeaningfulGap(action)) {
 			gaps.push({ op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
+		}
+		if (!r.ok && r.denial?.law?.startsWith("instrument.")) {
+			const rb = fresh.probeGrant(action);
+			if (rb.ok) {
+				latent.push({ op: describeAction(action, def), ruleGranted: rb.reason });
+			}
 		}
 	};
 
@@ -247,35 +250,24 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 		generate(0, {});
 	}
 
-	return { gaps, seen: seen.size };
+	return { gaps, latent, seen: seen.size };
 }
 
 async function cmdProbe(gameId: string): Promise<void> {
 	const def = getGame(gameId);
-	const { gaps, seen } = probeDef(def);
+	const { gaps, latent, seen } = probeDef(def);
 	const applyMoveGaps = gaps.filter((g) => g.op.startsWith("use") || g.op.startsWith("move"));
 	const setGaps = gaps.filter((g) => g.op.startsWith("set"));
-	const byProp = new Map<string, { n: number; examples: string[] }>();
-	for (const g of setGaps) {
-		const prop = g.op.match(/set \S+ (\S+) /)?.[1] ?? "?";
-		const e = byProp.get(prop) ?? { n: 0, examples: [] };
-		e.n += 1;
-		if (e.examples.length < 3) e.examples.push(g.op);
-		byProp.set(prop, e);
-	}
 	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型动作）===`);
 	console.log(`use/move 缺口: ${applyMoveGaps.length}`);
 	for (const g of applyMoveGaps) console.log(`  [GAP] ${g.op} → ${g.reason}`);
-	console.log(`set 缺口（按属性分组）: ${setGaps.length}`);
-	for (const [prop, e] of [...byProp.entries()].sort((a, b) => b[1].n - a[1].n)) {
-		console.log(`  ${prop.padEnd(12)} ×${e.n}  例: ${e.examples.join(" | ")}`);
-	}
-	console.log(gaps.length === 0 ? "\n无缺口。法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
-
-	const reportFile = join("reports", `${def.id}.probe.json`);
-	mkdirSync(dirname(reportFile), { recursive: true });
-	writeFileSync(reportFile, JSON.stringify({ game: def.id, seen, gaps }, null, 2), "utf8");
-	console.log(`REPORT: ${reportFile}`);
+	console.log(`set 缺口: ${setGaps.length}`);
+	for (const g of setGaps) console.log(`  [GAP] ${g.op} → ${g.reason}`);
+	console.log(`规则未自行检查施动工具（运行时被动词级 instrument 前提拦截）: ${latent.length}`);
+	for (const l of latent) console.log(`  [LATENT] ${l.op} → 规则本身会授予「${l.ruleGranted}」`);
+	if (latent.length) console.log("  建议：在规则内部自行检查施动工具前提（或保持 instrumentParams 声明），否则一旦 instrument 拦截被绕开规则会开出荒谬授予。");
+	console.log(gaps.length === 0 && latent.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
+	console.log("注：probe 只覆盖已声明 instrumentParams 的动词；若某动词漏声明施动工具前提且规则也未自检，此洞不会出现在报告（如 use 的 source 不可持握仍被授予）。请对 use 类动词逐一确认 instrumentParams 已声明。");
 }
 
 async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; world: boolean }): Promise<void> {
@@ -332,7 +324,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] [--game <id>] [--json] [--world]    按顺序执行动作并展示结果
     action: use <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
     （实体参数可用名称或 id）
-  sim probe [--game <id>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口（写 reports/<game>.probe.json）
+  sim probe [--game <id>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（打印明细）
 `);
 		return;
 	}
