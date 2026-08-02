@@ -58,6 +58,8 @@ export interface GameDef {
 	hint?: string;
 	/** set 只允许写入这些属性；未声明即全部拒绝（结构性属性必须走 apply/move）。未设置时退回纯法则裁决。 */
 	settableProps?: string[];
+	/** 属性展示名：拒绝/变更文本中属性名的世界化说法。未声明时用通用表述，绝不泄漏属性名。 */
+	propLabels?: Record<string, string>;
 	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验（如 burnTicks）。 */
 	internalProps?: string[];
 	/** 表达层后置校验钩子：返回错误信息或 null。text 中出现的实体/断言不得与 world + changes 矛盾。 */
@@ -87,6 +89,12 @@ export function requireOp<K extends Op["kind"]>(c: LawCtx, kind: K): Extract<Op,
 
 export function prop(world: World, id: string, name: string): PropValue {
 	return entity(world, id)?.props[name] ?? null;
+}
+
+/** 拒绝文本中属性的世界化表述：优先用游戏声明的展示名，缺省用通用说法，绝不泄漏属性键名。 */
+export function propDeny(def: GameDef, entityName: string, prop: string): string {
+	const noun = def.propLabels?.[prop] ?? "这项特性";
+	return `世界不这样运转——${entityName}的${noun}无法被改变。`;
 }
 
 export function mulberry32(seed: number): () => number {
@@ -174,7 +182,7 @@ export class Simulation {
 	apply(op: Op): StepResult {
 		if (op.kind === "set" && this.def.settableProps && !this.def.settableProps.includes(op.prop)) {
 			const e = entity(this.world, op.entity);
-			const reason = `世界不这样运转——${e?.name ?? op.entity}的${op.prop}无法被改变。`;
+			const reason = propDeny(this.def, e?.name ?? op.entity, op.prop);
 			const sr: StepResult = { ok: false, reason, changes: [], op, deniedBy: "law" };
 			this.log.push(sr);
 			return sr;

@@ -216,14 +216,6 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string }[]; seen:
 				if (!internal.has(k)) props.add(k);
 			}
 		}
-	for (const e of itemIds) {
-		const props = new Set<string>([...BOOL_PROPS, "attachedTo", "material", "in"]);
-		for (const ent of sim.world.entities) {
-			if (ent.id === e) continue;
-			for (const k of Object.keys(ent.props)) {
-				if (!internal.has(k)) props.add(k);
-			}
-		}
 		for (const p of props) {
 			const values = new Set<PropValue>([true, false, null]);
 			for (const ent of sim.world.entities) {
@@ -233,7 +225,6 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string }[]; seen:
 			if (p === "in" || p === "attachedTo") for (const d of ids) values.add(d);
 			for (const v of values) unique({ kind: "set", entity: e, prop: p, value: v });
 		}
-	}
 	}
 
 	return { gaps, seen: seen.size };
@@ -264,7 +255,7 @@ async function cmdProbe(gameId: string): Promise<void> {
 
 async function cmdRun(tokens: string[], gameId: string): Promise<void> {
 	const def = getGame(gameId);
-	const sim = 	new Simulation(def, 1);
+	const sim = new Simulation(def, 1);
 	console.log("=== 初始世界 ===");
 	console.log(sim.serialize());
 	for (const token of tokens) {

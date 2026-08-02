@@ -367,7 +367,7 @@ function describeOp(sim: Simulation, op: StepResult["op"]): string {
 	const name = (id: string) => sim.world.entities.find((e) => e.id === id)?.name ?? id;
 	if (op.kind === "apply") return `用${name(op.source)}作用于${name(op.target)}`;
 	if (op.kind === "move") return `把${name(op.entity)}放到${name(op.dest)}`;
-	if (op.kind === "set") return `改变${name(op.entity)}的${op.prop}`;
+	if (op.kind === "set") return `改变${name(op.entity)}的${sim.def.propLabels?.[op.prop] ?? "这项特性"}`;
 	return "时间流逝";
 }
 

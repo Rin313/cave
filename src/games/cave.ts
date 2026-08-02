@@ -241,7 +241,8 @@ const denyAll: OpLaw = (c) => {
 	if (op.kind === "move") {
 		return { granted: false, denyReason: `你无法把${n(c, op.entity)}放到${n(c, op.dest)}。` };
 	}
-	return { granted: false, denyReason: `这世界不这样运转——${n(c, op.entity)}的${op.prop}无法被改变。` };
+	const noun = PROP_LABELS[op.prop] ?? "这项特性";
+	return { granted: false, denyReason: `世界不这样运转——${n(c, op.entity)}的${noun}无法被改变。` };
 };
 
 const kindle: TickLaw = (c) => {
@@ -306,12 +307,6 @@ const burnout: TickLaw = (c) => {
 	if (!changes.length) return { granted: false };
 	return { granted: true, changes, reason: reasons.join(" ") };
 };
-
-const GENERIC_DENY_PATTERNS = ["你把", "你无法把", "这世界不这样运转"];
-
-export function isGenericDeny(reason: string): boolean {
-	return GENERIC_DENY_PATTERNS.some((p) => reason.startsWith(p));
-}
 
 const STRONG_FIRE_CLAIMS = ["焦烟", "冒烟", "火舌", "烧焦", "烧成灰烬"];
 const WEAK_FIRE_CLAIMS = ["燃烧", "点燃", "燃起", "烧起来"];
@@ -417,6 +412,7 @@ export const cave: GameDef = {
 	tickLaws: [kindle, spread, burnout],
 	denyAll,
 	settableProps: ["open", "attachedTo", "lit"],
+	propLabels: PROP_LABELS,
 	internalProps: ["actor", "burnTicks"],
 	validateText: validateCaveText,
 	summarize: summarizeCave,
