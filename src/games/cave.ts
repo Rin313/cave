@@ -253,7 +253,7 @@ const denyAll: Rule = (c) => {
 	if (verb === "move") {
 		return { granted: false, denial: { law: "denyAll.move", subject: String(a.entity ?? ""), object: String(a.dest ?? "") } };
 	}
-	return { granted: false, denial: { law: "denyAll.set", subject: String(a.entity ?? ""), reason: `世界不这样运转——${n(c, String(a.entity ?? ""))}的${PROP_LABELS[String(a.prop ?? "")] ?? "这项特性"}无法被改变。` } };
+	return { granted: false, denial: { law: "denyAll.set", subject: String(a.entity ?? ""), prop: String(a.prop ?? "") } };
 };
 
 const kindle: Rule = (c) => {
@@ -409,13 +409,14 @@ export function validateCaveText(input: { text: string; world: World; changes: C
 	return null;
 }
 
-/** set 动词的探测候选：仅 probe set 规则（detach/open/close/extinguish）实际裁决的属性与值。 */
-const setProbe: VerbDef["probe"] = (sim) => {
+/** set 动词的候选值：仅覆盖 set 规则（detach/open/close/extinguish）实际裁决的属性与值（布尔/空/实体 id）。 */
+const setCandidates: VerbDef["candidates"] = (sim) => {
 	const values = new Set<PropValue>([true, false, null]);
 	for (const ent of sim.world.entities) {
 		const v = ent.props.attachedTo;
 		if (typeof v === "string") values.add(v);
 	}
+	for (const id of sim.visible()) values.add(id);
 	return { prop: ["open", "lit", "attachedTo"], value: [...values] };
 };
 
@@ -427,7 +428,7 @@ const moveVerb: VerbDef = {
 		dest: Type.String({ description: "目标位置 id（玩家 / 场景 / 打开的容器 / 门缝）" }),
 	}),
 	entityParams: ["entity", "dest"],
-	probe: (sim) => ({
+	candidates: (sim) => ({
 		dest: [...sim.visible(), sim.actor],
 	}),
 	rules: [wedge, moveLaw],
@@ -453,7 +454,7 @@ const setVerb: VerbDef = {
 		value: Type.Any({ description: "新值（布尔 / 数字 / 字符串 / null）" }),
 	}),
 	entityParams: ["entity"],
-	probe: setProbe,
+	candidates: setCandidates,
 	rules: [detach, open, close, extinguish],
 };
 
@@ -510,6 +511,11 @@ export const cave: GameDef = {
 		"extinguish.burning": () => "火已经烧起来了，吹不灭。",
 		"denyAll.use": (d, w) => `你把${entity(w, d.subject ?? "")?.name ?? d.subject}凑向${entity(w, d.object ?? "")?.name ?? d.object}，但什么也没有发生。`,
 		"denyAll.move": (d, w) => `你无法把${entity(w, d.subject ?? "")?.name ?? d.subject}放到${entity(w, d.object ?? "")?.name ?? d.object}。`,
+		"denyAll.set": (d, w) => {
+			const subj = entity(w, d.subject ?? "")?.name ?? d.subject;
+			const label = PROP_LABELS[d.prop ?? ""];
+			return label ? `你试着改变${subj}的${label}，但它没有任何变化。` : `你试着改变${subj}，但它没有任何变化。`;
+		},
 	},
 	propLabels: PROP_LABELS,
 	internalProps: ["actor", "burnTicks"],

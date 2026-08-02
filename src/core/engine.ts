@@ -230,12 +230,13 @@ export class Engine {
 		this.outcome = { kind: "refused", results: [] };
 		this.gate.active = true;
 		const state = this.sim.serialize();
+		const affordances = this.sim.affordances();
 		const visibleBefore = this.sim.visible();
 		const selectionLine = action.selection
 			? `玩家选中了文本片段：「${action.selection}」`
 			: `玩家未选中任何文本`;
 		try {
-			await this.session.prompt(buildMappingPrompt(state, selectionLine, action.intent));
+			await this.session.prompt(buildMappingPrompt(state, selectionLine, action.intent, affordances));
 		} finally {
 			this.gate.active = false;
 		}
@@ -396,8 +397,11 @@ export class Engine {
 	}
 }
 
-function buildMappingPrompt(state: string, selectionLine: string, intent: string): string {
-	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
+function buildMappingPrompt(state: string, selectionLine: string, intent: string, affordances: string[] = []): string {
+	const aff = affordances.length
+		? `[动作空间] 世界法则当前会授予这些动作（也可提出动作空间之外的动作，世界将逐一裁决，可能被拒绝）：\n${affordances.map((a) => `- ${a}`).join("\n")}\n\n`
+		: "";
+	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${aff}${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
 1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
 2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label }。
 3. 禁止在本阶段输出任何散文或解释文字。`;
@@ -424,27 +428,6 @@ ${hint}
 - 叙述只能引用状态中真实存在的实体和属性，禁止发明不存在的物体、人物、现象或后果。
 - 一律使用实体的名称（name），不得写出实体 id、属性名、工具调用或决策过程。
 - 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则。`;
-}
-
-function describeAction(sim: Simulation, action: Action): string {
-	const verb = sim.def.verbs[action.verb];
-	const name = (v: PropValue): string => {
-		if (typeof v === "string") {
-			const hit = sim.world.entities.find((e) => e.id === v);
-			if (hit) return hit.name;
-		}
-		return String(v);
-	};
-	if (action.verb === "tick") return "时间流逝";
-	if (!verb) return `「${action.verb}」`;
-	const entityParams = new Set(verb.entityParams ?? []);
-	const parts = Object.entries(action.params).map(([k, v]) => {
-		if (k === "prop") return sim.def.propLabels?.[String(v)] ?? String(v);
-		if (entityParams.has(k)) return name(v);
-		if (typeof v === "string") return name(v);
-		return String(v);
-	});
-	return parts.length ? `${verb.label} ${parts.join("，")}` : verb.label;
 }
 
 function fmtValue(sim: Simulation, v: PropValue): string {
@@ -479,7 +462,7 @@ function buildExpressionPrompt(
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
 			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
 			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
-			lines.push(`- 尝试「${describeAction(sim, r.action)}」→ ${verdict}${changes}${facts}${involved}`);
+			lines.push(`- 尝试「${sim.describeAction(r.action)}」→ ${verdict}${changes}${facts}${involved}`);
 		}
 	} else if (refusal) {
 		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);

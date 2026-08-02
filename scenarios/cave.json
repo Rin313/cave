@@ -61,8 +61,8 @@
 		{
 			"name": "set 白名单：结构性属性拒绝直接写入",
 			"steps": [
-				{ "name": "set 直接改材质被拒", "action": { "verb": "set", "params": { "entity": "chest", "prop": "material", "value": "gold" } }, "expect": { "ok": false, "reason": "无法被改变" } },
-				{ "name": "set 直接传送被拒", "action": { "verb": "set", "params": { "entity": "torch", "prop": "in", "value": "player" } }, "expect": { "ok": false, "reason": "无法被改变" } },
+				{ "name": "set 直接改材质被拒", "action": { "verb": "set", "params": { "entity": "chest", "prop": "material", "value": "gold" } }, "expect": { "ok": false, "reason": "没有任何变化" } },
+				{ "name": "set 直接传送被拒", "action": { "verb": "set", "params": { "entity": "torch", "prop": "in", "value": "player" } }, "expect": { "ok": false, "reason": "没有任何变化" } },
 				{ "name": "set open 仍允许（法则声明的可写属性）", "action": { "verb": "set", "params": { "entity": "chest", "prop": "open", "value": true } }, "expect": { "ok": true } },
 				{ "name": "set 解戒仍允许", "action": { "verb": "set", "params": { "entity": "ring", "prop": "attachedTo", "value": null } }, "expect": { "ok": true } }
 			]

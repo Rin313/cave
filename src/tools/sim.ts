@@ -155,11 +155,11 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 	process.exit(passed === total ? 0 : 1);
 }
 
-/** 把 token 参数解析为动作；实体参数接受 id 或 name（按世界实体匹配）。 */
+/** 把 token 参数解析为动作；实体参数接受 id 或 name（按世界实体匹配），缺失/未知抛错。 */
 function parseActionToken(token: string, def: GameDef): Action {
 	const [verb, ...rest] = token.split(/\s+/);
-	const resolve = (v: string | undefined): string | undefined => {
-		if (!v) return undefined;
+	const resolve = (v: string | undefined): string => {
+		if (!v) throw new Error(`动作「${token}」缺少实体参数`);
 		const hit = def.world.entities.find((e) => e.name === v || e.id === v);
 		return hit ? hit.id : v;
 	};
@@ -190,10 +190,26 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 	const gaps: { op: string; reason: string; law?: string }[] = [];
 	const seen = new Set<string>();
 
+	/** 有意义的缺口：实体确实拥有该属性、不是无变更空操作、且值类型匹配（布尔属性不吃字符串等）。 */
+	const isMeaningfulGap = (action: Action): boolean => {
+		if (!("prop" in action.params) || !("entity" in action.params)) return true;
+		const e = sim.world.entities.find((x) => x.id === action.params.entity);
+		const prop = String(action.params.prop ?? "");
+		if (!e || !(prop in e.props)) return false;
+		const cur = e.props[prop];
+		const val = action.params.value;
+		if (cur === val) return false;
+		if (typeof cur === "boolean" && (val !== true && val !== false)) return false;
+		if (typeof cur === "string" && (val === true || val === false || val === null)) return false;
+		return true;
+	};
+
 	const probeAction = (action: Action) => {
 		const fresh = new Simulation(def, 1);
 		const r = fresh.apply(action);
-		if (!r.ok && r.deniedBy === "denyAll") gaps.push({ op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
+		if (!r.ok && r.deniedBy === "denyAll" && isMeaningfulGap(action)) {
+			gaps.push({ op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
+		}
 	};
 
 	const unique = (action: Action) => {
@@ -206,7 +222,7 @@ function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: str
 	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName];
 		const entityParams = verb.entityParams ?? [];
-		const candidates = verb.probe?.(sim) ?? {};
+		const candidates = verb.candidates?.(sim) ?? {};
 		const paramLists: Record<string, PropValue[]> = {};
 
 		for (const p of entityParams) paramLists[p] = [...itemIds];
