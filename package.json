@@ -1,8 +1,6 @@
 {
 	"name": "cave",
 	"private": true,
-	"version": "0.1.0",
-	"description": "语言游戏引擎：确定性状态机 + pi SDK 双出口闭环",
 	"type": "module",
 	"scripts": {
 	"verify": "node src/tools/sim.ts scenario",

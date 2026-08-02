@@ -289,6 +289,12 @@ export class Simulation {
 		return out;
 	}
 
+	/** 克隆世界模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。表达层的"即将发生"合法预言来源。 */
+	dryTick(n = 1): StepResult[] {
+		const clone = Simulation.fromWorld(this.def, this.world);
+		return clone.tick(n);
+	}
+
 	snapshot(): World {
 		return JSON.parse(JSON.stringify(this.world)) as World;
 	}

@@ -27,7 +27,7 @@ const ACT_TOOL = "act";
 export interface ActOutcome {
 	kind: "applied" | "rejected" | "refused" | "partial";
 	results: StepResult[];
-	refusal?: { label: string; reason: string };
+	refusal?: { label: string; reason?: string };
 }
 
 export type EngineEvent =
@@ -38,7 +38,13 @@ export type EngineEvent =
 
 interface ToolResponse {
 	results?: StepResult[];
-	refusal?: { label: string; reason: string };
+	refusal?: { label: string; reason?: string };
+}
+
+interface Refusal {
+	label: string;
+	/** 模型预判会被世界拒绝的动作提案，交规则层裁决。 */
+	considered?: unknown;
 }
 
 function toolResultTextFrom(tr: { content: readonly unknown[] }): string | undefined {
@@ -57,7 +63,7 @@ function parseToolResponse(text: string): ToolResponse | null {
 			if (Array.isArray(o.results)) return { results: o.results as StepResult[] };
 			if (o.refusal && typeof o.refusal === "object") {
 				const r = o.refusal as Record<string, unknown>;
-				return { refusal: { label: String(r.label ?? "refused"), reason: String(r.reason ?? "") } };
+				return { refusal: { label: String(r.label ?? "refused"), reason: r.reason != null ? String(r.reason) : undefined } };
 			}
 		}
 		if (Array.isArray(v)) return { results: v as StepResult[] };
@@ -226,6 +232,7 @@ export class Engine {
 		this.outcome = { kind: "refused", results: [] };
 		this.gate.active = true;
 		const state = this.sim.serialize();
+		const visibleBefore = this.sim.visible();
 		const selectionLine = action.selection
 			? `玩家选中了文本片段：「${action.selection}」`
 			: `玩家未选中任何文本`;
@@ -236,15 +243,20 @@ export class Engine {
 		}
 
 		if (this.outcome.kind === "refused" && !this.outcome.refusal) {
-			this.outcome.refusal = { label: "unparsed", reason: "世界没有回应这个操作。" };
+			this.outcome.refusal = { label: "unparsed" };
 		}
 
 		const results = this.outcome.results;
 		const changes = results.flatMap((r) => r.changes);
 		const stateAfter = this.sim.serialize();
+		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
+		const visibleAfter = this.sim.visible();
+		const revealed = [...visibleAfter].filter((id) => !visibleBefore.has(id));
+		const involved = this.involvedEntities(results, this.outcome.refusal, revealed);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, this.def.internalProps),
+			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, this.def.internalProps, pending, action.intent, revealed),
 			changes,
+			involved,
 		);
 		this.emit({ type: "text_delta", delta: narration });
 		return this.outcome;
@@ -255,16 +267,71 @@ export class Engine {
 		const results: StepResult[] = changes.length
 			? [{ ok: true, reason: "时间流逝，世界发生了变化。", changes, action: { verb: "tick", params: { n: this.sim.world.time } } }]
 			: [];
+		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, state, results, undefined, instruction, this.def.internalProps),
+			buildExpressionPrompt(this.sim, state, results, undefined, instruction, this.def.internalProps, pending),
 			changes,
+			this.involvedEntities(results, undefined, []),
 		);
 		this.emit({ type: "text_delta", delta: narration });
 	}
 
-	private async expressionPass(prompt: string, changes: Change[]): Promise<string> {
+	/** 从表达输出中提取首行的结构化事实声明（[facts: ...]），返回声明与散文体。 */
+	private parseDeclaration(text: string): { facts: string[]; body: string } | null {
+		const m = text.match(/^\s*\[facts:\s*([^\]]*)\]\s*\n?/);
+		if (!m) return null;
+		const facts = m[1].split(/[；;]/).map((s) => s.trim()).filter(Boolean);
+		return { facts, body: text.slice(m[0].length).trim() };
+	}
+
+	/** 本回合涉及集：actor + 动作实体参数 + 拒绝理由涉及的实体 + 本回合新可见实体 + 变更/即将发生的实体。声明校验的合法提及来源。 */
+	private involvedEntities(results: StepResult[], refusal: { label: string; reason?: string } | undefined, revealed: string[]): Set<string> {
+		const vis = this.sim.visible();
+		const involved = new Set<string>([this.sim.actor]);
+		for (const r of results) {
+			for (const v of Object.values(r.action.params)) {
+				if (typeof v === "string" && vis.has(v)) involved.add(v);
+			}
+		}
+		if (refusal?.reason) {
+			for (const e of this.sim.world.entities) {
+				if (vis.has(e.id) && refusal.reason.includes(e.name)) involved.add(e.id);
+			}
+		}
+		for (const id of revealed) involved.add(id);
+		return involved;
+	}
+
+	/** 声明校验：新事实必须可追溯——声明实体 ⊆ 涉及集 ∪ 变更/即将发生实体，且可见。 */
+	private validateDeclaration(decl: { facts: string[]; body: string }, changes: Change[], pending: Change[], involved: Set<string>): string | null {
+		if (!decl.body.trim()) return "散文为空。";
+		if (!decl.facts.length) return null;
+		const vis = this.sim.visible();
+		const touched = new Set<string>(involved);
+		for (const c of [...changes, ...pending]) {
+			touched.add(c.entity);
+			if (typeof c.from === "string") touched.add(c.from);
+			if (typeof c.to === "string") touched.add(c.to);
+		}
+		for (const f of decl.facts) {
+			for (const e of this.sim.world.entities) {
+				if (!vis.has(e.id)) continue;
+				if (f.includes(e.id) || f.includes(e.name)) {
+					if (!touched.has(e.id)) {
+						return `声明「${f}」提及了实体「${e.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
+					}
+				}
+			}
+			const leaked = this.leakageCheck(f);
+			if (leaked) return `声明「${f}」中：${leaked}`;
+		}
+		return null;
+	}
+
+	private async expressionPass(prompt: string, changes: Change[], involved: Set<string>): Promise<string> {
 		const internal = new Set(this.def.internalProps ?? []);
 		const visible = changes.filter((c) => !internal.has(c.prop));
+		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const run = async (p: string): Promise<{ text: string; err: string | null }> => {
 			this.buf = [];
 			try {
@@ -273,14 +340,20 @@ export class Engine {
 				return { text: "", err: String(err) };
 			}
 			const text = this.buf.join("");
-			return { text, err: this.validateNarration(text, visible) };
+			const decl = this.parseDeclaration(text);
+			if (!decl) return { text, err: "缺少首行 [facts: ...] 结构化声明。" };
+			const declErr = this.validateDeclaration(decl, visible, pending, involved);
+			if (declErr) return { text, err: declErr };
+			const bodyErr = this.validateNarration(decl.body, visible);
+			if (bodyErr) return { text: decl.body, err: bodyErr };
+			return { text: decl.body, err: null };
 		};
 
 		const first = await run(prompt);
 		if (!first.err) return first.text;
 		this.emit({ type: "validation", round: 1, error: first.err, attempt: first.text });
 		const retry = await run(
-			`刚才的描述存在虚构内容：${first.err}。请重写。必须严格遵守约束：只描述状态中真实存在的事物；新事实只能来自本回合变更；不要发明不存在的现象或后果。`,
+			`刚才的描述未通过校验：${first.err}。请重写。必须遵守：首行输出 [facts: 新事实...]（只能来自本回合变更、法则事实、即将发生或本回合新见，无则留空）；只描述状态中真实存在的事物；不要发明不存在的现象或后果。`,
 		);
 		if (!retry.err) return retry.text;
 		this.emit({ type: "validation", round: 2, error: retry.err, attempt: retry.text });
@@ -327,8 +400,9 @@ export class Engine {
 function buildMappingPrompt(state: string, selectionLine: string, intent: string): string {
 	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
 1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
-2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label, reason }，reason 必须是符合世界观的解释，不得使用实现术语。
-3. 禁止在本阶段输出任何散文或解释文字。`;
+2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label }。
+3. 当你认为某个动作会被世界拒绝（如硬度不足、被卡住）时，**不要**自己预判结果：把该动作填入 refusal 的 considered 字段，让世界法则裁决。
+4. 禁止在本阶段输出任何散文或解释文字。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
@@ -338,7 +412,7 @@ function buildSystemPrompt(def: GameDef): string {
 		.join("\n");
 	return `你是文字游戏引擎。每个回合分两个阶段：
 
-阶段一（解析，调用 act 工具）：把玩家的操作意图解析为动作提案并调用 act 工具。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空的 actions 与结构化 refusal（label + 符合世界观的 reason）。此阶段禁止输出散文。
+阶段一（解析，调用 act 工具）：把玩家的操作意图解析为动作提案并调用 act 工具。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空的 actions 与结构化 refusal（仅 label，不写理由）。若你预判某动作会被世界拒绝，把该动作填入 refusal 的 considered 字段，由世界法则裁决，不要自己下结论。此阶段禁止输出散文。
 
 阶段二（描写）：基于世界给出的当前状态与本回合变更，把场景写成面向玩家的文学散文。此阶段禁止调用工具。
 
@@ -388,9 +462,12 @@ function buildExpressionPrompt(
 	sim: Simulation,
 	state: string,
 	results: StepResult[],
-	refusal: { label: string; reason: string } | undefined,
+	refusal: { label: string; reason?: string } | undefined,
 	directive = "请以文学笔触描写当前场景（面向玩家）。",
 	internalProps: readonly string[] = [],
+	pending: Change[] = [],
+	intent?: string,
+	revealed: string[] = [],
 ): string {
 	const internal = new Set(internalProps);
 	const lines: string[] = [`[当前状态]（JSON，唯一真相源）：`, state, ""];
@@ -406,18 +483,38 @@ function buildExpressionPrompt(
 			lines.push(`- 尝试「${describeAction(sim, r.action)}」→ ${verdict}${changes}${facts}`);
 		}
 	} else if (refusal) {
-		lines.push(`世界拒绝了你的操作。${refusal.reason ? `理由：「${refusal.reason}」` : ""}`);
+		if (refusal.reason) {
+			lines.push(`世界拒绝了玩家的操作。理由：「${refusal.reason}」`);
+		} else {
+			lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
+		}
 	} else {
 		lines.push("没有任何改变。");
+	}
+	const pendingVisible = pending.filter((c) => !internal.has(c.prop));
+	if (pendingVisible.length) {
+		lines.push("即将发生（下一时刻）：");
+		for (const c of pendingVisible) {
+			lines.push(`  ${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`);
+		}
+	}
+	const revealedVisible = revealed.filter((id) => sim.world.entities.some((e) => e.id === id));
+	if (revealedVisible.length) {
+		lines.push("本回合新见：");
+		for (const id of revealedVisible) {
+			lines.push(`  ${fmtValue(sim, id)}`);
+		}
 	}
 	lines.push(
 		"",
 		`${directive} 要求：`,
-		"1. 只描述状态中真实存在的事物与变化；新事实只能来自上面的「本回合尝试」或「法则事实」。",
-		"2. 玩家「尝试」过但被拒绝的操作，只描述这次尝试本身，不得声称其产生了后果（实体位置/属性未变）。",
-		"3. 不要发明不存在的物体、人物、现象或后果。",
-		"4. 一律使用实体的名称（name），不得出现实体 id、属性名、工具调用或任何实现术语。",
-		"5. 输出纯散文，不要调用任何工具。",
+		"0. 首行输出结构化声明：[facts: 新事实；另一条新事实]——新事实只能来自上面的「本回合尝试」「法则事实」「即将发生」「本回合新见」四处，不得提及这四处之外的实体；没有新事实则写 [facts:]。",
+		"1. 声明之后空行，再输出面向玩家的散文。",
+		"2. 只描述状态中真实存在的事物与变化；声明之外不得再发明新事实。",
+		"3. 玩家「尝试」过但被拒绝的操作，只描述这次尝试本身，不得声称其产生了后果（实体位置/属性未变）。",
+		"4. 不要发明不存在的物体、人物、现象或后果。",
+		"5. 一律使用实体的名称（name），不得出现实体 id、属性名、工具调用或任何实现术语。",
+		"6. 输出纯散文，不要调用任何工具。",
 	);
 	return lines.join("\n");
 }
@@ -437,7 +534,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能解析操作 → 提交 actions；无法解析 → 提交空 actions 与 refusal。实体参数必须取自已可见实体的 id；世界法则会按顺序裁决每个动作。`,
+		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能解析操作 → 提交 actions；无法解析 → 提交空 actions 与 refusal（仅 label）；预判某动作会被拒绝 → 把动作填入 refusal.considered 让世界法则裁决。实体参数必须取自已可见实体的 id；世界法则会按顺序裁决每个动作。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
 				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；无法解析时应省略" }),
@@ -446,13 +543,16 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				Type.Object(
 					{
 						label: Type.String({ description: "拒绝标签，如 unparsed / absurd" }),
-						reason: Type.String({ description: "符合世界观的拒绝理由，不得使用实现术语" }),
+						considered: Type.Optional(
+							actionSchema,
+							{ description: "你认为会被世界拒绝的动作提案（可选）；世界法则将据此给出权威裁决" },
+						),
 					},
-					{ description: "无法解析或语境荒谬时的结构化拒绝" },
+					{ description: "无法解析或语境荒谬时的结构化拒绝；理由由世界法则给出，模型不撰写" },
 				),
 			),
 		}),
-		execute: async (_toolCallId, params: { actions?: unknown[]; refusal?: { label: string; reason: string } }) => {
+		execute: async (_toolCallId, params: { actions?: unknown[]; refusal?: { label: string; considered?: unknown } }) => {
 			if (!gate.active) {
 				return {
 					content: [
@@ -472,12 +572,8 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 					details: {},
 				};
 			}
-			if (params.refusal && !(params.actions?.length)) {
-				return { content: [{ type: "text", text: JSON.stringify({ refusal: params.refusal }) }], details: {} };
-			}
 			const vis = sim.visible();
-			const results: StepResult[] = [];
-			for (const raw of params.actions ?? []) {
+			const run = (raw: unknown): StepResult => {
 				const a = raw as { verb?: string; params?: Record<string, unknown> };
 				const action: Action = {
 					verb: a.verb ?? "",
@@ -485,18 +581,41 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				};
 				const verb = def.verbs[action.verb];
 				if (!verb) {
-					results.push({ ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], action, deniedBy: "rule" });
-					break;
+					return { ok: false, reason: `世界不认识「${action.verb}」这种操作。`, changes: [], action, deniedBy: "rule" };
 				}
 				const invalid = (verb.entityParams ?? []).filter((p) => {
 					const id = action.params[p];
 					return typeof id === "string" && id.length > 0 && !vis.has(id);
 				});
 				if (invalid.length) {
-					results.push({ ok: false, reason: `实体 ${invalid.join("、")} 不可见或不存在。`, changes: [], action, deniedBy: "rule" });
-					break;
+					return { ok: false, reason: `实体 ${invalid.join("、")} 不可见或不存在。`, changes: [], action, deniedBy: "rule" };
 				}
-				results.push(sim.apply(action));
+				return sim.apply(action);
+			};
+			if (params.refusal && !(params.actions?.length)) {
+				if (params.refusal.considered != null) {
+					const sr = run(params.refusal.considered);
+					if (sr.ok) {
+						return {
+							content: [
+								{ type: "text", text: JSON.stringify({ results: [sr] }) },
+								{ type: "text", text: `执行后的新状态（JSON，唯一真相源）：\n${sim.serialize()}` },
+							],
+							details: {},
+						};
+					}
+					return {
+						content: [
+							{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label, reason: sr.reason } }) },
+						],
+						details: {},
+					};
+				}
+				return { content: [{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label } }) }], details: {} };
+			}
+			const results: StepResult[] = [];
+			for (const raw of params.actions ?? []) {
+				results.push(run(raw));
 			}
 			return {
 				content: [

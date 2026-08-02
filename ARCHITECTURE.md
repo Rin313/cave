@@ -24,12 +24,11 @@
    | 表达层 §4.3 | session 的普通文本输出（`text_delta` 流式），在状态变更后的独立 prompt（双 pass），输入 = 当前状态 + changes + 法则 facts |
    | 模拟层 §4.1 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 §9 | AgentSession 自带：messages + compact() + SessionManager；叙述不回流（幻觉不固化） |
-   | 拒绝 §4.2 | 结构化拒绝：法则给出世界性理由，映射 pass 不产散文 |
+   | 拒绝 §4.2 | 结构化拒绝（仅 label）+ `considered` 交规则裁决：理由由规则/denyAll 给出，映射 pass 不产散文 |
 
 3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给一个 tool，模型要么 `act`（提案 actions），要么写文字；`execute()` 内部就是规则裁决边界。
 4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给 Vue。
-5. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。
-6. **无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），失败走拒绝路径；动词空间是游戏声明的（不再硬编码 apply/move/set），实体 id 只能取自可见实体索引，不限制玩家输入语言。
+5. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的（不再硬编码 apply/move/set）。
 
 ## 2.5 已落地的 GameDef 表面契约
 
@@ -41,6 +40,7 @@
 - **`internalProps`**：内部属性（如 `burnTicks`、`actor` 标记）不进 LLM 序列化 / changes / 表达校验，从源头杜绝泄漏。
 - **`summarize`**：确定性回退摘要钩子（游戏腔调、可读），缺省用引擎的通用 JSON 序列化。
 - **`deniedBy: "rule" | "denyAll"`**：否决来源语义标记；`sim probe` 依此报告规则缺口，不依赖理由字符串匹配。
+- **refusal 契约**：act 工具 `refusal` 只含 `label` 与可选 `considered`（模型预判会被世界拒绝的动作提案）。**理由一律由规则层产出，模型不撰写拒绝理由**：`considered` 交规则裁决，否认 → 返回规则 denyReason，授予 → 直接执行（纠正模型误判）；无 `considered` → 纯拒绝（label 进审计，表达层自然回应）。`sim probe` 可把 refusal 标签纳入覆盖报告。
 - **`--game` / 游戏注册表**：`src/games/registry.ts` 按 id 解析 GameDef，`loop`/`sim` 工具均已参数化，不再硬编码 cave。
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`validateText`（表达层语义断言钩子）、`propLabels`（属性世界化说法）。
 
@@ -58,6 +58,9 @@
 
 1. **SQLite 驱动**：优先 `node:sqlite`（Node 22.5+ 内置、零原生编译、零 rebuild），需实测 API 是否够用（同步 API、参数化、事务）。不够再退 `better-sqlite3`（原生模块，需 electron-rebuild 对齐 ABI）。
 2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
-3. **模拟层细节（部分已定）**：动作空间已升级为游戏声明动词表（`verbs`），不再硬编码 apply/move/set；era 类社会性动作（communicate/alter_relation）可声明为新动词；规则网络数据结构（`Rule` → `RuleResult` → `Delta`）已定；规则完整性检查工具已实现（`sim probe --game`，按 `deniedBy === "denyAll"` 报告缺口，值域从世界推导）。
-4. **解析与忠实性（部分已定）**：自由文本意图的解析质量（含无选中情形，§2-6）、实体索引进 prompt 的注入方式——待原型实测；双 pass 分离与表达层后置校验器已实现（DESIGN.md §4.3：叙述实体 ⊆ 可见实体；通用禁止词表从世界派生 + `validateText` 游戏钩子 + `internalProps` 隔离）；`facts`（法则背书新事实）已进入表达 prompt，但自动校验"叙述新事实 ⊆ facts"尚未实现。
+3. **模拟层（已定）**：动作空间为游戏声明动词表（`verbs`），不再硬编码 apply/move/set；era 类社会性动作可声明为新动词。数据结构 `Rule → RuleResult → Delta`、规则完整性检查工具 `sim probe`（按 `deniedBy === "denyAll"` 报缺口）均已落地（§2.5）。
+4. **解析与忠实性**：
+   - **已落地**：双 pass 分离；表达层后置校验器（叙述实体 ⊆ 可见实体；通用禁止词表从世界派生 + `validateText` 游戏钩子 + `internalProps` 隔离）；结构化声明契约——输出首行 `[facts: ...]`，校验"声明实体 ⊆ 本回合涉及集（动作主体/动作参数/拒绝理由实体/本回合新见）+ 变更(from/to)/法则事实/即将发生"；`Simulation.dryTick()` 把「即将发生」作为合法预言注入 prompt（火把进箱→木箱将燃不再被当幻觉）。声明校验是集合成员判断（可靠），散文语义仍靠词表 + 游戏钩子（警报器）。
+   - **待原型实测**：自由文本意图的解析质量（含无选中情形）、实体索引进 prompt 的注入方式。
+   - **未实现**：散文正文与声明的一致性（声明外暗含新事实无法机器拦截，属 NLP 难题）；规则 `facts` 的自动校验。
 5. **跨回合指代**（DESIGN.md §11）：活动实体索引 / 权重偏好，待原型验证。
