@@ -59,7 +59,7 @@ export interface RuleCtx {
 	def: GameDef;
 }
 
-/** core 产出的用户可见文案：游戏可经 GameDef.messages 覆写，缺省中文兜底。 */
+/** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言。 */
 export interface Messages {
 	/** 所有法则均未表态时的兜底回应。 */
 	noResponse: string;
@@ -169,6 +169,8 @@ export interface GameDef {
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, actor: string) => string[];
+	/** 标准库容器可达性扩展：关着的容器是否对实体放行（楔住等）。inTreeReach/inTreeVisible 的缺省 opts。 */
+	containerAccess?: (world: World, container: Entity, id: string) => boolean;
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
 	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
 	probeScope?: (world: World, actor: string) => string[];
@@ -180,29 +182,13 @@ export interface GameDef {
 	/** 额外禁止词：游戏自定义的实现术语（内部概念名等），表达校验按词边界匹配，不进散文。
 	 *  语言相关的词汇约束由游戏声明（引擎不感知语言）。 */
 	forbiddenTerms?: string[];
-	/** core 产出的用户可见文案覆写；缺省为 DEFAULT_MESSAGES（中文）。 */
-	messages?: Partial<Messages>;
+	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
+	messages: Messages;
 }
 
-/** core 文案缺省值（中文）。 */
-export const DEFAULT_MESSAGES: Messages = {
-	noResponse: "世界没有回应这个操作。",
-	unknownVerb: (verb) => `世界不认识「${verb}」这种操作。`,
-	invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
-	invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
-	reachMissing: "这里没有这个东西。",
-	reachCycle: "位置存在循环引用。",
-	reachNotHere: "它不在这里。",
-	reachClosed: (name) => `${name}是关着的。`,
-	defaultReason: "……",
-	notInActionPhase: "当前不在行动阶段，无法执行操作。",
-	timePassed: "时间流逝",
-	timeChanged: "时间流逝，世界发生了变化。",
-};
-
-/** 合并游戏覆写：缺省使用 DEFAULT_MESSAGES。 */
+/** 获取游戏声明的用户可见文案（core 不内嵌任何语言，由游戏必填注入）。 */
 export function messagesFor(def: GameDef): Messages {
-	return { ...DEFAULT_MESSAGES, ...def.messages };
+	return def.messages;
 }
 
 export interface StepResult {
@@ -315,38 +301,53 @@ export function restoreRng(snapshot: number): Rng {
 	return mulberry32(snapshot);
 }
 
+/** 标准库可达性选项：理由文案 + 关着的容器放行谓词（楔住等游戏机制）。 */
+export interface ReachOpts {
+	/** 理由文案（游戏注入；缺省为空——core 不内嵌任何语言）。 */
+	msgs?: Messages;
+	/** 关着的容器（openable 且未 open）是否对实体 id 放行。缺省一律拦截。
+	 *  如"楔在门缝里的东西仍可够到"由游戏以容器属性裁决（wedgedBy），不进入标准库。 */
+	containerAccess?: (world: World, container: Entity, id: string) => boolean;
+}
+
+/** 从 GameDef 构造标准库可达性选项（游戏理由文案 + 容器放行谓词）。 */
+export function reachOptsFor(def: GameDef): ReachOpts {
+	return { msgs: messagesFor(def), containerAccess: def.containerAccess };
+}
+
 /** 标准库可达性：容器包含树语义（space / openable / open / in）。游戏可选接入。
- *  理由文案可用 msgs 定制（缺省 DEFAULT_MESSAGES 中文）。 */
-export function inTreeReach(world: World, actor: string, id: string, msgs: Messages = DEFAULT_MESSAGES): { ok: boolean; reason: string } {
+ *  理由文案与关容器放行谓词用 opts 定制（缺省为空、关着的容器一律拦截）。 */
+export function inTreeReach(world: World, actor: string, id: string, opts: ReachOpts = {}): { ok: boolean; reason: string } {
+	const msgs = opts.msgs;
 	const e = entity(world, id);
-	if (!e) return { ok: false, reason: msgs.reachMissing };
+	if (!e) return { ok: false, reason: msgs?.reachMissing ?? "" };
 	let cur = e.props["in"] as string | null;
 	const seen = new Set<string>();
 	while (cur != null && cur !== actor) {
-		if (seen.has(cur)) return { ok: false, reason: msgs.reachCycle };
+		if (seen.has(cur)) return { ok: false, reason: msgs?.reachCycle ?? "" };
 		seen.add(cur);
 		const parent = entity(world, cur);
-		if (!parent) return { ok: false, reason: msgs.reachNotHere };
+		if (!parent) return { ok: false, reason: msgs?.reachNotHere ?? "" };
 		if (parent.props.space === true) {
 			return parent.id === (entity(world, actor)?.props["in"] as string)
 				? { ok: true, reason: "" }
-				: { ok: false, reason: msgs.reachNotHere };
+				: { ok: false, reason: msgs?.reachNotHere ?? "" };
 		}
 		if (parent.props.openable === true && parent.props.open !== true) {
-			if (parent.props.wedgedBy === id) return { ok: true, reason: "" };
-			return { ok: false, reason: msgs.reachClosed(parent.name) };
+			if (opts.containerAccess?.(world, parent, id)) return { ok: true, reason: "" };
+			return { ok: false, reason: msgs?.reachClosed(parent.name) ?? "" };
 		}
 		cur = parent.props["in"] as string | null;
 	}
 	return { ok: true, reason: "" };
 }
 
-/** 标准库可见性：容器包含树语义下玩家可达的全部实体。 */
-export function inTreeVisible(world: World, actor: string): Set<string> {
+/** 标准库可见性：容器包含树语义下玩家可达的全部实体（opts 同 inTreeReach）。 */
+export function inTreeVisible(world: World, actor: string, opts: ReachOpts = {}): Set<string> {
 	const vis = new Set<string>([actor]);
 	for (const e of world.entities) {
 		if (e.props.space === true) vis.add(e.id);
-		if (inTreeReach(world, actor, e.id).ok) vis.add(e.id);
+		if (inTreeReach(world, actor, e.id, opts).ok) vis.add(e.id);
 	}
 	return vis;
 }
@@ -449,7 +450,7 @@ export class Simulation {
 		const denyAllDenial = !denial && this.def.denyAll ? this.def.denyAll(ctx).denial : null;
 		const reason = denial != null
 			? renderDenial(this.def, denial, this.world)
-			: (denyAllDenial ? renderDenial(this.def, denyAllDenial, this.world) : "世界没有回应这个操作。");
+			: (denyAllDenial ? renderDenial(this.def, denyAllDenial, this.world) : messagesFor(this.def).noResponse);
 		return { ok: false, reason, changes: [], deltas: [], action, deniedBy, denial: denial ?? denyAllDenial ?? undefined };
 	}
 
@@ -526,7 +527,7 @@ export class Simulation {
 	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。 */
 	wieldable(id: string): boolean {
 		if (prop(this.world, id, "grabbable") !== true) return false;
-		return inTreeReach(this.world, this.actor, id).ok;
+		return inTreeReach(this.world, this.actor, id, reachOptsFor(this.def)).ok;
 	}
 
 	/** 动作空间接地：枚举 动词 × 可见实体 × 候选值，返回当前世界会授予的动作（世界腔理由，去重）。

@@ -1,5 +1,5 @@
-import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
-import { D, entity, inTreeReach, inTreeVisible, messagesFor, prop } from "../core/sim.ts";
+import type { Action, Change, Delta, Denial, Entity, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
+import { D, entity, inTreeReach, inTreeVisible, prop, reachOptsFor } from "../core/sim.ts";
 import { Type } from "typebox";
 
 /** 实体名解析：world 版（拒绝模板用）。 */
@@ -18,9 +18,14 @@ function param(a: Action | null, key: string): string {
 
 /** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
 function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id, messagesFor(c.def));
+	const acc = inTreeReach(c.world, c.actor, id, reachOptsFor(c.def));
 	if (acc.ok) return null;
 	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
+}
+
+/** 楔在门缝里的东西仍可从门缝够到：对关着的门放行（wedgedBy 是 cave 的机制，不属标准库）。 */
+function containerAccess(world: World, container: Entity, id: string): boolean {
+	return container.props.wedgedBy === id;
 }
 
 /** 系统规则结果装配：无变更则不授予；有变更则授予并附 involved/facts/reason。 */
@@ -45,7 +50,7 @@ function summarizeCave(input: { world: World; changes: Change[]; actor: string }
 	const loc = player?.props["in"] as string | null;
 	const place = entity(world, loc ?? "")?.name ?? "原地";
 	lines.push(`你站在${place}。`);
-	for (const id of inTreeVisible(world, actor)) {
+	for (const id of inTreeVisible(world, actor, { containerAccess })) {
 		if (id === actor) continue;
 		const e = entity(world, id);
 		if (!e) continue;
@@ -499,6 +504,20 @@ export const cave: GameDef = {
 	id: "cave",
 	title: "地窖（法则引擎）",
 	playerId: "player",
+	messages: {
+		noResponse: "世界没有回应这个操作。",
+		unknownVerb: (verb) => `世界不认识「${verb}」这种操作。`,
+		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
+		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
+		reachMissing: "这里没有这个东西。",
+		reachCycle: "位置存在循环引用。",
+		reachNotHere: "它不在这里。",
+		reachClosed: (name) => `${name}是关着的。`,
+		defaultReason: "……",
+		notInActionPhase: "当前不在行动阶段，无法执行操作。",
+		timePassed: "时间流逝",
+		timeChanged: "时间流逝，世界发生了变化。",
+	},
 	verbs: {
 		move: moveVerb,
 		use: useVerb,
@@ -524,6 +543,7 @@ export const cave: GameDef = {
 		{ id: "burnout", run: burnout },
 	],
 	denyAll,
+	containerAccess,
 	denialTemplates: {
 		reach: (d, w) => d.reason ?? "它不在这里。",
 		"wedge.jammed": (d, w) => `${name(w, d.object ?? "")}的门缝里已经塞着东西了。`,
@@ -561,7 +581,7 @@ export const cave: GameDef = {
 	validateText: validateCaveText,
 	summarize: summarizeCave,
 	digest: digestCave,
-	grounding: (world, actor) => [...inTreeVisible(world, actor)],
+	grounding: (world, actor) => [...inTreeVisible(world, actor, { containerAccess })],
 	hint: `世界法则（模拟层强制执行）：
 1. 火源（lit=true）作用于可燃物（flammable=true）：可点燃蜡烛（lightable=true，点燃后 lit=true），或让普通可燃物燃烧（burning=true）；燃烧会随时间蔓延到同处或容器内的可燃物，并最终烧成灰烬（material=ash）。
 2. 燃着的火（lit 且非蜡烛类）放进可燃容器，容器会被引燃（如把火把放进木箱）。

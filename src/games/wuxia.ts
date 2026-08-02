@@ -1,5 +1,5 @@
 import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
-import { D, entity, inTreeReach, inTreeVisible, messagesFor, prop } from "../core/sim.ts";
+import { D, entity, inTreeReach, inTreeVisible, prop, reachOptsFor } from "../core/sim.ts";
 import { Type } from "typebox";
 
 const MEDITATE_GAIN = 6;
@@ -37,7 +37,7 @@ function isNpcHere(c: RuleCtx, id: string): boolean {
 
 /** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
 function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id, messagesFor(c.def));
+	const acc = inTreeReach(c.world, c.actor, id, reachOptsFor(c.def));
 	if (acc.ok) return null;
 	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
 }
@@ -341,6 +341,20 @@ export const wuxia: GameDef = {
 	id: "wuxia",
 	title: "青峰派（武侠）",
 	playerId: "player",
+	messages: {
+		noResponse: "世界没有回应这个操作。",
+		unknownVerb: (verb) => `世界不认识「${verb}」这种操作。`,
+		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
+		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
+		reachMissing: "这里没有这个东西。",
+		reachCycle: "位置存在循环引用。",
+		reachNotHere: "它不在这里。",
+		reachClosed: (name) => `${name}是关着的。`,
+		defaultReason: "……",
+		notInActionPhase: "当前不在行动阶段，无法执行操作。",
+		timePassed: "时间流逝",
+		timeChanged: "时间流逝，世界发生了变化。",
+	},
 	verbs: {
 		travel: travelVerb,
 		take: takeVerb,
