@@ -40,13 +40,37 @@ export interface RuleCtx {
 	rng: () => number;
 }
 
+/** 法则背书的结构化新事实：表达层的合法新事实词汇，防止模型发明后果。 */
+export interface Fact {
+	/** 世界腔陈述。 */
+	text: string;
+	/** 陈述涉及的实体 id（声明校验的集合成员依据）。 */
+	entities: string[];
+}
+
+/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
+export interface Denial {
+	/** 法则标识，如 "pry.soft"（审计与探测依据）。 */
+	law: string;
+	/** 施动实体 id。 */
+	subject?: string;
+	/** 受动实体 id。 */
+	object?: string;
+	/** 可选世界腔覆盖文本（如标准库返回的 prose）；缺省用 GameDef.denialTemplates。 */
+	reason?: string;
+}
+
 export interface RuleResult {
 	granted: boolean;
+	/** 授予时的世界腔陈述（可选，表达层可自由发挥；缺省由引擎生成）。 */
 	reason?: string;
-	denyReason?: string;
 	changes?: Delta[];
-	/** 法则背书的新事实（表达层的合法新事实词汇，防止模型发明后果）。 */
-	facts?: string[];
+	/** 法则背书的结构化新事实（表达层的合法新事实词汇，防止模型发明后果）。 */
+	facts?: Fact[];
+	/** 因果涉及集：本法则涉及的全部实体（含未变更的因果源，如引燃木箱的火把）。声明校验依据。 */
+	involved?: string[];
+	/** 结构化拒绝（granted=false 时给出）。 */
+	denial?: Denial;
 }
 
 export type Rule = (ctx: RuleCtx) => RuleResult;
@@ -75,6 +99,8 @@ export interface GameDef {
 	systems?: SystemDef[];
 	/** 兜底法则：某动词所有法则未表态且无具体理由时调用。 */
 	denyAll?: Rule;
+	/** 结构化拒绝的世界腔渲染：按法则 id 提供模板。缺省返回通用兜底。 */
+	denialTemplates?: Record<string, (d: Denial, world: World) => string>;
 	hint?: string;
 	/** 属性展示名：拒绝/变更文本中属性名的世界化说法。 */
 	propLabels?: Record<string, string>;
@@ -95,11 +121,22 @@ export interface StepResult {
 	action: Action;
 	/** 否决来源：具体法则给了世界性理由（rule），还是所有法则都未表态落到兜底（denyAll）。 */
 	deniedBy?: "rule" | "denyAll";
-	facts?: string[];
+	/** 结构化拒绝（deniedBy=rule 时给出），供表达层/审计使用。 */
+	denial?: Denial;
+	facts?: Fact[];
+	involved?: string[];
 }
 
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
+}
+
+/** 把结构化拒绝渲染为世界腔文本：优先 denial.reason 覆盖，其次按法则模板，缺省兜底。 */
+export function renderDenial(def: GameDef, denial: Denial, world: World): string {
+	if (denial.reason != null) return denial.reason;
+	const tmpl = def.denialTemplates?.[denial.law];
+	if (tmpl) return tmpl(denial, world);
+	return "世界没有回应这个操作。";
 }
 
 function splitPath(path: string): string[] {
@@ -247,20 +284,23 @@ export class Simulation {
 			return sr;
 		}
 		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, rng: this.rand };
-		let denial: string | null = null;
+		let denial: Denial | null = null;
 		for (const rule of verb.rules) {
 			const res = rule(ctx);
 			if (res.granted) {
 				const changes = this.commit(res.changes ?? []);
-				const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, action, facts: res.facts };
+				const sr: StepResult = { ok: true, reason: res.reason ?? "……", changes, action, facts: res.facts, involved: res.involved };
 				this.log.push(sr);
 				return sr;
 			}
-			if (res.denyReason != null && denial == null) denial = res.denyReason;
+			if (res.denial != null && denial == null) denial = res.denial;
 		}
 		const deniedBy: "rule" | "denyAll" = denial != null ? "rule" : "denyAll";
-		const reason = denial ?? (this.def.denyAll ? this.def.denyAll(ctx).denyReason : null) ?? "世界没有回应这个操作。";
-		const sr: StepResult = { ok: false, reason, changes: [], action, deniedBy };
+		const denyAllDenial = !denial && this.def.denyAll ? this.def.denyAll(ctx).denial : null;
+		const reason = denial != null
+			? renderDenial(this.def, denial, this.world)
+			: (denyAllDenial ? renderDenial(this.def, denyAllDenial, this.world) : "世界没有回应这个操作。");
+		const sr: StepResult = { ok: false, reason, changes: [], action, deniedBy, denial: denial ?? denyAllDenial ?? undefined };
 		this.log.push(sr);
 		return sr;
 	}
@@ -280,6 +320,7 @@ export class Simulation {
 						changes,
 						action: { verb: "tick", params: { n: this.world.time } },
 						facts: res.facts,
+						involved: res.involved,
 					};
 					this.log.push(sr);
 					out.push(sr);

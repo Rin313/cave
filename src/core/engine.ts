@@ -32,7 +32,7 @@ export interface ActOutcome {
 
 export type EngineEvent =
 	| { type: "text_delta"; delta: string }
-	| { type: "tool_call"; actionCount: number }
+	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
 	| { type: "tool_result"; results: StepResult[] }
 	| { type: "validation"; round: number; error: string; attempt: string };
 
@@ -43,8 +43,6 @@ interface ToolResponse {
 
 interface Refusal {
 	label: string;
-	/** 模型预判会被世界拒绝的动作提案，交规则层裁决。 */
-	considered?: unknown;
 }
 
 function toolResultTextFrom(tr: { content: readonly unknown[] }): string | undefined {
@@ -137,7 +135,7 @@ export class Engine {
 				case "tool_execution_start":
 					if (event.toolName === ACT_TOOL) {
 						const args = event.args as { actions?: unknown[] };
-						this.emit({ type: "tool_call", actionCount: args.actions?.length ?? 0 });
+						this.emit({ type: "tool_call", actionCount: args.actions?.length ?? 0, actions: args.actions });
 					}
 					break;
 				case "turn_end":
@@ -284,7 +282,7 @@ export class Engine {
 		return { facts, body: text.slice(m[0].length).trim() };
 	}
 
-	/** 本回合涉及集：actor + 动作实体参数 + 拒绝理由涉及的实体 + 本回合新可见实体 + 变更/即将发生的实体。声明校验的合法提及来源。 */
+	/** 本回合涉及集（结构推导）：actor + 规则声明 involved + 法则 facts 实体 + 动作实体参数 + 拒绝主体 + 本回合新可见实体。声明校验的合法提及来源。 */
 	private involvedEntities(results: StepResult[], refusal: { label: string; reason?: string } | undefined, revealed: string[]): Set<string> {
 		const vis = this.sim.visible();
 		const involved = new Set<string>([this.sim.actor]);
@@ -292,11 +290,12 @@ export class Engine {
 			for (const v of Object.values(r.action.params)) {
 				if (typeof v === "string" && vis.has(v)) involved.add(v);
 			}
-		}
-		if (refusal?.reason) {
-			for (const e of this.sim.world.entities) {
-				if (vis.has(e.id) && refusal.reason.includes(e.name)) involved.add(e.id);
+			for (const id of r.involved ?? []) involved.add(id);
+			for (const f of r.facts ?? []) {
+				for (const id of f.entities) involved.add(id);
 			}
+			if (r.denial?.subject) involved.add(r.denial.subject);
+			if (r.denial?.object) involved.add(r.denial.object);
 		}
 		for (const id of revealed) involved.add(id);
 		return involved;
@@ -401,8 +400,7 @@ function buildMappingPrompt(state: string, selectionLine: string, intent: string
 	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
 1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
 2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label }。
-3. 当你认为某个动作会被世界拒绝（如硬度不足、被卡住）时，**不要**自己预判结果：把该动作填入 refusal 的 considered 字段，让世界法则裁决。
-4. 禁止在本阶段输出任何散文或解释文字。`;
+3. 禁止在本阶段输出任何散文或解释文字。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
@@ -412,7 +410,7 @@ function buildSystemPrompt(def: GameDef): string {
 		.join("\n");
 	return `你是文字游戏引擎。每个回合分两个阶段：
 
-阶段一（解析，调用 act 工具）：把玩家的操作意图解析为动作提案并调用 act 工具。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空的 actions 与结构化 refusal（仅 label，不写理由）。若你预判某动作会被世界拒绝，把该动作填入 refusal 的 considered 字段，由世界法则裁决，不要自己下结论。此阶段禁止输出散文。
+阶段一（解析，调用 act 工具）：把玩家的操作意图解析为动作提案并调用 act 工具。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空的 actions 与结构化 refusal（仅 label，不写理由）。此阶段禁止输出散文。
 
 阶段二（描写）：基于世界给出的当前状态与本回合变更，把场景写成面向玩家的文学散文。此阶段禁止调用工具。
 
@@ -479,15 +477,12 @@ function buildExpressionPrompt(
 				? `  ${visible.map((c) => `${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`).join("；")}`
 				: "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
-			const facts = r.facts?.length ? `  法则事实：${r.facts.join("；")}` : "";
-			lines.push(`- 尝试「${describeAction(sim, r.action)}」→ ${verdict}${changes}${facts}`);
+			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
+			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
+			lines.push(`- 尝试「${describeAction(sim, r.action)}」→ ${verdict}${changes}${facts}${involved}`);
 		}
 	} else if (refusal) {
-		if (refusal.reason) {
-			lines.push(`世界拒绝了玩家的操作。理由：「${refusal.reason}」`);
-		} else {
-			lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
-		}
+		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	} else {
 		lines.push("没有任何改变。");
 	}
@@ -534,7 +529,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能解析操作 → 提交 actions；无法解析 → 提交空 actions 与 refusal（仅 label）；预判某动作会被拒绝 → 把动作填入 refusal.considered 让世界法则裁决。实体参数必须取自已可见实体的 id；世界法则会按顺序裁决每个动作。`,
+		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能解析操作 → 提交 actions；无法解析 → 提交空 actions 与 refusal（仅 label）。实体参数必须取自已可见实体的 id；世界法则会按顺序裁决每个动作。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
 				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；无法解析时应省略" }),
@@ -543,16 +538,12 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				Type.Object(
 					{
 						label: Type.String({ description: "拒绝标签，如 unparsed / absurd" }),
-						considered: Type.Optional(
-							actionSchema,
-							{ description: "你认为会被世界拒绝的动作提案（可选）；世界法则将据此给出权威裁决" },
-						),
 					},
 					{ description: "无法解析或语境荒谬时的结构化拒绝；理由由世界法则给出，模型不撰写" },
 				),
 			),
 		}),
-		execute: async (_toolCallId, params: { actions?: unknown[]; refusal?: { label: string; considered?: unknown } }) => {
+		execute: async (_toolCallId, params: { actions?: unknown[]; refusal?: { label: string } }) => {
 			if (!gate.active) {
 				return {
 					content: [
@@ -593,24 +584,6 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				return sim.apply(action);
 			};
 			if (params.refusal && !(params.actions?.length)) {
-				if (params.refusal.considered != null) {
-					const sr = run(params.refusal.considered);
-					if (sr.ok) {
-						return {
-							content: [
-								{ type: "text", text: JSON.stringify({ results: [sr] }) },
-								{ type: "text", text: `执行后的新状态（JSON，唯一真相源）：\n${sim.serialize()}` },
-							],
-							details: {},
-						};
-					}
-					return {
-						content: [
-							{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label, reason: sr.reason } }) },
-						],
-						details: {},
-					};
-				}
 				return { content: [{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label } }) }], details: {} };
 			}
 			const results: StepResult[] = [];

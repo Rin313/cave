@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
-import type { Change, GameDef, World } from "../core/sim.ts";
+import type { Change, StepResult, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
+import { fixConsole, flagBool, flagStr, out, parseArgs, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
 	game: string;
@@ -67,11 +68,6 @@ function locateRunDir(runId: string, game?: string): string | null {
 	return null;
 }
 
-function argValue(name: string): string | undefined {
-	const idx = process.argv.indexOf(name);
-	return idx >= 0 ? process.argv[idx + 1] : undefined;
-}
-
 function engineOptsFromEnv() {
 	return {
 		provider: process.env.CAVE_PROVIDER,
@@ -80,24 +76,30 @@ function engineOptsFromEnv() {
 	};
 }
 
-function out(obj: unknown): void {
-	process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
-}
-
 interface ValidationFailure {
 	round: number;
 	error: string;
 	attempt: string;
 }
 
-function collectEvents(engine: Engine): { unsub: () => void; texts: string[]; validations: ValidationFailure[] } {
+interface CollectEventsResult {
+	unsub: () => void;
+	texts: string[];
+	validations: ValidationFailure[];
+	/** 映射层提交的原始动作提案（tool_call 事件）。 */
+	toolCalls: unknown[];
+}
+
+function collectEvents(engine: Engine): CollectEventsResult {
 	const texts: string[] = [];
 	const validations: ValidationFailure[] = [];
+	const toolCalls: unknown[] = [];
 	const unsub = engine.subscribe((e) => {
 		if (e.type === "text_delta") texts.push(e.delta);
 		else if (e.type === "validation") validations.push({ round: e.round, error: e.error, attempt: e.attempt });
+		else if (e.type === "tool_call") toolCalls.push({ actionCount: e.actionCount, actions: e.actions });
 	});
-	return { unsub, texts, validations };
+	return { unsub, texts, validations, toolCalls };
 }
 
 async function renderScene(engine: Engine, instruction: string, changes: Change[] = []): Promise<{ text: string; validations: ValidationFailure[] }> {
@@ -107,7 +109,20 @@ async function renderScene(engine: Engine, instruction: string, changes: Change[
 	return { text: texts.join(""), validations };
 }
 
-async function cmdStart(gameId: string, runId: string): Promise<void> {
+interface CmdOpts {
+	json: boolean;
+	world: boolean;
+}
+
+function emit(entry: unknown, opts: CmdOpts): void {
+	if (opts.json) out(entry);
+	else {
+		const { world, ...rest } = entry as Record<string, unknown>;
+		out(opts.world ? { ...rest, world } : rest);
+	}
+}
+
+async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
 	mkdirSync(dir, { recursive: true });
@@ -127,13 +142,13 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: 1, phase: "start", scene, validations });
-		out({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, world: sim.snapshot() });
+		emit({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, world: sim.snapshot() }, opts);
 	} finally {
 		engine.dispose();
 	}
 }
 
-async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId?: string): Promise<void> {
+async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
@@ -145,7 +160,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 	const sessionManager = SessionManager.open(meta.sessionFile);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(), sim, sessionManager });
 	try {
-		const { unsub, texts, validations } = collectEvents(engine);
+		const { unsub, texts, validations, toolCalls } = collectEvents(engine);
 		const outcome = await engine.act({ intent, selection });
 		const narration = texts.join("");
 		unsub();
@@ -159,32 +174,34 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			phase: "act",
 			intent,
 			selection: selection ?? null,
+			toolCalls,
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
 			narration,
 			validations,
 		});
-		out({
+		emit({
 			run: runId,
 			game: meta.game,
 			turn: meta.turn,
 			phase: "act",
 			intent,
 			selection: selection ?? null,
+			toolCalls,
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
 			narration,
 			validations,
 			world: sim.snapshot(),
-		});
+		}, opts);
 	} finally {
 		engine.dispose();
 	}
 }
 
-async function cmdRender(runId: string, instruction: string, gameId?: string): Promise<void> {
+async function cmdRender(runId: string, instruction: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
@@ -200,13 +217,13 @@ async function cmdRender(runId: string, instruction: string, gameId?: string): P
 		meta.turn += 1;
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations });
-		out({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations });
+		emit({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations }, opts);
 	} finally {
 		engine.dispose();
 	}
 }
 
-async function cmdWait(runId: string, n: number, gameId?: string): Promise<void> {
+async function cmdWait(runId: string, n: number, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
@@ -235,9 +252,8 @@ async function cmdWait(runId: string, n: number, gameId?: string): Promise<void>
 			events: results,
 			scene,
 			validations,
-			world: sim.snapshot(),
 		});
-		out({
+		emit({
 			run: runId,
 			game: meta.game,
 			turn: meta.turn,
@@ -247,19 +263,19 @@ async function cmdWait(runId: string, n: number, gameId?: string): Promise<void>
 			scene,
 			validations,
 			world: sim.snapshot(),
-		});
+		}, opts);
 	} finally {
 		engine.dispose();
 	}
 }
 
-async function cmdState(runId: string, gameId?: string): Promise<void> {
+async function cmdState(runId: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
 	const def = getGame(meta.game);
 	const sim = Simulation.fromWorld(def, loadState(dir));
-	out({ run: runId, game: meta.game, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() });
+	emit({ run: runId, game: meta.game, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() }, opts);
 }
 
 async function cmdReset(runId: string, game?: string): Promise<void> {
@@ -272,46 +288,55 @@ async function cmdReset(runId: string, game?: string): Promise<void> {
 	process.stdout.write(`已重置 run "${runId}"\n`);
 }
 
+/** 解析位置参数为完整意图文本（支持不带引号的多词意图）。 */
+function joinIntent(positionals: string[]): string {
+	return positionals.join(" ").trim();
+}
+
 async function main() {
-	const [cmd, ...rest] = process.argv.slice(2);
+	fixConsole();
+	const [cmd, ...argv] = process.argv.slice(2);
+	const a: ParsedArgs = parseArgs(argv);
+	const opts: CmdOpts = { json: flagBool(a, "json"), world: flagBool(a, "world") };
+	const runId = flagStr(a, "run") ?? "default";
+	const gameId = flagStr(a, "game");
+	const positionals = a.positionals;
+
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  loop start [--run <id>] [--game <id>]
-  loop act <意图文本> [--select <选中文本>] [--run <id>] [--game <id>]
-  loop render [--instruction <指令>] [--run <id>] [--game <id>]
-  loop state [--run <id>] [--game <id>]
-  loop wait <n> [--run <id>] [--game <id>]
+  loop start [--run <id>] [--game <id>] [--json] [--world]
+  loop act <意图文本> [--select <选中文本>] [--run <id>] [--game <id>] [--json] [--world]
+  loop render [--instruction <指令>] [--run <id>] [--game <id>] [--json] [--world]
+  loop state [--run <id>] [--game <id>] [--json] [--world]
+  loop wait <n> [--run <id>] [--game <id>] [--json] [--world]
   loop reset [--run <id>] [--game <id>]
 
+意图文本可省略引号（多个位置参数自动拼接）；--json 输出完整结构化结果，缺省精简输出（不含 world）。
 环境变量: CAVE_PROVIDER CAVE_MODEL CAVE_THINKING
 `);
 		return;
 	}
-	const runId = argValue("--run") ?? "default";
-	const gameId = argValue("--game");
-	const selection = argValue("--select");
-	const instruction = argValue("--instruction") ?? "请用文学笔触重新描写当前场景。";
 
 	switch (cmd) {
 		case "start":
-			await cmdStart(gameId ?? "cave", runId);
+			await cmdStart(gameId ?? "cave", runId, opts);
 			return;
 		case "act": {
-			const intent = rest[0];
-			if (!intent) throw new Error("act 需要意图文本");
-			await cmdAct(runId, intent, selection, gameId);
+			const intent = flagStr(a, "intent") ?? joinIntent(positionals);
+			if (!intent) throw new Error("act 需要意图文本（位置参数或 --intent）");
+			await cmdAct(runId, intent, flagStr(a, "select"), gameId, opts);
 			return;
 		}
 		case "render":
-			await cmdRender(runId, instruction, gameId);
+			await cmdRender(runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。", gameId, opts);
 			return;
 		case "wait": {
-			const n = Number(rest[0] ?? 1);
-			await cmdWait(runId, n, gameId);
+			const n = Number(positionals[0] ?? flagStr(a, "n") ?? 1);
+			await cmdWait(runId, n, gameId, opts);
 			return;
 		}
 		case "state":
-			await cmdState(runId, gameId);
+			await cmdState(runId, gameId, opts);
 			return;
 		case "reset":
 			await cmdReset(runId, gameId);

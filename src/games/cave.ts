@@ -1,4 +1,4 @@
-import type { Action, Change, Delta, GameDef, PropValue, Rule, RuleCtx, VerbDef, World } from "../core/sim.ts";
+import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, VerbDef, World } from "../core/sim.ts";
 import { D, entity, inTreeReach, inTreeVisible, prop } from "../core/sim.ts";
 import { Type } from "typebox";
 
@@ -8,6 +8,11 @@ function n(c: RuleCtx, id: string): string {
 
 function paramsOf(a: Action | null): Record<string, PropValue> {
 	return a?.params ?? {};
+}
+
+/** 结构化拒绝构造：law + 施动/受动实体。散文由 GameDef.denialTemplates 渲染。 */
+function deny(law: string, subject?: string, object?: string): { granted: false; denial: Denial } {
+	return { granted: false, denial: { law, subject, object } };
 }
 
 const MATERIAL_LABELS: Record<string, string> = {
@@ -90,10 +95,11 @@ const wedge: Rule = (c) => {
 	const de = entity(c.world, d);
 	if (!de || de.props.isDoor !== true) return { granted: false };
 	const acc = inTreeReach(c.world, c.actor, x);
-	if (!acc.ok) return { granted: false, denyReason: acc.reason };
-	if (de.props.jammed === true) return { granted: false, denyReason: `${n(c, d)}的门缝里已经塞着东西了。` };
+	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: x, reason: acc.reason } };
+	if (de.props.jammed === true) return { granted: false, denial: { law: "wedge.jammed", subject: x, object: d } };
 	return {
 		granted: true,
+		involved: [x, d],
 		changes: [
 			D.set(d, "jammed", true),
 			D.set(d, "wedgedBy", x),
@@ -107,22 +113,22 @@ const moveLaw: Rule = (c) => {
 	const x = String(a.entity ?? "");
 	const d = String(a.dest ?? "");
 	const acc = inTreeReach(c.world, c.actor, x);
-	if (!acc.ok) return { granted: false, denyReason: acc.reason };
+	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: x, reason: acc.reason } };
 	if (prop(c.world, x, "grabbable") !== true) {
-		return { granted: false, denyReason: `你搬不动${n(c, x)}。` };
+		return { granted: false, denial: { law: "move.grabbable", subject: x } };
 	}
 	const prevIn = prop(c.world, x, "in") as string | null;
 	if (d === c.actor) {
-		if (prevIn === c.actor) return { granted: true, reason: `${n(c, x)}已经在你的手中。` };
+		if (prevIn === c.actor) return { granted: true, involved: [x], reason: `${n(c, x)}已经在你的手中。` };
 		if (prop(c.world, x, "attachedTo") != null) {
-			return { granted: false, denyReason: `${n(c, x)}被固定在别处，先解下来。` };
+			return { granted: false, denial: { law: "move.attached", subject: x } };
 		}
 	} else {
 		const de = entity(c.world, d);
-		if (!de) return { granted: false, denyReason: `${n(c, d)}？这里没有这个东西。` };
+		if (!de) return { granted: false, denial: { law: "move.dest", subject: x, object: d } };
 		if (de.props.space !== true && de.props.open !== true) {
-			if (de.props.openable === true) return { granted: false, denyReason: `${n(c, d)}是关着的，放不进去。` };
-			return { granted: false, denyReason: `${n(c, d)}放不下东西。` };
+			if (de.props.openable === true) return { granted: false, denial: { law: "move.closed", subject: x, object: d } };
+			return { granted: false, denial: { law: "move.capacity", subject: x, object: d } };
 		}
 	}
 	const changes: Delta[] = [D.set(x, "in", d)];
@@ -132,7 +138,7 @@ const moveLaw: Rule = (c) => {
 		changes.push(D.del(wedgedIn.id, "wedgedBy"));
 	}
 	const verb = d === c.actor ? "拿起了" : entity(c.world, d)?.props.space === true ? "放到了" : "放进了";
-	return { granted: true, changes, reason: `你${verb}${n(c, x)}。` };
+	return { granted: true, involved: wedgedIn ? [x, wedgedIn.id] : [x, d], changes, reason: `你${verb}${n(c, x)}。` };
 };
 
 const detach: Rule = (c) => {
@@ -141,11 +147,12 @@ const detach: Rule = (c) => {
 	const p = String(a.prop ?? "");
 	const v = a.value ?? null;
 	if (p !== "attachedTo" || v !== null) return { granted: false };
-	if (prop(c.world, x, "attachedTo") == null) return { granted: false, denyReason: `它没有被固定住。` };
+	if (prop(c.world, x, "attachedTo") == null) return { granted: false, denial: { law: "detach.none", subject: x } };
 	const acc = inTreeReach(c.world, c.actor, x);
-	if (!acc.ok) return { granted: false, denyReason: acc.reason };
+	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: x, reason: acc.reason } };
 	return {
 		granted: true,
+		involved: [x],
 		changes: [
 			D.set(x, "attachedTo", null),
 			D.set(x, "in", c.actor),
@@ -160,10 +167,10 @@ const open: Rule = (c) => {
 	const p = String(a.prop ?? "");
 	const v = a.value ?? null;
 	if (p !== "open" || v !== true) return { granted: false };
-	if (prop(c.world, x, "openable") !== true) return { granted: false, denyReason: `${n(c, x)}打不开。` };
-	if (prop(c.world, x, "open") === true) return { granted: false, denyReason: `它已经开了。` };
-	if (prop(c.world, x, "jammed") === true) return { granted: false, denyReason: `${n(c, x)}被东西卡住了，打不开。` };
-	return { granted: true, changes: [D.set(x, "open", true)], reason: `你打开了${n(c, x)}。` };
+	if (prop(c.world, x, "openable") !== true) return { granted: false, denial: { law: "open.notopenable", subject: x } };
+	if (prop(c.world, x, "open") === true) return { granted: false, denial: { law: "open.already", subject: x } };
+	if (prop(c.world, x, "jammed") === true) return { granted: false, denial: { law: "open.jammed", subject: x } };
+	return { granted: true, involved: [x], changes: [D.set(x, "open", true)], reason: `你打开了${n(c, x)}。` };
 };
 
 const close: Rule = (c) => {
@@ -173,8 +180,8 @@ const close: Rule = (c) => {
 	const v = a.value ?? null;
 	if (p !== "open" || v !== false) return { granted: false };
 	if (prop(c.world, x, "openable") !== true) return { granted: false };
-	if (prop(c.world, x, "open") !== true) return { granted: false, denyReason: `它已经关着。` };
-	return { granted: true, changes: [D.set(x, "open", false)], reason: `你关上了${n(c, x)}。` };
+	if (prop(c.world, x, "open") !== true) return { granted: false, denial: { law: "close.closed", subject: x } };
+	return { granted: true, involved: [x], changes: [D.set(x, "open", false)], reason: `你关上了${n(c, x)}。` };
 };
 
 const pry: Rule = (c) => {
@@ -182,19 +189,20 @@ const pry: Rule = (c) => {
 	const s = String(a.source ?? "");
 	const t = String(a.target ?? "");
 	if (prop(c.world, t, "openable") !== true) return { granted: false };
-	if (prop(c.world, t, "open") === true) return { granted: false, denyReason: `${n(c, t)}已经开着。` };
-	if (prop(c.world, t, "jammed") === true) return { granted: false, denyReason: `${n(c, t)}被东西卡住，撬不开。` };
+	if (prop(c.world, t, "open") === true) return { granted: false, denial: { law: "pry.open", subject: s, object: t } };
+	if (prop(c.world, t, "jammed") === true) return { granted: false, denial: { law: "pry.jammed", subject: s, object: t } };
 	if (prop(c.world, s, "lit") === true) return { granted: false };
 	if (hardness(c, s) < HARD_MIN) {
-		return { granted: false, denyReason: `${n(c, s)}太软，撬不动${n(c, t)}。` };
+		return { granted: false, denial: { law: "pry.soft", subject: s, object: t } };
 	}
 	if (hardness(c, s) <= hardness(c, t)) {
-		return { granted: false, denyReason: `${n(c, s)}的硬度不足以撬开${n(c, t)}。` };
+		return { granted: false, denial: { law: "pry.hardness", subject: s, object: t } };
 	}
 	const acc = inTreeReach(c.world, c.actor, s);
-	if (!acc.ok) return { granted: false, denyReason: acc.reason };
+	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: s, reason: acc.reason } };
 	return {
 		granted: true,
+		involved: [s, t],
 		changes: [D.set(t, "open", true)],
 		reason: `你用${n(c, s)}撬开了${n(c, t)}。`,
 	};
@@ -204,16 +212,17 @@ const ignite: Rule = (c) => {
 	const a = paramsOf(c.action);
 	const s = String(a.source ?? "");
 	const t = String(a.target ?? "");
-	if (prop(c.world, s, "lit") !== true) return { granted: false, denyReason: `${n(c, s)}没有火。` };
+	if (prop(c.world, s, "lit") !== true) return { granted: false, denial: { law: "ignite.nolight", subject: s, object: t } };
 	const acc = inTreeReach(c.world, c.actor, t);
-	if (!acc.ok) return { granted: false, denyReason: acc.reason };
-	if (prop(c.world, t, "flammable") !== true) return { granted: false, denyReason: `${n(c, t)}烧不起来。` };
+	if (!acc.ok) return { granted: false, denial: { law: "reach", subject: t, reason: acc.reason } };
+	if (prop(c.world, t, "flammable") !== true) return { granted: false, denial: { law: "ignite.notflammable", subject: s, object: t } };
 	if (prop(c.world, t, "lightable") === true && prop(c.world, t, "lit") !== true) {
-		return { granted: true, changes: [D.set(t, "lit", true)], reason: `你点燃了${n(c, t)}。` };
+		return { granted: true, involved: [s, t], changes: [D.set(t, "lit", true)], reason: `你点燃了${n(c, t)}。` };
 	}
 	if (prop(c.world, t, "burning") !== true) {
 		return {
 			granted: true,
+			involved: [s, t],
 			changes: [
 				D.set(t, "burning", true),
 				D.set(t, "lit", true),
@@ -221,7 +230,7 @@ const ignite: Rule = (c) => {
 			reason: `${n(c, t)}燃起来了！`,
 		};
 	}
-	return { granted: false, denyReason: `${n(c, t)}已经在燃烧。` };
+	return { granted: false, denial: { law: "ignite.burning", subject: s, object: t } };
 };
 
 const extinguish: Rule = (c) => {
@@ -230,27 +239,27 @@ const extinguish: Rule = (c) => {
 	const p = String(a.prop ?? "");
 	const v = a.value ?? null;
 	if (p !== "lit" || v !== false) return { granted: false };
-	if (prop(c.world, x, "lit") !== true) return { granted: false, denyReason: `它没有在燃烧。` };
-	if (prop(c.world, x, "burning") === true) return { granted: false, denyReason: `火已经烧起来了，吹不灭。` };
-	return { granted: true, changes: [D.set(x, "lit", false)], reason: `你吹灭了${n(c, x)}。` };
+	if (prop(c.world, x, "lit") !== true) return { granted: false, denial: { law: "extinguish.unlit", subject: x } };
+	if (prop(c.world, x, "burning") === true) return { granted: false, denial: { law: "extinguish.burning", subject: x } };
+	return { granted: true, involved: [x], changes: [D.set(x, "lit", false)], reason: `你吹灭了${n(c, x)}。` };
 };
 
 const denyAll: Rule = (c) => {
 	const a = paramsOf(c.action);
 	const verb = c.action?.verb ?? "";
 	if (verb === "use") {
-		return { granted: false, denyReason: `你把${n(c, String(a.source ?? ""))}凑向${n(c, String(a.target ?? ""))}，但什么也没有发生。` };
+		return { granted: false, denial: { law: "denyAll.use", subject: String(a.source ?? ""), object: String(a.target ?? "") } };
 	}
 	if (verb === "move") {
-		return { granted: false, denyReason: `你无法把${n(c, String(a.entity ?? ""))}放到${n(c, String(a.dest ?? ""))}。` };
+		return { granted: false, denial: { law: "denyAll.move", subject: String(a.entity ?? ""), object: String(a.dest ?? "") } };
 	}
-	const noun = PROP_LABELS[String(a.prop ?? "")] ?? "这项特性";
-	return { granted: false, denyReason: `世界不这样运转——${n(c, String(a.entity ?? ""))}的${noun}无法被改变。` };
+	return { granted: false, denial: { law: "denyAll.set", subject: String(a.entity ?? ""), reason: `世界不这样运转——${n(c, String(a.entity ?? ""))}的${PROP_LABELS[String(a.prop ?? "")] ?? "这项特性"}无法被改变。` } };
 };
 
 const kindle: Rule = (c) => {
 	const changes: Delta[] = [];
-	const reasons: string[] = [];
+	const facts: { text: string; entities: string[] }[] = [];
+	const involved = new Set<string>();
 	for (const x of c.world.entities) {
 		if (x.props.lit !== true) continue;
 		if (x.props.burning === true) continue;
@@ -262,15 +271,18 @@ const kindle: Rule = (c) => {
 		if (host.props.burning === true || host.props.lit === true) continue;
 		changes.push(D.set(host.id, "burning", true));
 		changes.push(D.set(host.id, "lit", true));
-		reasons.push(`${x.name}的火焰点燃了${host.name}！`);
+		involved.add(x.id);
+		involved.add(host.id);
+		facts.push({ text: `${x.name}的火焰点燃了${host.name}！`, entities: [x.id, host.id] });
 	}
 	if (!changes.length) return { granted: false };
-	return { granted: true, changes, reason: reasons.join(" ") };
+	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
 };
 
 const spread: Rule = (c) => {
 	const changes: Delta[] = [];
-	const reasons: string[] = [];
+	const facts: { text: string; entities: string[] }[] = [];
+	const involved = new Set<string>();
 	for (const b of c.world.entities) {
 		if (b.props.burning !== true) continue;
 		const targets = c.world.entities.filter((t) => {
@@ -285,30 +297,34 @@ const spread: Rule = (c) => {
 		for (const t of targets) {
 			changes.push(D.set(t.id, "burning", true));
 			changes.push(D.set(t.id, "lit", true));
-			reasons.push(`${b.name}的火焰蔓延到了${t.name}！`);
+			involved.add(b.id);
+			involved.add(t.id);
+			facts.push({ text: `${b.name}的火焰蔓延到了${t.name}！`, entities: [b.id, t.id] });
 		}
 	}
 	if (!changes.length) return { granted: false };
-	return { granted: true, changes, reason: reasons.join(" ") };
+	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
 };
 
 const burnout: Rule = (c) => {
 	const changes: Delta[] = [];
-	const reasons: string[] = [];
+	const facts: { text: string; entities: string[] }[] = [];
+	const involved = new Set<string>();
 	for (const b of c.world.entities) {
 		if (b.props.burning !== true) continue;
 		const t = (b.props.burnTicks as number | null ?? 0) + 1;
 		changes.push(D.set(b.id, "burnTicks", t));
+		involved.add(b.id);
 		if (t >= 3) {
 			changes.push(D.set(b.id, "burning", false));
 			changes.push(D.set(b.id, "lit", false));
 			changes.push(D.set(b.id, "material", "ash"));
 			changes.push(D.set(b.id, "flammable", false));
-			reasons.push(`${b.name}烧成了灰烬。`);
+			facts.push({ text: `${b.name}烧成了灰烬。`, entities: [b.id] });
 		}
 	}
 	if (!changes.length) return { granted: false };
-	return { granted: true, changes, reason: reasons.join(" ") };
+	return { granted: true, changes, involved: [...involved], facts, reason: facts.map((f) => f.text).join(" ") };
 };
 
 const STRONG_FIRE_CLAIMS = ["焦烟", "冒烟", "火舌", "烧焦", "烧成灰烬"];
@@ -470,6 +486,31 @@ export const cave: GameDef = {
 		{ id: "burnout", run: burnout },
 	],
 	denyAll,
+	denialTemplates: {
+		reach: (d, w) => d.reason ?? "它不在这里。",
+		"wedge.jammed": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}的门缝里已经塞着东西了。`,
+		"move.grabbable": (d, w) => `你搬不动${entity(w, d.subject ?? "")?.name ?? d.subject}。`,
+		"move.attached": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}被固定在别处，先解下来。`,
+		"move.dest": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}？这里没有这个东西。`,
+		"move.closed": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}是关着的，放不进去。`,
+		"move.capacity": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}放不下东西。`,
+		"detach.none": () => "它没有被固定住。",
+		"open.notopenable": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}打不开。`,
+		"open.already": () => "它已经开了。",
+		"open.jammed": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}被东西卡住了，打不开。`,
+		"close.closed": () => "它已经关着。",
+		"pry.open": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}已经开着。`,
+		"pry.jammed": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}被东西卡住，撬不开。`,
+		"pry.soft": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}太软，撬不动${entity(w, d.object ?? "")?.name ?? d.object}。`,
+		"pry.hardness": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}的硬度不足以撬开${entity(w, d.object ?? "")?.name ?? d.object}。`,
+		"ignite.nolight": (d, w) => `${entity(w, d.subject ?? "")?.name ?? d.subject}没有火。`,
+		"ignite.notflammable": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}烧不起来。`,
+		"ignite.burning": (d, w) => `${entity(w, d.object ?? "")?.name ?? d.object}已经在燃烧。`,
+		"extinguish.unlit": () => "它没有在燃烧。",
+		"extinguish.burning": () => "火已经烧起来了，吹不灭。",
+		"denyAll.use": (d, w) => `你把${entity(w, d.subject ?? "")?.name ?? d.subject}凑向${entity(w, d.object ?? "")?.name ?? d.object}，但什么也没有发生。`,
+		"denyAll.move": (d, w) => `你无法把${entity(w, d.subject ?? "")?.name ?? d.subject}放到${entity(w, d.object ?? "")?.name ?? d.object}。`,
+	},
 	propLabels: PROP_LABELS,
 	internalProps: ["actor", "burnTicks"],
 	validateText: validateCaveText,

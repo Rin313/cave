@@ -1,8 +1,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { Simulation, propGet } from "../core/sim.ts";
-import type { Action, GameDef, PropValue } from "../core/sim.ts";
+import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
+import { fixConsole, flagBool, flagStr, out, parseArgs, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
 	verb: string;
@@ -154,19 +155,25 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 	process.exit(passed === total ? 0 : 1);
 }
 
-function parseActionToken(token: string): Action {
+/** 把 token 参数解析为动作；实体参数接受 id 或 name（按世界实体匹配）。 */
+function parseActionToken(token: string, def: GameDef): Action {
 	const [verb, ...rest] = token.split(/\s+/);
-	if (verb === "move") return { verb: "move", params: { entity: rest[0], dest: rest[1] } };
-	if (verb === "use") return { verb: "use", params: { source: rest[0], target: rest[1] } };
+	const resolve = (v: string | undefined): string | undefined => {
+		if (!v) return undefined;
+		const hit = def.world.entities.find((e) => e.name === v || e.id === v);
+		return hit ? hit.id : v;
+	};
+	if (verb === "move") return { verb: "move", params: { entity: resolve(rest[0]), dest: resolve(rest[1]) } };
+	if (verb === "use") return { verb: "use", params: { source: resolve(rest[0]), target: resolve(rest[1]) } };
 	if (verb === "set") {
 		let value: unknown = rest[2];
 		if (value === "true") value = true;
 		else if (value === "false") value = false;
 		else if (value === "null") value = null;
 		else if (value !== undefined && !Number.isNaN(Number(value))) value = Number(value);
-		return { verb: "set", params: { entity: rest[0], prop: rest[1], value: parseValue(value) } };
+		return { verb: "set", params: { entity: resolve(rest[0]), prop: rest[1], value: parseValue(value) } };
 	}
-	throw new Error(`无法解析动作：${token}（支持 use S T / move X D / set X P V / tick N）`);
+	throw new Error(`无法解析动作：${token}（支持 use S T / move X D / set X P V / tick N，实体可用名称）`);
 }
 
 function describeAction(action: Action, def: GameDef): string {
@@ -176,17 +183,17 @@ function describeAction(action: Action, def: GameDef): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-function probeDef(def: GameDef): { gaps: { op: string; reason: string }[]; seen: number } {
+function probeDef(def: GameDef): { gaps: { op: string; reason: string; law?: string }[]; seen: number } {
 	const sim = new Simulation(def, 1);
 	const ids = [...sim.visible()].filter((id) => id !== def.playerId);
 	const itemIds = ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true);
-	const gaps: { op: string; reason: string }[] = [];
+	const gaps: { op: string; reason: string; law?: string }[] = [];
 	const seen = new Set<string>();
 
 	const probeAction = (action: Action) => {
 		const fresh = new Simulation(def, 1);
 		const r = fresh.apply(action);
-		if (!r.ok && r.deniedBy === "denyAll") gaps.push({ op: describeAction(action, def), reason: r.reason });
+		if (!r.ok && r.deniedBy === "denyAll") gaps.push({ op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
 	};
 
 	const unique = (action: Action) => {
@@ -248,57 +255,86 @@ async function cmdProbe(gameId: string): Promise<void> {
 		console.log(`  ${prop.padEnd(12)} ×${e.n}  例: ${e.examples.join(" | ")}`);
 	}
 	console.log(gaps.length === 0 ? "\n无缺口。法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
+
+	const reportFile = join("reports", `${def.id}.probe.json`);
+	mkdirSync(dirname(reportFile), { recursive: true });
+	writeFileSync(reportFile, JSON.stringify({ game: def.id, seen, gaps }, null, 2), "utf8");
+	console.log(`REPORT: ${reportFile}`);
 }
 
-async function cmdRun(tokens: string[], gameId: string): Promise<void> {
+async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; world: boolean }): Promise<void> {
 	const def = getGame(gameId);
 	const sim = new Simulation(def, 1);
-	console.log("=== 初始世界 ===");
-	console.log(sim.serialize());
+	const steps: { action: string; result: StepResult }[] = [];
 	for (const token of tokens) {
-		console.log(`\n>>> ${token}`);
+		let results: StepResult[];
+		let actionDesc: string;
 		if (token === "tick" || token.startsWith("tick ")) {
 			const n = Number(token.split(/\s+/)[1] ?? 1);
-			const results = sim.tick(n);
-			if (results.length === 0) console.log("（时间流逝，什么也没发生）");
-			for (const r of results) console.log(`  [tick ${(r.action.params.n as number)}] ${r.reason}`);
+			actionDesc = `tick ${n}`;
+			results = sim.tick(n);
 		} else {
-			const r = sim.apply(parseActionToken(token));
+			actionDesc = token;
+			results = [sim.apply(parseActionToken(token, def))];
+		}
+		if (results.length === 0) {
+			console.log(`\n>>> ${actionDesc}`);
+			console.log("（时间流逝，什么也没发生）");
+			continue;
+		}
+		for (const r of results) {
+			steps.push({ action: actionDesc, result: r });
+			console.log(`\n>>> ${actionDesc}`);
 			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}`);
 			for (const ch of r.changes) console.log(`     ${ch.entity}.${ch.prop}: ${JSON.stringify(ch.from)} → ${JSON.stringify(ch.to)}`);
 		}
 	}
-	console.log("\n=== 最终世界 ===");
-	console.log(sim.serialize());
+
+	if (opts.json) {
+		out({
+			game: def.id,
+			steps: steps.map((s) => s.result),
+			world: opts.world ? sim.snapshot() : undefined,
+		});
+		return;
+	}
+	if (opts.world) {
+		console.log("\n=== 最终世界 ===");
+		console.log(sim.serialize());
+	}
 	console.log("\n=== 变更日志 ===");
 	for (const r of sim.log) console.log(`  ${JSON.stringify(r.action)} → ${r.reason}`);
 }
 
 async function main(): Promise<void> {
-	const [cmd, ...rest] = process.argv.slice(2);
+	fixConsole();
+	const [cmd, ...argv] = process.argv.slice(2);
+	const a: ParsedArgs = parseArgs(argv);
+	if (!cmd || cmd === "--help" || cmd === "-h") {
+		process.stdout.write(`用法:
+  sim scenario [<scenario.json>] [--game <id>]    运行法则引擎场景验证（默认 scenarios/cave.json）
+  sim run <action> [<action>...] [--game <id>] [--json] [--world]    按顺序执行动作并展示结果
+    action: use <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
+    （实体参数可用名称或 id）
+  sim probe [--game <id>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口（写 reports/<game>.probe.json）
+`);
+		return;
+	}
+	const gameId = flagStr(a, "game") ?? "cave";
+	const positionals = a.positionals;
 	if (cmd === "scenario") {
-		await cmdScenario(rest[0] ?? "scenarios/cave.json");
+		await cmdScenario(positionals[0] ?? "scenarios/cave.json");
 		return;
 	}
 	if (cmd === "run") {
-		const gameIdx = rest.indexOf("--game");
-		const gameId = gameIdx >= 0 ? rest[gameIdx + 1] : "cave";
-		const tokens = rest.filter((_, i) => i !== gameIdx && i !== gameIdx + 1);
-		await cmdRun(tokens, gameId);
+		await cmdRun(positionals, gameId, { json: flagBool(a, "json"), world: flagBool(a, "world") });
 		return;
 	}
 	if (cmd === "probe") {
-		const gameIdx = rest.indexOf("--game");
-		const gameId = gameIdx >= 0 ? rest[gameIdx + 1] : "cave";
 		await cmdProbe(gameId);
 		return;
 	}
-	console.log(`用法:
-  sim scenario [<scenario.json>]    运行法则引擎场景验证（默认 scenarios/cave.json）
-  sim run <action> [<action>...] [--game <id>]    按顺序执行动作并展示世界与变更
-    action: use <source> <target> | move <entity> <dest> | set <entity> <prop> <value> | tick <n>
-  sim probe [--game <id>]           穷举可见实体的动作组合，报告落到 denyAll 的法则缺口
-`);
+	throw new Error(`未知命令: ${cmd}`);
 }
 
 main().catch((err) => {
