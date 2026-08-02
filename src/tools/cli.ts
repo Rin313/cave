@@ -21,7 +21,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 	const flags = new Map<string, string | boolean>();
 	const positionals: string[] = [];
 	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i];
+		const a = argv[i]!;
 		if (a.startsWith("--")) {
 			const key = a.slice(2);
 			const eq = key.indexOf("=");

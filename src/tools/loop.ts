@@ -63,7 +63,7 @@ function locateRunDir(runId: string, game?: string): string | null {
 		const dir = join(RUNS_ROOT, g, runId);
 		if (existsSync(metaPath(dir))) matches.push(dir);
 	}
-	if (matches.length === 1) return matches[0];
+	if (matches.length === 1) return matches[0] ?? null;
 	if (matches.length > 1) throw new Error(`run "${runId}" 在多个游戏下存在，请用 --game 指定`);
 	return null;
 }

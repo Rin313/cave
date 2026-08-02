@@ -1,3 +1,5 @@
+import type { TObject } from "typebox";
+
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
 
 export interface Entity {
@@ -132,7 +134,7 @@ export interface VerbDef {
 	label: string;
 	description: string;
 	/** TypeBox object schema，引擎据此生成 act 工具参数校验。 */
-	schema: unknown;
+	schema: TObject;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
 	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
@@ -235,7 +237,7 @@ export function propSet(e: Entity, path: string, value: PropValue): void {
 	const last = parts.pop()!;
 	let cur: Record<string, PropValue> | PropValue[] = e.props;
 	for (let i = 0; i < parts.length; i++) {
-		const p = parts[i];
+		const p = parts[i]!;
 		const idx = Number(p);
 		const next = parts[i + 1];
 		const nextIsNum = next !== undefined && !Number.isNaN(Number(next));
@@ -582,8 +584,8 @@ export class Simulation {
 					}
 					return;
 				}
-				const p = keys[idx];
-				for (const v of paramLists[p]) gen(idx + 1, { ...acc, [p]: v });
+				const p = keys[idx]!;
+				for (const v of paramLists[p]!) gen(idx + 1, { ...acc, [p]: v });
 			};
 			gen(0, {});
 		}

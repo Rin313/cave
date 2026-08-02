@@ -168,12 +168,12 @@ function resolveEntity(v: string, sim: Simulation): string {
  *  其余参数按动词 schema 的属性顺序解析为标量。动词与参数名不再硬编码。 */
 function parseActionToken(token: string, sim: Simulation): Action {
 	const [verbName, ...rest] = token.split(/\s+/);
-	const verb = sim.def.verbs[verbName];
+	const verb = sim.def.verbs[verbName!];
 	if (!verb) {
 		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；tick N 流逝时间；实体参数可用名称或 id）`);
 	}
-	const props = (verb.schema as { properties?: Record<string, unknown> }).properties;
-	const paramOrder = props ? Object.keys(props) : [];
+	const props = verb.schema.properties;
+	const paramOrder = Object.keys(props);
 	if (rest.length > paramOrder.length) {
 		throw new Error(`动词「${verbName}」最多接受 ${paramOrder.length} 个参数（${paramOrder.join(" ")}），得到 ${rest.length} 个`);
 	}
@@ -184,7 +184,7 @@ function parseActionToken(token: string, sim: Simulation): Action {
 		if (p === undefined) return;
 		params[p] = entityParams.includes(p) ? resolveEntity(raw, sim) : parseScalar(raw);
 	});
-	return { verb: verbName, params };
+	return { verb: verbName!, params };
 }
 
 function describeAction(action: Action, def: GameDef): string {
@@ -242,7 +242,7 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	};
 
 	for (const verbName of Object.keys(def.verbs)) {
-		const verb = def.verbs[verbName];
+		const verb = def.verbs[verbName]!;
 		const entityParams = verb.entityParams ?? [];
 		const candidates = verb.candidates?.(sim) ?? {};
 		const paramLists: Record<string, PropValue[]> = {};
@@ -273,8 +273,8 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 				probeAction(verb, action);
 				return;
 			}
-			const p = keys[idx];
-			for (const v of paramLists[p]) {
+			const p = keys[idx]!;
+			for (const v of paramLists[p]!) {
 				acc[p] = v;
 				generate(idx + 1, acc);
 			}

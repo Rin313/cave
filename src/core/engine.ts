@@ -275,7 +275,7 @@ export class Engine {
 	private parseDeclaration(text: string): { facts: string[]; body: string } | null {
 		const m = text.match(/^\s*\[facts:\s*([^\]]*)\]\s*\n?/);
 		if (!m) return null;
-		const facts = m[1].split(/[；;]/).map((s) => s.trim()).filter(Boolean);
+		const facts = (m[1] ?? "").split(/[；;]/).map((s) => s.trim()).filter(Boolean);
 		return { facts, body: text.slice(m[0].length).trim() };
 	}
 
@@ -455,7 +455,7 @@ function fmtValue(sim: Simulation, v: PropValue): string {
 function fmtChange(sim: Simulation, c: Change): string {
 	const m = /^rel:([^@]+)@(.+)$/.exec(c.prop);
 	if (m) {
-		const [type, to] = [m[1], m[2]];
+		const [type, to] = [m[1]!, m[2]!];
 		return `${fmtValue(sim, c.entity)} 对 ${fmtValue(sim, to)} 的${type} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
 	}
 	return `${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
@@ -530,7 +530,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 			Type.Object(
 				{
 					verb: Type.Literal(name),
-					params: (v.schema as never),
+					params: v.schema,
 				},
 				{ additionalProperties: false },
 			),
@@ -539,8 +539,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 	/** 每个动词的参数校验器（strict：schema 未声明的参数一律打回）。SDK 不校验工具参数，需引擎自检。 */
 	const verbValidators = new Map<string, ReturnType<typeof Compile>>();
 	for (const [name, v] of Object.entries(def.verbs)) {
-		const props = (v.schema as { properties?: Record<string, unknown> }).properties ?? {};
-		verbValidators.set(name, Compile(Type.Object(props, { additionalProperties: false })));
+		verbValidators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 	}
 	return defineTool({
 		name: ACT_TOOL,
