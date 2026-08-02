@@ -1,5 +1,6 @@
-import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
-import { D, entity, inTreeReach, inTreeVisible, prop, reachOptsFor } from "../core/sim.ts";
+import type { Action, Change, Delta, Denial, GameDef, PropValue, Rule, RuleCtx, Simulation, VerbDef, World } from "../core/sim.ts";
+import { D, entity, inTreeReach, inTreeVisible, prop, stdReachDenial } from "../core/sim.ts";
+import { hashStr, scanClaims, type ClaimTarget } from "../core/util.ts";
 import { Type } from "typebox";
 
 const MEDITATE_GAIN = 6;
@@ -33,13 +34,6 @@ function isNpc(w: World, id: string): boolean {
 
 function isNpcHere(c: RuleCtx, id: string): boolean {
 	return isNpc(c.world, id) && inTreeReach(c.world, c.actor, id).ok;
-}
-
-/** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
-function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id, reachOptsFor(c.def));
-	if (acc.ok) return null;
-	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
 }
 
 const PROP_LABELS: Record<string, string> = {
@@ -105,7 +99,8 @@ const meditate: Rule = (c) => {
 	};
 };
 
-/** 切磋：与同处的人物比武。胜则剑法精进、对方「佩服」加深；败则损耗体力，体力过低受伤；受伤时无法切磋。 */
+/** 切磋：与同处的人物比武。胜则剑法精进、对方「佩服」加深；败则损耗体力，体力过低受伤；受伤时无法切磋。
+ *  随机由世界自持：玩家 `luck` 计数器作为确定性噪声源（hashStr 纯函数），每次判定推进——存档/恢复/克隆/check 天然一致。 */
 const spar: Rule = (c) => {
 	const opp = param(c.action, "opponent");
 	if (!isNpcHere(c, opp)) {
@@ -115,19 +110,21 @@ const spar: Rule = (c) => {
 		return { granted: false, denial: { law: "spar.injured", subject: c.actor } };
 	}
 	const weaponBonus = c.world.entities.some((e) => e.props.weapon === true && prop(c.world, e.id, "in") === c.actor) ? SPAR_WEAPON_BONUS : 0;
-	const myPower = num(c.world, c.actor, "sword") + num(c.world, c.actor, "neili") / 10 + weaponBonus + c.rng() * SPAR_RNG;
-	const oppPower = num(c.world, opp, "sword") + num(c.world, opp, "neili") / 10 + c.rng() * SPAR_RNG;
+	const luck = num(c.world, c.actor, "luck");
+	const roll = (salt: string) => hashStr(`spar:${c.world.time}:${luck}:${c.actor}:${opp}:${salt}`);
+	const myPower = num(c.world, c.actor, "sword") + num(c.world, c.actor, "neili") / 10 + weaponBonus + roll("my") * SPAR_RNG;
+	const oppPower = num(c.world, opp, "sword") + num(c.world, opp, "neili") / 10 + roll("opp") * SPAR_RNG;
 	if (myPower >= oppPower) {
 		return {
 			granted: true,
 			involved: [c.actor, opp],
-			changes: [D.inc(opp, "stamina", -20), D.inc(c.actor, "sword", 1), D.relInc(opp, c.actor, "佩服", 1)],
+			changes: [D.inc(opp, "stamina", -20), D.inc(c.actor, "sword", 1), D.relInc(opp, c.actor, "佩服", 1), D.inc(c.actor, "luck", 1)],
 			facts: [{ text: `${n(c, opp)}败于你的剑下。`, entities: [opp, c.actor] }],
 			reason: `你与${n(c, opp)}切磋，技高一筹，胜了半招。`,
 		};
 	}
 	const afterStam = num(c.world, c.actor, "stamina") - SPAR_COST;
-	const changes: Delta[] = [D.inc(c.actor, "stamina", -SPAR_COST)];
+	const changes: Delta[] = [D.inc(c.actor, "stamina", -SPAR_COST), D.inc(c.actor, "luck", 1)];
 	if (afterStam < 20) changes.push(D.set(c.actor, "injured", true));
 	return {
 		granted: true,
@@ -154,7 +151,7 @@ const travel: Rule = (c) => {
 /** 拿取：拿起可持握且可达的物品。 */
 const take: Rule = (c) => {
 	const x = param(c.action, "entity");
-	const un = denyUnreachable(c, x);
+	const un = stdReachDenial(c, x);
 	if (un) return un;
 	if (prop(c.world, x, "grabbable") !== true) {
 		return { granted: false, denial: { law: "take.grabbable", subject: x } };
@@ -280,46 +277,6 @@ const INJURY_CLAIMS = ["受伤", "负伤", "流血", "重伤", "挂彩"];
 const HAND_CLAIMS = ["手中", "手上", "掌心", "手里", "握着", "握紧"];
 const NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾", "不曾"];
 const PUNCT = /[，。；！？、—]/;
-const NEAR_WINDOW = 8;
-
-function negatedBefore(s: string, p: number): boolean {
-	return NEGATIONS.some((x) => s.slice(Math.max(0, p - 3), p).includes(x));
-}
-
-function nearBefore(s: string, name: string, p: number): boolean {
-	const from = Math.max(0, p - NEAR_WINDOW);
-	const i = s.lastIndexOf(name, p - 1);
-	if (i === -1 || i < from) return false;
-	return !PUNCT.test(s.slice(i + name.length, p));
-}
-
-function nearAfter(s: string, name: string, p: number, claimLen: number): boolean {
-	const to = Math.min(s.length, p + claimLen + NEAR_WINDOW);
-	const i = s.indexOf(name, p + claimLen);
-	if (i === -1 || i + name.length > to) return false;
-	return !PUNCT.test(s.slice(p + claimLen, i));
-}
-
-function scanClaims(
-	s: string,
-	claims: readonly string[],
-	targets: readonly { name: string }[],
-	error: (t: { name: string }) => string,
-): string | null {
-	for (const claim of claims) {
-		let idx = 0;
-		while ((idx = s.indexOf(claim, idx)) !== -1) {
-			if (negatedBefore(s, idx)) {
-				idx += claim.length;
-				continue;
-			}
-			const t = targets.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
-			if (t) return error(t);
-			idx += claim.length;
-		}
-	}
-	return null;
-}
 
 export function validateWuxiaText(input: { text: string; world: World; changes: Change[]; actor: string; pending: Change[] }): string | null {
 	const { text, world, actor } = input;
@@ -327,11 +284,19 @@ export function validateWuxiaText(input: { text: string; world: World; changes: 
 	const injured = prop(world, actor, "injured") === true;
 	const held = (id: string) => prop(world, id, "in") === actor;
 	const nonHeld = world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && !held(e.id));
+	const error = (t: ClaimTarget): string => `描述虚构了「${t.name}」受伤/负伤，但当前状态并非如此。`;
+	const handError = (t: ClaimTarget): string => `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`;
 
 	for (const s of text.split(/[。！？!?；;]/)) {
-		const injury = scanClaims(s, INJURY_CLAIMS, injured ? [] : [{ name: playerName }], () => `描述虚构了「${playerName}」受伤/负伤，但当前状态并非如此。`);
+		const injury = scanClaims(s, {
+			claims: INJURY_CLAIMS,
+			targets: injured ? [] : [{ name: playerName }],
+			error,
+			negations: NEGATIONS,
+			punct: PUNCT,
+		});
 		if (injury) return injury;
-		const hand = scanClaims(s, HAND_CLAIMS, nonHeld, (t) => `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`);
+		const hand = scanClaims(s, { claims: HAND_CLAIMS, targets: nonHeld, error: handError, negations: NEGATIONS, punct: PUNCT });
 		if (hand) return hand;
 	}
 	return null;
@@ -368,7 +333,7 @@ export const wuxia: GameDef = {
 			{ id: "hall", name: "议事厅", kind: "place", tags: ["space"], props: { space: true } },
 			{ id: "yard", name: "练武场", kind: "place", tags: ["space"], props: { space: true } },
 			{ id: "library", name: "藏经阁", kind: "place", tags: ["space"], props: { space: true } },
-			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "yard", neili: 10, stamina: 80, sword: 4 } },
+			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "yard", neili: 10, stamina: 80, sword: 4, luck: 0 } },
 			{ id: "senior", name: "师兄", kind: "npc", tags: [], props: { in: "yard", neili: 15, stamina: 80, sword: 8 } },
 			{ id: "master", name: "师父", kind: "npc", tags: [], props: { in: "yard", neili: 60, stamina: 100, sword: 45 } },
 			{ id: "sword", name: "青锋剑", kind: "item", tags: ["weapon"], props: { in: "yard", grabbable: true, weapon: true } },
@@ -396,7 +361,7 @@ export const wuxia: GameDef = {
 		"denyAll.spar": () => "你没有和人切磋。",
 	},
 	propLabels: PROP_LABELS,
-	internalProps: ["actor"],
+	internalProps: ["actor", "luck"],
 	validateText: validateWuxiaText,
 	summarize: summarizeWuxia,
 	grounding: (world, actor) => [...inTreeVisible(world, actor)],

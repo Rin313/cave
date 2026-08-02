@@ -30,7 +30,6 @@ interface Scenario {
 interface ScenarioFile {
 	game: string;
 	name?: string;
-	seed?: number;
 	scenarios: Scenario[];
 }
 
@@ -77,8 +76,8 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	return failures.length ? failures.join("; ") : "ok";
 }
 
-function runScenario(scenario: Scenario, def: GameDef, seed: number): ScenarioReport {
-	const sim = new Simulation(def, seed);
+function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
+	const sim = new Simulation(def);
 	const reports: StepReport[] = [];
 	for (const [i, step] of scenario.steps.entries()) {
 		let ok: boolean;
@@ -131,7 +130,7 @@ function runScenario(scenario: Scenario, def: GameDef, seed: number): ScenarioRe
 async function cmdScenario(scenarioPath: string): Promise<void> {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
 	const def = getGame(file.game);
-	const reports = file.scenarios.map((s) => runScenario(s, def, file.seed ?? 1));
+	const reports = file.scenarios.map((s) => runScenario(s, def));
 
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);
@@ -195,7 +194,7 @@ function describeAction(action: Action, def: GameDef): string {
 }
 
 function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; latent: { verb: string; op: string; ruleGranted: string }[]; seen: number; truncated: boolean } {
-	const sim = new Simulation(def, 1);
+	const sim = new Simulation(def);
 	const ids = [...sim.visible()].filter((id) => id !== def.playerId);
 	/** 动作参数候选域：游戏可经 GameDef.probeScope 裁剪；缺省 = 可见实体 - 玩家 - space 标记的场景实体。 */
 	const scope = def.probeScope
@@ -228,7 +227,7 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	};
 
 	const probeAction = (verb: VerbDef, action: Action) => {
-		const fresh = new Simulation(def, 1);
+		const fresh = new Simulation(def);
 		const r = fresh.apply(action);
 		if (!r.ok && r.deniedBy === "denyAll" && isMeaningfulGap(verb, action)) {
 			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
@@ -304,7 +303,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 
 async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; world: boolean }): Promise<void> {
 	const def = getGame(gameId);
-	const sim = new Simulation(def, 1);
+	const sim = new Simulation(def);
 	const steps: { action: string; result: StepResult }[] = [];
 	for (const token of tokens) {
 		let results: StepResult[];

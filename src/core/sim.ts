@@ -57,7 +57,6 @@ export interface RuleCtx {
 	world: World;
 	action: Action | null;
 	actor: string;
-	rng: () => number;
 	def: GameDef;
 }
 
@@ -281,28 +280,6 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
 
-/** 可快照/恢复的确定性随机数。快照后可克隆同一随机序列（dryTick 的「即将发生」预言用）。 */
-export interface Rng {
-	(): number;
-	snapshot: () => number;
-}
-
-export function mulberry32(seed: number): Rng {
-	let a = seed >>> 0;
-	const f = (() => {
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	}) as Rng;
-	f.snapshot = () => a;
-	return f;
-}
-
-export function restoreRng(snapshot: number): Rng {
-	return mulberry32(snapshot);
-}
-
 /** 标准库可达性选项：理由文案 + 关着的容器放行谓词（楔住等游戏机制）。 */
 export interface ReachOpts {
 	/** 理由文案（游戏注入；缺省为空——core 不内嵌任何语言）。 */
@@ -354,6 +331,14 @@ export function inTreeVisible(world: World, actor: string, opts: ReachOpts = {})
 	return vis;
 }
 
+/** 标准库可达性拒绝构造：实体不可达时返回结构化拒绝（law=reach，散文由 GameDef.denialTemplates 渲染）。
+ *  games 层规则里的可达性前置检查共用（cave 楔门/wuxia 取物等），不再各自复制实现。 */
+export function stdReachDenial(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
+	const acc = inTreeReach(c.world, c.actor, id, reachOptsFor(c.def));
+	if (acc.ok) return null;
+	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
+}
+
 export function serialize(world: World, visible: Iterable<string>, internalProps: readonly string[] = []): string {
 	const vis = new Set(visible);
 	const internal = new Set(internalProps);
@@ -381,14 +366,12 @@ export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
 	readonly log: StepResult[] = [];
-	private rand: Rng;
 	/** 探测模式：跳过施动工具前提（instrumentParams）检查，仅 probeGrant 临时开启，审计「规则本身是否会在不可持握工具上授予」。 */
 	private probeSkipInstruments = false;
 
-	constructor(def: GameDef, seed = 1) {
+	constructor(def: GameDef) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(def.world)) as World;
-		this.rand = mulberry32(seed);
 	}
 
 	get actor(): string {
@@ -400,20 +383,20 @@ export class Simulation {
 		return new Set(this.world.entities.map((e) => e.id));
 	}
 
-	static fromWorld(def: GameDef, world: World, rng?: Rng): Simulation {
-		const s = new Simulation(def, 1);
+	static fromWorld(def: GameDef, world: World): Simulation {
+		const s = new Simulation(def);
 		s.world.entities = JSON.parse(JSON.stringify(world.entities)) as Entity[];
 		s.world.time = world.time;
 		s.world.focus = world.focus ?? null;
 		s.world.traces = world.traces ? { ...world.traces } : undefined;
 		s.world.relations = world.relations ? JSON.parse(JSON.stringify(world.relations)) : undefined;
-		if (rng) s.rand = rng;
 		return s;
 	}
 
-	/** 只读裁决（不提交、不入日志、不扰动主随机序列）：动作空间接地与法则探测共用。 */
+	/** 只读裁决（不提交、不入日志）：动作空间接地与法则探测共用。
+	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
 	check(action: Action): StepResult {
-		const r = this.adjudicateRaw(action, () => 0.5);
+		const r = this.adjudicateRaw(action);
 		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial };
 	}
 
@@ -430,7 +413,7 @@ export class Simulation {
 		}
 	}
 
-	private adjudicateRaw(action: Action, rng: Rng | (() => number)): RawResult {
+	private adjudicateRaw(action: Action): RawResult {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
 			return { ok: false, reason: messagesFor(this.def).unknownVerb(action.verb), changes: [], deltas: [], action, deniedBy: "rule" };
@@ -439,7 +422,7 @@ export class Simulation {
 		if (inst) {
 			return { ok: false, reason: renderDenial(this.def, inst, this.world), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}
-		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, rng, def: this.def };
+		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, def: this.def };
 		let denial: Denial | null = null;
 		for (const rule of verb.rules) {
 			const res = rule(ctx);
@@ -473,7 +456,7 @@ export class Simulation {
 
 	apply(action: Action): StepResult {
 		const beforeVisible = this.visible();
-		const r = this.adjudicateRaw(action, this.rand);
+		const r = this.adjudicateRaw(action);
 		const changes = r.ok ? this.commit(r.deltas) : [];
 		let sr: StepResult = r.ok
 			? { ok: true, reason: r.reason, changes, action, facts: r.facts, involved: r.involved }
@@ -629,7 +612,7 @@ export class Simulation {
 	private runSystems(silent = false): StepResult[] {
 		const out: StepResult[] = [];
 		for (const sys of this.def.systems ?? []) {
-			const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, rng: this.rand, def: this.def };
+			const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, def: this.def };
 			const res = sys.run(ctx);
 			if (res.granted && (res.changes?.length ?? 0) > 0) {
 				const changes = this.commit(res.changes ?? []);
@@ -648,9 +631,10 @@ export class Simulation {
 		return out;
 	}
 
-	/** 克隆世界与随机序列，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。表达层的"即将发生"合法预言来源。 */
+	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。表达层的"即将发生"合法预言来源。
+	 *  随机由 games 层以 World 状态自持（纯函数派生），克隆世界即完整预言——无需序列快照机制。 */
 	dryTick(n = 1): StepResult[] {
-		const clone = Simulation.fromWorld(this.def, this.world, restoreRng(this.rand.snapshot()));
+		const clone = Simulation.fromWorld(this.def, this.world);
 		return clone.tick(n);
 	}
 

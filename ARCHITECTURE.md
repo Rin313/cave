@@ -53,6 +53,7 @@
 - **`--game` / 游戏注册表**：`src/games/registry.ts` 按 id 解析 GameDef，`loop`/`sim` 工具均已参数化，不再硬编码 cave。**tool 层不提供隐藏默认值**：`loop start` / `sim run` / `sim probe` 必须显式 `--game`；`sim scenario` 必须显式场景文件路径（场景文件内声明 `game`）；`loop` 各命令必须显式 `--run`。`loop` 的引擎配置环境变量按游戏 id 命名空间读取：`<GAME>_PROVIDER` / `<GAME>_MODEL` / `<GAME>_THINKING`（如 `CAVE_PROVIDER`），多游戏并存互不覆盖。
 - **引擎保留伪动词 `TICK_VERB`**：`"tick"` 是引擎级时间流逝动作标识（`systems` 产出的 StepResult 与 `loop wait` 用），非游戏声明的动词；游戏不应声明同名动词。`sim run` 的 `tick N` 关键字在游戏声明同名动词时优先走游戏动词。
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`validateText`（表达层语义断言钩子，签名含 `pending`——即将发生的变更，供钩子区分"预言"与"已发生"，如把火源放入易燃容器后「它将燃」是合法预言、不误伤）、`propLabels`（属性世界化说法）。
+- **core 只提供通用工具，不耦合游戏**：状态化 rng 已移除——随机由 games 层以 World 状态自持（纯函数派生，如 `hashStr(`${world.time}#${luck}#${salt}`)`，计数/推进由游戏经 deltas 声明），`World` 即完整真相源，check/apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`scanClaims`（文本断言扫描算法，词表/标点/否定词由游戏注入，core 不感知语言）、`stdReachDenial`（标准库可达性拒绝构造，cave/wuxia 共用）。
 
 ## 3. 持久化边界
 
@@ -70,7 +71,7 @@
 2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
 3. **模拟层（已定）**：动作空间为游戏声明动词表（`verbs`），不再硬编码 apply/move/set；era 类社会性动作可声明为新动词。数据结构 `Rule → RuleResult → Delta`、只读裁决 `check()`（`apply` 的裁决/提交拆分，动作空间接地与探测共用）、规则完整性检查工具 `sim probe`（按 `deniedBy === "denyAll"` 报**有意义**缺口：实体持有该属性、非空操作、值类型匹配）均已落地（§2.5）。probe 的缺口分组按 `def.verbs` 动态生成（不再硬编码 use/move/set），组合预算由 `--max` 控制（缺省 10000，按动词均分，超出报 truncated）或经 `probeScope` 收窄候选域。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测「规则本身是否会在不可持握工具上授予」，报告作者漏声明前提的潜在洞（如"用搬不动的重物施力仍被规则授予"即由此发现）。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 rules。
 4. **解析与忠实性**：
-   - **已落地**：双 pass 分离；表达层后置校验器（叙述实体 ⊆ 可见实体；通用泄漏检查只禁语言无关的实现工件——JSON 结构形态 + 实现形状标识符，语言相关词汇约束由 `forbiddenTerms`/`validateText` 游戏钩子承担 + `internalProps` 隔离）；结构化声明契约——输出首行 `[facts: ...]`，校验"声明实体 ⊆ 本回合涉及集（动作主体/动作参数/拒绝理由实体/本回合新见）+ 变更(from/to)/法则事实/即将发生"；`Simulation.dryTick()`（克隆世界与随机序列）把「即将发生」作为合法预言注入 prompt，随机序列克隆保证预言与真实 tick 一致。声明校验是集合成员判断（可靠），散文语义仍靠词表 + 游戏钩子（警报器）。
+   - **已落地**：双 pass 分离；表达层后置校验器（叙述实体 ⊆ 可见实体；通用泄漏检查只禁语言无关的实现工件——JSON 结构形态 + 实现形状标识符，语言相关词汇约束由 `forbiddenTerms`/`validateText` 游戏钩子承担 + `internalProps` 隔离）；结构化声明契约——输出首行 `[facts: ...]`，校验"声明实体 ⊆ 本回合涉及集（动作主体/动作参数/拒绝理由实体/本回合新见）+ 变更(from/to)/法则事实/即将发生"；`Simulation.dryTick()`（克隆世界）把「即将发生」作为合法预言注入 prompt——**引擎无状态化随机**：随机由 games 层以 World 状态自持（纯函数派生，如 `hashStr(world 计数器)`），世界即完整真相源，dryTick 克隆世界即完整预言，与真实 tick 天然一致，无需序列快照机制。声明校验是集合成员判断（可靠），散文语义仍靠词表 + 游戏钩子（警报器）。
    - **预言/已发生区分（已落地）**：`validateText` 收到 `pending`（即将发生的变更），游戏钩子据此豁免"即将发生"实体上的弱断言（如「将燃」），强断言（如「已成灰烬」）仍严格——把火源放入易燃容器后「容器将燃」不再被当幻觉误伤。实测：改前该场景触发 2 次校验失败并退回摘要，改后零误伤。
    - **未实现**：散文正文与声明的一致性（声明外暗含新事实无法机器拦截，属 NLP 难题）；规则 `facts` 的自动校验。
 5. **跨回合指代（已落地）**：`world.focus` 确定性维护（动作/新见/被拒实体），映射 prompt 注入 `[焦点]`。实测：无回流上下文下，「打开容器 → 把里面的东西拿起来」正确解析到新见物品；「把它关上」被动词约束（物品不可 open）正确回落容器。**但 focus 只是优先候选而非硬绑定**，多实体歧义场景仍可能失败；上下文可裁剪仍未落地（session 依赖回流与 focus 共同工作）。

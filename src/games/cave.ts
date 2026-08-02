@@ -1,5 +1,6 @@
 import type { Action, Change, Delta, Denial, Entity, GameDef, PropValue, Rule, RuleCtx, RuleResult, Simulation, VerbDef, World } from "../core/sim.ts";
-import { D, entity, inTreeReach, inTreeVisible, prop, reachOptsFor } from "../core/sim.ts";
+import { D, entity, inTreeVisible, prop, stdReachDenial } from "../core/sim.ts";
+import { scanClaims, type ClaimTarget } from "../core/util.ts";
 import { Type } from "typebox";
 
 /** 实体名解析：world 版（拒绝模板用）。 */
@@ -14,13 +15,6 @@ function n(c: RuleCtx, id: string): string {
 /** 动作参数读取：取字符串参数（缺省 ""）。 */
 function param(a: Action | null, key: string): string {
 	return String(a?.params?.[key] ?? "");
-}
-
-/** 可达性拒绝构造：实体不可达时返回结构化拒绝，散文由 GameDef.denialTemplates 渲染。 */
-function denyUnreachable(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id, reachOptsFor(c.def));
-	if (acc.ok) return null;
-	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
 }
 
 /** 楔在门缝里的东西仍可从门缝够到：对关着的门放行（wedgedBy 是 cave 的机制，不属标准库）。 */
@@ -139,7 +133,7 @@ const wedge: Rule = (c) => {
 	if (prop(c.world, x, "wedgeable") !== true) return { granted: false };
 	const de = entity(c.world, d);
 	if (!de || de.props.isDoor !== true) return { granted: false };
-	const un = denyUnreachable(c, x);
+	const un = stdReachDenial(c, x);
 	if (un) return un;
 	if (de.props.jammed === true) return { granted: false, denial: { law: "wedge.jammed", subject: x, object: d } };
 	return {
@@ -157,7 +151,7 @@ const wedge: Rule = (c) => {
 const moveLaw: Rule = (c) => {
 	const x = param(c.action, "entity");
 	const d = param(c.action, "dest");
-	const un = denyUnreachable(c, x);
+	const un = stdReachDenial(c, x);
 	if (un) return un;
 	if (prop(c.world, x, "grabbable") !== true) {
 		return { granted: false, denial: { law: "move.grabbable", subject: x } };
@@ -192,7 +186,7 @@ const detach: Rule = (c) => {
 	const v = c.action?.params?.value ?? null;
 	if (p !== "attachedTo" || v !== null) return { granted: false };
 	if (prop(c.world, x, "attachedTo") == null) return { granted: false, denial: { law: "detach.none", subject: x } };
-	const un = denyUnreachable(c, x);
+	const un = stdReachDenial(c, x);
 	if (un) return un;
 	const holder = prop(c.world, x, "attachedTo") as string | null;
 	return {
@@ -241,7 +235,7 @@ const pry: Rule = (c) => {
 	if (hardness(c, s) <= hardness(c, t)) {
 		return { granted: false, denial: { law: "pry.hardness", subject: s, object: t } };
 	}
-	const un = denyUnreachable(c, s);
+	const un = stdReachDenial(c, s);
 	if (un) return un;
 	return {
 		granted: true,
@@ -255,7 +249,7 @@ const ignite: Rule = (c) => {
 	const s = param(c.action, "source");
 	const t = param(c.action, "target");
 	if (prop(c.world, s, "lit") !== true) return { granted: false, denial: { law: "ignite.nolight", subject: s, object: t } };
-	const un = denyUnreachable(c, t);
+	const un = stdReachDenial(c, t);
 	if (un) return un;
 	if (prop(c.world, t, "flammable") !== true) return { granted: false, denial: { law: "ignite.notflammable", subject: s, object: t } };
 	if (prop(c.world, t, "lightable") === true && prop(c.world, t, "lit") !== true) {
@@ -371,57 +365,6 @@ const NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾",
 /** 子句边界：名字与断言之间出现这些才算"不相邻"（跨主语误报拦截）。空白不算边界。 */
 const PUNCT = /[，。；！？、—]/;
 
-function negatedBefore(s: string, p: number): boolean {
-	return NEGATIONS.some((n) => s.slice(Math.max(0, p - 3), p).includes(n));
-}
-
-const NEAR_WINDOW = 8;
-
-function nearBefore(s: string, name: string, p: number): boolean {
-	const from = Math.max(0, p - NEAR_WINDOW);
-	const i = s.lastIndexOf(name, p - 1);
-	if (i === -1 || i < from) return false;
-	return !PUNCT.test(s.slice(i + name.length, p));
-}
-
-function nearAfter(s: string, name: string, p: number, claimLen: number): boolean {
-	const to = Math.min(s.length, p + claimLen + NEAR_WINDOW);
-	const i = s.indexOf(name, p + claimLen);
-	if (i === -1 || i + name.length > to) return false;
-	return !PUNCT.test(s.slice(p + claimLen, i));
-}
-
-/** 断言词命中扫描：在一个子句里逐词查找断言词，命中且近旁（NEAR_WINDOW 内、无标点隔断）有目标实体即报错。
- *  deAfter 提供断言词紧后接「的」时的实体匹配（如「燃烧的蜡烛」）：命中才报错，未命中则跳过该断言词（不落入近旁匹配，避免「燃烧的锈门」误伤）。 */
-function scanClaims(
-	s: string,
-	claims: readonly string[],
-	targets: readonly { name: string }[],
-	error: (t: { name: string }) => string,
-	deAfter?: (after: string) => { name: string } | null,
-): string | null {
-	for (const claim of claims) {
-		let idx = 0;
-		while ((idx = s.indexOf(claim, idx)) !== -1) {
-			if (negatedBefore(s, idx)) {
-				idx += claim.length;
-				continue;
-			}
-			if (deAfter && s[idx + claim.length] === "的") {
-				const after = s.slice(idx + claim.length + 1, idx + claim.length + 4);
-				const hit = deAfter(after);
-				if (hit) return error(hit);
-				idx += claim.length;
-				continue;
-			}
-			const t = targets.find((e) => nearBefore(s, e.name, idx) || nearAfter(s, e.name, idx, claim.length));
-			if (t) return error(t);
-			idx += claim.length;
-		}
-	}
-	return null;
-}
-
 export function validateCaveText(input: { text: string; world: World; changes: Change[]; actor: string; pending: Change[] }): string | null {
 	const { text, world, actor, pending } = input;
 	const aboutToBurn = new Set(pending.filter((c) => c.prop === "burning" && c.to === true).map((c) => c.entity));
@@ -433,17 +376,22 @@ export function validateCaveText(input: { text: string; world: World; changes: C
 	// WEAK 断言（燃烧/点燃等）可覆盖「即将燃」的实体（合法预言）
 	const nonFireWeak = world.entities.filter((e) => e.id !== actor && e.props.space !== true && !isFire(e.id) && !aboutToBurn.has(e.id));
 	const nonHeld = world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && !isHeld(e.id));
-	const fireError = (t: { name: string }) => `描述虚构了「${t.name}」的燃烧/点燃/烧焦，但当前状态并非如此。`;
-	const handError = (t: { name: string }) => `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`;
+	const fireError = (t: ClaimTarget) => `描述虚构了「${t.name}」的燃烧/点燃/烧焦，但当前状态并非如此。`;
+	const handError = (t: ClaimTarget) => `描述虚构了「${t.name}」在你手中，但当前它不在你这里。`;
 
 	for (const s of text.split(/[。！？!?；;]/)) {
-		const strong = scanClaims(s, STRONG_FIRE_CLAIMS, nonFire, fireError);
+		const strong = scanClaims(s, { claims: STRONG_FIRE_CLAIMS, targets: nonFire, error: fireError, negations: NEGATIONS, punct: PUNCT });
 		if (strong) return strong;
-		const weak = scanClaims(s, WEAK_FIRE_CLAIMS, nonFireWeak, fireError, (after) => {
-			return nonFireWeak.find((e) => after.startsWith(e.name)) ?? null;
+		const weak = scanClaims(s, {
+			claims: WEAK_FIRE_CLAIMS,
+			targets: nonFireWeak,
+			error: fireError,
+			negations: NEGATIONS,
+			punct: PUNCT,
+			deAfter: (after) => nonFireWeak.find((e) => after.startsWith(e.name)) ?? null,
 		});
 		if (weak) return weak;
-		const hand = scanClaims(s, HAND_CLAIMS, nonHeld, handError);
+		const hand = scanClaims(s, { claims: HAND_CLAIMS, targets: nonHeld, error: handError, negations: NEGATIONS, punct: PUNCT });
 		if (hand) return hand;
 	}
 	return null;

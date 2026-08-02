@@ -1,7 +1,6 @@
 {
 	"game": "wuxia",
 	"name": "青峰派法则验证",
-	"seed": 1,
 	"scenarios": [
 		{
 			"name": "青峰入门：取剑、赠药、练功、切磋、行路",
