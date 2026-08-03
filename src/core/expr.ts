@@ -81,9 +81,6 @@ export interface Over {
 /** 法则：条件 + 后果 + 拒绝。when 全部成立 → 提交 each；reject 先行（前置拒绝）；否则按序匹配 denies。 */
 export interface Law {
 	id: string;
-	/** 开放标记：可被开放通道（fallback:"proven" 动词）反向解析引用。
-	 *  世界在 open 法则里反查「能否产出 AI 期望的后果」，命中才经该法则提交（重量拨盘）。 */
-	open?: boolean;
 	over?: Over[];
 	/** 前置拒绝：成立即拒绝（不参与授予），用于可达性/可持握等公共前提。 */
 	reject?: { when: Pred[]; denial: DenialDef };
@@ -262,8 +259,8 @@ function evalMatch(ctx: ExprCtx, law: Law): { deltas: Delta[]; facts: Fact[]; re
 }
 
 /** 量词枚举：按 over 顺序绑定变量，对每个绑定调用 cb（返回 true 停止）。
- *  over 变量若已在 env 中绑定（开放通道反查给出的目标），直接用既有绑定并过 where 过滤，
- *  不满足则该绑定作废——否则第一匹配者会抢走期望目标（见 resolveUnscripted）。 */
+ *  over 变量若已在 env 中绑定（软通道反查给出的目标），直接用既有绑定并过 where 过滤，
+ *  不满足则该绑定作废——否则第一匹配者会抢走期望目标。 */
 function forEachBinding(ctx: ExprCtx, over: Over[], cb: (env: Record<string, PropValue>) => boolean): boolean {
 	const gen = (idx: number, env: Record<string, PropValue>): boolean => {
 		if (idx === over.length) return cb(env);

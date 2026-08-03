@@ -4,13 +4,12 @@ import { E, P, type ExprCtx, type Law } from "../core/expr.ts";
 import { Type } from "typebox";
 
 /**
- * 极端用例：规则极少、超高灵活度的开放世界（流沙荒原）。
- *  - 只有 3 个动词：travel（沿路径移动）、move（拿起/放下/放入）、do（开放通道）。
- *  - 预设法则极简且全部按属性键控（不特判实体 id）：邻接路径、可持握+可达、容器开合。
- *  - 自由探索与自由交互全部经开放通道（fallback:"proven"）反向解析——AI 只提期望后果（desired），
- *    世界在开放法则（Law.open）里反查，命中才经该法则提交（级联/时间系统/不变式照常）。
+ * 开放世界（流沙荒原）：约束化重量（soft 通道）示例。
+ *  - 预设动词覆盖物理/资源动作：travel（路径移动）、move（拿起/放下/放入）、open（开合）、use（点燃）、harvest（采集）。
+ *  - 自由环境响应走 do（fallback:"soft"）：AI 直接提期望后果（desired），世界以约束校验授予——
+ *    实体须可达、属性须 access:"soft"（marked 刻痕/examined 勘察），结构性属性一律拒绝。
  *  - 验证目标：AI 无法凭一句话凭空改材质、传送不可达物体、创造/销毁实体、击杀生物——
- *    开放世界的自由度是"开放法则声明的后果"的枚举，不是模型幻觉。
+ *    开放世界的自由度由属性注册表的访问级声明（重量拨盘）决定，不再枚举开放法则（去菜单化）。
  */
 
 const MATERIAL_LABELS: Record<string, string> = {
@@ -37,8 +36,8 @@ const WASTE_PROPS: Record<string, PropDef> = {
 	alive: { type: "boolean", label: "存活" },
 	ripe: { type: "boolean", label: "成熟" },
 	berries: { type: "number", label: "浆果" },
-	marked: { type: "boolean", label: "刻痕", stylistic: true },
-	examined: { type: "boolean", label: "勘察" },
+	marked: { type: "boolean", label: "刻痕", stylistic: true, access: "soft" },
+	examined: { type: "boolean", label: "勘察", access: "soft" },
 	inscription: { type: "string", label: "铭文" },
 	burnTicks: { type: "number", internal: true },
 	regrowTicks: { type: "number", internal: true },
@@ -141,7 +140,6 @@ const travelLaws: Law[] = [
 const moveLaws: Law[] = [
 	{
 		id: "move.open",
-		open: true,
 		when: [
 			P.reach(E.v("entity")),
 			P.eq(E.p("entity", "grabbable"), E.lit(true)),
@@ -170,72 +168,68 @@ const moveLaws: Law[] = [
 	{ id: "denyAll.move", reject: { when: [], denial: { law: "denyAll.move", subject: E.v("entity"), object: E.v("dest") } } },
 ];
 
-/**
- * 开放法则：开放的后果集合 = 荒野里"世界愿意授予"的自由动作。
- *  AI 的 desired 只有能由其中某法则产出时才会被授予——这是"AI 提后果、世界走法则"的重量所在。
- */
-const openLaws: Law[] = [
+/** 软通道动词（do）的兜底法则：无 proof 时一律拒绝（soft 授予在 fallback 通道进行）。 */
+const doLaws: Law[] = [
+	{ id: "denyAll.do", reject: { when: [], denial: { law: "denyAll.do" } } },
+];
+
+/** 容器开合（原 openLaws.container.open/close 迁为预设动词法则）。 */
+const openVerbLaws: Law[] = [
 	{
-		id: "mark",
-		open: true,
-		when: [P.reach(E.v("entity"))],
-		each: [{ op: "set", e: E.v("entity"), p: "marked", v: E.lit(true) }],
-		reason: (ctx) => `你在${ctx.name(String(ctx.env.entity))}上留下了一道刻痕。`,
-	},
-	{
-		id: "observe",
-		open: true,
-		when: [P.reach(E.v("entity"))],
-		each: [{ op: "set", e: E.v("entity"), p: "examined", v: E.lit(true) }],
-		reason: (ctx) => `你仔细察看了${ctx.name(String(ctx.env.entity))}。`,
-	},
-	{
-		id: "container.open",
-		open: true,
+		id: "open.open",
 		when: [P.reach(E.v("entity")), P.eq(E.p("entity", "openable"), E.lit(true)), P.neq(E.p("entity", "open"), E.lit(true))],
 		each: [{ op: "set", e: E.v("entity"), p: "open", v: E.lit(true) }],
+		denies: [{ when: [P.eq(E.p("entity", "openable"), E.lit(true)), P.eq(E.p("entity", "open"), E.lit(true))], denial: { law: "open.already", subject: E.v("entity") } }],
 		reason: (ctx) => `你打开了${ctx.name(String(ctx.env.entity))}。`,
 	},
 	{
-		id: "container.close",
-		open: true,
+		id: "open.close",
 		when: [P.reach(E.v("entity")), P.eq(E.p("entity", "openable"), E.lit(true)), P.eq(E.p("entity", "open"), E.lit(true))],
 		each: [{ op: "set", e: E.v("entity"), p: "open", v: E.lit(false) }],
 		reason: (ctx) => `你合上了${ctx.name(String(ctx.env.entity))}。`,
 	},
-	{
-		id: "fire",
-		open: true,
-		over: [{ var: "s", source: "entities", where: [P.eq(E.p("s", "lit"), E.lit(true)), P.reach(E.v("s"))] }],
-		when: [
-			P.reach(E.v("t")),
-			P.eq(E.p("t", "flammable"), E.lit(true)),
-			P.neq(E.p("t", "burning"), E.lit(true)),
-			P.neq(E.v("t"), E.v("s")),
-		],
-		each: [
-			{ op: "set", e: E.v("t"), p: "burning", v: E.lit(true) },
-			{ op: "set", e: E.v("t"), p: "lit", v: E.lit(true) },
-		],
-		reason: (ctx) => `${ctx.name(String(ctx.env.t))}燃起来了。`,
-	},
-	{
-		id: "gather",
-		open: true,
-		// desired 只含 inc player.berries（t 无法从 desired 反解），t 必须声明为 over 由世界枚举（首个成熟可达者）。
-		over: [{ var: "t", source: "entities", where: [P.eq(E.p("t", "ripe"), E.lit(true))] }],
-		when: [P.reach(E.v("t"))],
-		each: [
-			{ op: "inc", e: E.lit("player"), p: "berries", by: E.lit(1) },
-			{ op: "set", e: E.v("t"), p: "ripe", v: E.lit(false) },
-		],
-		reason: (ctx) => `你采下了一颗浆果。`,
-	},
+	{ id: "open.notopenable", reject: { when: [P.reach(E.v("entity")), P.neq(E.p("entity", "openable"), E.lit(true))], denial: { law: "open.notopenable", subject: E.v("entity") } } },
+	{ id: "denyAll.open", reject: { when: [], denial: { law: "denyAll.open", subject: E.v("entity") } } },
 ];
 
-/** 开放通道动词的兜底：无 proof 或无法则可解析时一律拒绝（proven 通道优先于本法则）。 */
-const doLaws: Law[] = [
-	{ id: "denyAll.do", reject: { when: [], denial: { law: "denyAll.do" } } },
+/** 点燃（原 openLaws.fire 迁为预设动词法则：source 有明火 → target 可燃）。 */
+const useLaws: Law[] = [
+	{
+		id: "use.ignite",
+		when: [
+			P.eq(E.p("source", "lit"), E.lit(true)),
+			P.reach(E.v("target")),
+			P.eq(E.p("target", "flammable"), E.lit(true)),
+			P.neq(E.p("target", "burning"), E.lit(true)),
+		],
+		each: [
+			{ op: "set", e: E.v("target"), p: "burning", v: E.lit(true) },
+			{ op: "set", e: E.v("target"), p: "lit", v: E.lit(true) },
+		],
+		denies: [
+			{ when: [P.neq(E.p("source", "lit"), E.lit(true))], denial: { law: "ignite.nolight", subject: E.v("source"), object: E.v("target") } },
+			{ when: [P.not(P.reach(E.v("target")))], denial: { law: "reach", subject: E.v("target"), reason: { k: "reachReason", e: E.v("target") } } },
+			{ when: [P.neq(E.p("target", "flammable"), E.lit(true))], denial: { law: "ignite.notflammable", subject: E.v("source"), object: E.v("target") } },
+			{ when: [P.eq(E.p("target", "burning"), E.lit(true))], denial: { law: "ignite.burning", subject: E.v("source"), object: E.v("target") } },
+		],
+		reason: (ctx) => `${ctx.name(String(ctx.env.target))}燃起来了。`,
+	},
+	{ id: "denyAll.use", reject: { when: [], denial: { law: "denyAll.use", subject: E.v("source"), object: E.v("target") } } },
+];
+
+/** 采集浆果（原 openLaws.gather 迁为预设动词法则：成熟可达的浆果丛 → 得 1 颗浆果）。 */
+const harvestLaws: Law[] = [
+	{
+		id: "harvest.berries",
+		when: [P.reach(E.v("bush")), P.eq(E.p("bush", "ripe"), E.lit(true))],
+		each: [
+			{ op: "inc", e: E.lit("player"), p: "berries", by: E.lit(1) },
+			{ op: "set", e: E.v("bush"), p: "ripe", v: E.lit(false) },
+		],
+		denies: [{ when: [P.eq(E.p("bush", "ripe"), E.lit(false))], denial: { law: "harvest.unripe", subject: E.v("bush") } }],
+		reason: (ctx) => `你采下了一颗浆果。`,
+	},
+	{ id: "denyAll.harvest", reject: { when: [], denial: { law: "denyAll.harvest", subject: E.v("bush") } } },
 ];
 
 /** 时间系统：燃烧计数 → 烧成灰烬；浆果丛再生。极简、全按属性键控。 */
@@ -322,18 +316,43 @@ const moveVerb: VerbDef = {
 
 const doVerb: VerbDef = {
 	label: "自由行动",
-	description: `提出一个没有被预设动词覆盖的自由动作。proof 格式：{ "claims": [可选前置事实，须全部为真], "desired": [期望后果，至少一条] }。世界只在开放法则中反向解析——你的期望后果能由某条法则精确产出时才授予，不能则拒绝。可授予的后果（desired）：
-- 刻痕: {"op":"set","entity":"<id>","prop":"marked","value":true}
-- 勘察: {"op":"set","entity":"<id>","prop":"examined","value":true}
-- 打开可开启物: {"op":"set","entity":"<id>","prop":"open","value":true}
-- 关闭可开启物: {"op":"set","entity":"<id>","prop":"open","value":false}
-- 点燃可达的可燃物（需附近有明火源）: {"op":"set","entity":"<id>","prop":"burning","value":true}
-- 采摘成熟浆果丛（得 1 颗浆果）: {"op":"inc","entity":"player","prop":"berries","by":1}
-- 拿起/放下/放入可持握物: {"op":"set","entity":"<id>","prop":"in","value":"<目标id>"}
-claims 示例：{"k":"reach","e":{"k":"lit","v":"<实体id>"}}、{"k":"exists","e":{"k":"lit","v":"<实体id>"}}、{"k":"cmp","a":{"k":"prop","e":{"k":"lit","v":"<id>"},"p":"<属性>"},"op":"eq","b":{"k":"lit","v":"<值>"}}。凭空改变材质、凭空创造/销毁实体、击杀生物等无对应法则的后果一律被拒。`,
+	description: `提出一个没有被预设动词覆盖的自由动作。proof 格式：{ "claims": [可选前置事实，须全部为真], "desired": [期望后果，至少一条] }。世界只允许更改软属性（access:"soft"）：刻痕 marked、勘察 examined（实体须可达）。结构性属性（位置 in、材质 material、明火 lit、燃烧 burning、开合 open、成熟 ripe、存活 alive 等）由世界法则管理，直接更改会被拒绝——开/关容器用 open、点燃用 use、采集用 harvest、移动用 move。`,
 	schema: Type.Object({}),
 	laws: doLaws,
-	fallback: "proven",
+	fallback: "soft",
+};
+
+const openVerb: VerbDef = {
+	label: "开合",
+	description: "打开或关闭一个可开启物（entity 用 open:true / false）。",
+	schema: Type.Object({
+		entity: Type.String({ description: "目标实体 id" }),
+		open: Type.Boolean({ description: "true 打开 / false 关闭" }),
+	}),
+	entityParams: ["entity"],
+	candidates: () => ({ open: [true, false] }),
+	laws: openVerbLaws,
+};
+
+const useVerb: VerbDef = {
+	label: "作用",
+	description: "用一件东西作用于另一件东西（点燃：source 必须有明火，target 必须可燃）。施动的东西必须拿得动且够得着。",
+	schema: Type.Object({
+		source: Type.String({ description: "施动实体 id（必须可持握且可达）" }),
+		target: Type.String({ description: "受动实体 id" }),
+	}),
+	entityParams: ["source", "target"],
+	instrumentParams: ["source"],
+	laws: useLaws,
+};
+
+const harvestVerb: VerbDef = {
+	label: "采集",
+	description: "从成熟的可达浆果丛采下一颗浆果（bush 是浆果丛实体 id）。",
+	schema: Type.Object({ bush: Type.String({ description: "浆果丛实体 id（必须成熟且可达）" }) }),
+	entityParams: ["bush"],
+	candidates: (sim) => ({ bush: sim.world.entities.filter((e) => e.props.ripe === true).map((e) => e.id) }),
+	laws: harvestLaws,
 };
 
 export const waste: GameDef = {
@@ -357,6 +376,9 @@ export const waste: GameDef = {
 	verbs: {
 		travel: travelVerb,
 		move: moveVerb,
+		open: openVerb,
+		use: useVerb,
+		harvest: harvestVerb,
 		do: doVerb,
 	},
 	world: {
@@ -369,6 +391,7 @@ export const waste: GameDef = {
 			{ id: "forest", name: "枯林", kind: "space", tags: ["landmark"], props: { space: true } },
 			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "camp", berries: 0 } },
 			{ id: "campfire", name: "火堆", kind: "structure", tags: ["fire"], props: { in: "camp", material: "wood", flammable: true, lit: true, burning: true, warm: true, lasting: true, grabbable: false } },
+			{ id: "torch", name: "火把", kind: "item", tags: ["light"], props: { in: "camp", material: "wood", flammable: true, lit: true, grabbable: true } },
 			{ id: "flint", name: "燧石", kind: "item", tags: ["stone"], props: { in: "camp", material: "stone", grabbable: true, sharp: true } },
 			{ id: "pot", name: "陶罐", kind: "container", tags: ["clay"], props: { in: "camp", material: "clay", openable: true, open: false, container: true } },
 			{ id: "seed", name: "旧种子", kind: "item", tags: ["seed"], props: { in: "pot", material: "seed", grabbable: true } },
@@ -395,7 +418,6 @@ export const waste: GameDef = {
 		],
 	},
 	systems: [burnTickSys, burnAshSys, growTickSys, growRipeSys],
-	openLaws,
 	denialTemplates: {
 		reach: (d, w) => d.reason ?? "它不在这里。",
 		"travel.stay": () => "你已经在目的地了。",
@@ -404,10 +426,22 @@ export const waste: GameDef = {
 		"move.hold": (d, w) => `${name(w, d.subject ?? "")}已经在你的手中。`,
 		"move.grabbable": (d, w) => `你搬不动${name(w, d.subject ?? "")}。`,
 		"move.dest": (d, w) => `${name(w, d.object ?? "")}？这里没有这个东西。`,
+		"open.already": (d, w) => `${name(w, d.subject ?? "")}已经开着。`,
+		"open.notopenable": (d, w) => `${name(w, d.subject ?? "")}打不开。`,
+		"ignite.nolight": (d, w) => `${name(w, d.subject ?? "")}没有火。`,
+		"ignite.notflammable": (d, w) => `${name(w, d.object ?? "")}烧不起来。`,
+		"ignite.burning": (d, w) => `${name(w, d.object ?? "")}已经在燃烧。`,
+		"harvest.unripe": (d, w) => `${name(w, d.subject ?? "")}还没有成熟。`,
+		"instrument.unholdable": (d, w) => `${name(w, d.subject ?? "")}太沉重，你拿不动它来施力。`,
+		"instrument.unreachable": (d, w) => `${name(w, d.subject ?? "")}在你够不到的地方，没法拿来使。`,
 		"denyAll.move": (d, w) => `你无法把${name(w, d.subject ?? "")}放到${name(w, d.object ?? "")}。`,
 		"denyAll.travel": (d, w) => `你无法前往${name(w, d.object ?? "")}。`,
+		"denyAll.open": (d, w) => `${name(w, d.subject ?? "")}没有变化。`,
+		"denyAll.use": (d, w) => `你用${name(w, d.subject ?? "")}碰了碰${name(w, d.object ?? "")}，什么也没有发生。`,
+		"denyAll.harvest": (d, w) => `${name(w, d.subject ?? "")}无法被采集。`,
 		"denyAll.do": () => "世界没有以这种方式回应。",
 		"proof.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
+		"soft.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
 		"invariant.integrity": () => "世界拒绝了这个变化。",
 	},
 	props: WASTE_PROPS,
@@ -421,6 +455,7 @@ export const waste: GameDef = {
 	hint: `世界法则（模拟层强制执行）：
 1. 荒原有五处地点，经路径（relations type "path"）连通；travel 只能沿路径前往相邻地点，凭空换地点被拒。
 2. 可持握（grabbable）物品可用 move 拿起（放到你手中）、放下（放到当前地点）、放入打开的容器；搬不动、够不着、目标不存在一律被拒。
-3. 自由动作走 do（开放通道）：只能提出开放法则声明的后果——刻痕、勘察、开/关容器、点燃可燃物（需附近有明火源）、采摘成熟浆果（每次 1 颗，采后需等浆果丛再生）、拿起/放下/放入。凭空改材质、凭空创造/销毁物体、击杀生物等无对应后果的请求一律被世界拒绝。
-4. 时间系统：燃烧 3 个时刻后烧成灰烬；浆果丛被采后约 5 个时刻再生。`,
+3. 开/关可开启物用 open；明火源（lit）用 use 点燃可燃物（flammable）；成熟（ripe）的可达浆果丛用 harvest 采下 1 颗浆果。
+4. 自由的环境动作走 do（soft 通道）：只能改变软属性——刻痕 marked、勘察 examined（实体须可达）。结构性属性（位置、材质、明火、燃烧、开合、成熟、存活等）由世界法则管理，直接改会被拒绝。
+5. 时间系统：燃烧 3 个时刻后烧成灰烬；浆果丛被采后约 5 个时刻再生。`,
 };

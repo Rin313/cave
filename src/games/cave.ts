@@ -38,7 +38,7 @@ const CAVE_PROPS: Record<string, PropDef> = {
 	space: { type: "boolean", label: "场景" },
 	container: { type: "boolean", label: "容器" },
 	isDoor: { type: "boolean", label: "门" },
-	marked: { type: "boolean", label: "刻痕", stylistic: true },
+	marked: { type: "boolean", label: "刻痕", stylistic: true, access: "soft" },
 	coins: { type: "number", label: "铜币" },
 };
 
@@ -178,8 +178,7 @@ const moveLaws: Law[] = [
 	},
 	{
 		id: "move.withWedge",
-		// 开放：抽出楔子的完整级联（解门卡 + 移动）——否则开放通道经 move.open 只会移动、门卡残留。
-		open: true,
+		// 抽出楔子的完整级联（解门卡 + 移动）
 		over: [{ var: "w", source: "entities", where: [P.eq(E.p("w", "wedgedBy"), E.v("entity"))] }],
 		when: [
 			P.reach(E.v("entity")),
@@ -211,11 +210,9 @@ const moveLaws: Law[] = [
 			denial: { law: "move.capacity", subject: E.v("entity"), object: E.v("dest") },
 		},
 	},
-	// 拿起/放下/放入的合并开放法则（替换原 hold2+place）：desired 绑定 entity/dest，
-	// 开放通道据此反查——不可持握（搬不动）或关着/非容器的目标无法被此法则产出，天然被拒。
+	// 拿起/放下/放入的合并法则：desired 绑定 entity/dest，移动由本法则裁决。
 	{
 		id: "move.open",
-		open: true,
 		when: [
 			P.reach(E.v("entity")),
 			P.eq(E.p("entity", "grabbable"), E.lit(true)),
@@ -360,16 +357,7 @@ const setLaws: Law[] = [
 	{ id: "denyAll.set", reject: { when: [], denial: { law: "denyAll.set", subject: E.v("entity"), prop: E.v("prop") } } },
 ];
 
-/** 开放通道法则：可标记可达实体（未被预设动词覆盖的自由动作示例——经此演示反向解析的重量）。 */
-const markLaw: Law = {
-	id: "mark",
-	open: true,
-	when: [P.reach(E.v("entity"))],
-	each: [{ op: "set", e: E.v("entity"), p: "marked", v: E.lit(true) }],
-	reason: (ctx) => `你在${ctx.name(String(ctx.env.entity))}上刻下了一道刻痕。`,
-};
-
-/** 开放通道动词的兜底：无 proof 或无法则可解析时一律拒绝（proven 通道优先于本法则）。 */
+/** 软通道动词（do）的兜底法则：无 proof 时一律拒绝（soft 授予在 fallback 通道进行）。 */
 const doLaws: Law[] = [
 	{ id: "denyAll.do", reject: { when: [], denial: { law: "denyAll.do" } } },
 ];
@@ -526,14 +514,15 @@ const setVerb: VerbDef = {
 	laws: setLaws,
 };
 
-/** 开放通道动词：无预设授予法则；proof 给出期望后果（desired）与可选前置事实（claims），
- *  世界在开放法则（Law.open）中反向解析——能由某法则产出该后果才经该法则提交，不能则拒绝。 */
+/** 软通道动词（do）：proof 给出期望后果（desired）与可选前置事实（claims），
+ *  世界以约束校验授予——实体须可见/可达、属性须注册为 access:"soft"（此处为 marked 刻痕），
+ *  结构性属性（材质/位置/燃烧/钱币等）一律拒绝。不再需要枚举 openLaws（去菜单化）。 */
 const doVerb: VerbDef = {
 	label: "行动",
-	description: "提出一个未被预设的动作。proof 结构：{ \"claims\": [前置事实，可选，如 {k:\"reach\",e:{k:\"lit\",v:\"<实体id>\"}}]，\"desired\": [期望后果，如 {op:\"set\",entity:\"<实体id>\",prop:\"<属性>\",value:<值>}] }。世界在开放法则中反向解析——能产出该后果才授予。当前可用的开放后果：给可达实体留下刻痕（desired=[{op:\"set\",entity:\"<id>\",prop:\"marked\",value:true}]）、拿起/放下/放入可持握物（desired=[{op:\"set\",entity:\"<id>\",prop:\"in\",value:\"<目标id>\"}]）。凭空改材质、传送搬不动的物体等会被拒绝。",
+	description: "提出一个未被预设动词覆盖的自由动作。proof 结构：{ \"claims\": [前置事实，可选], \"desired\": [期望后果，至少一条] }。世界只允许更改软属性（access:\"soft\"）：当前可写的是 marked 刻痕（desired=[{op:\"set\",entity:\"<id>\",prop:\"marked\",value:true}]，实体须可达）。结构性属性（位置 in、材质 material、明火 lit、燃烧 burning、钱币 coins 等）由世界法则管理，直接更改会被拒绝。",
 	schema: Type.Object({}),
 	laws: doLaws,
-	fallback: "proven",
+	fallback: "soft",
 };
 
 export const cave: GameDef = {
@@ -580,7 +569,6 @@ export const cave: GameDef = {
 		burnTickSys,
 		burnAshSys,
 	],
-	openLaws: [markLaw],
 	containerAccess,
 	denialTemplates: {
 		reach: (d, w) => d.reason ?? "它不在这里。",
@@ -610,6 +598,7 @@ export const cave: GameDef = {
 		"denyAll.move": (d, w) => `你无法把${name(w, d.subject ?? "")}放到${name(w, d.object ?? "")}。`,
 		"denyAll.do": () => "世界没有以这种方式回应。",
 		"proof.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
+		"soft.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
 		"invariant.integrity": () => "世界拒绝了这个变化。",
 		"invariant.fire.coherent": (d) => d.debug ?? "世界拒绝了这个变化。",
 		"invariant.coins.conserved": (d) => d.debug ?? "世界拒绝了这个变化。",

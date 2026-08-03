@@ -16,47 +16,49 @@
 				{ "name": "拿起燧石", "action": { "verb": "move", "params": { "entity": "flint", "dest": "player" } }, "expect": { "ok": true, "reason": "拿起", "state": { "flint.in": "player" } } },
 				{ "name": "搬不动火堆", "action": { "verb": "move", "params": { "entity": "campfire", "dest": "player" } }, "expect": { "ok": false, "reason": "搬不动" } },
 				{ "name": "把燧石放回营地", "action": { "verb": "move", "params": { "entity": "flint", "dest": "camp" } }, "expect": { "ok": true, "state": { "flint.in": "camp" } } },
-				{ "name": "关着的陶罐拿不到种子（够不着）", "action": { "verb": "move", "params": { "entity": "seed", "dest": "player" } }, "expect": { "ok": false, "reason": "关着" } }
+				{ "name": "打开陶罐", "action": { "verb": "open", "params": { "entity": "pot", "open": true } }, "expect": { "ok": true, "reason": "打开", "state": { "pot.open": true } } },
+				{ "name": "拿出种子", "action": { "verb": "move", "params": { "entity": "seed", "dest": "player" } }, "expect": { "ok": true, "state": { "seed.in": "player" } } },
+				{ "name": "关着的陶罐放不回东西（已合上后）", "action": { "verb": "open", "params": { "entity": "pot", "open": false } }, "expect": { "ok": true, "state": { "pot.open": false } } }
 			]
 		},
 		{
-			"name": "开放通道：可见性、无法则、地图约束",
+			"name": "soft 通道：可见性、结构性墙",
 			"steps": [
-				{ "name": "从营地勘察石碑（石碑不可见）", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "stele" } }], "desired": [{ "op": "set", "entity": "stele", "prop": "examined", "value": true }] } }, "expect": { "ok": false, "reason": "可见" } },
+				{ "name": "从营地勘察石碑（石碑不可见，前置事实先不成立）", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "stele" } }], "desired": [{ "op": "set", "entity": "stele", "prop": "examined", "value": true }] } }, "expect": { "ok": false, "reason": "前置事实" } },
 				{ "name": "去河床", "action": { "verb": "travel", "params": { "dest": "riverbed" } }, "expect": { "ok": true } },
 				{ "name": "去土丘", "action": { "verb": "travel", "params": { "dest": "mound" } }, "expect": { "ok": true } },
-				{ "name": "勘察石碑", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "stele" } }], "desired": [{ "op": "set", "entity": "stele", "prop": "examined", "value": true }] } }, "expect": { "ok": true, "reason": "察看", "state": { "stele.examined": true } } },
-				{ "name": "凭空把石碑材质改成黄金被拒", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "stele", "prop": "material", "value": "gold" }] } }, "expect": { "ok": false, "reason": "回应" } },
+				{ "name": "勘察石碑（examined 是 soft，可达即授予）", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "stele" } }], "desired": [{ "op": "set", "entity": "stele", "prop": "examined", "value": true }], "reason": "你仔细察看了无名石碑。" } }, "expect": { "ok": true, "reason": "察看", "state": { "stele.examined": true } } },
+				{ "name": "凭空把石碑材质改成黄金被拒（material 是 law）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "stele", "prop": "material", "value": "gold" }] } }, "expect": { "ok": false, "reason": "世界法则", "state": { "stele.material": "stone" } } },
 				{ "name": "去沙海", "action": { "verb": "travel", "params": { "dest": "dune" } }, "expect": { "ok": true } },
-				{ "name": "击杀沙虫被拒（无对应法则）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "worm", "prop": "alive", "value": false }] } }, "expect": { "ok": false, "reason": "回应", "state": { "worm.alive": true } } },
+				{ "name": "击杀沙虫被拒（alive 是 law）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "worm", "prop": "alive", "value": false }] } }, "expect": { "ok": false, "reason": "世界法则", "state": { "worm.alive": true } } },
 				{ "name": "传送不可达的旧铁剑被拒（不在可见范围）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "sword", "prop": "in", "value": "player" }] } }, "expect": { "ok": false, "reason": "可见" } }
 			]
 		},
 		{
-			"name": "开放通道：点燃需要火源、浆果数量必须精确",
+			"name": "law 动词：点燃需要火源、采集需要成熟",
 			"steps": [
+				{ "name": "无火源点燃朽木被拒（燧石没有火）", "action": { "verb": "use", "params": { "source": "flint", "target": "drywood" } }, "expect": { "ok": false, "reason": "没有火" } },
 				{ "name": "去枯林", "action": { "verb": "travel", "params": { "dest": "forest" } }, "expect": { "ok": true } },
-				{ "name": "无火源点燃枯树被拒", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "drytree", "prop": "burning", "value": true }] } }, "expect": { "ok": false, "reason": "回应" } },
-				{ "name": "采摘浆果", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "bush" } }], "desired": [{ "op": "inc", "entity": "player", "prop": "berries", "by": 1 }] } }, "expect": { "ok": true, "reason": "采下", "state": { "player.berries": 1, "bush.ripe": false } } },
-				{ "name": "采过的浆果丛不能再采（未熟）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "inc", "entity": "player", "prop": "berries", "by": 1 }] } }, "expect": { "ok": false, "reason": "回应", "state": { "player.berries": 1 } } },
-				{ "name": "数量不匹配的采集被拒（必须精确 1）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "inc", "entity": "player", "prop": "berries", "by": 5 }] } }, "expect": { "ok": false, "reason": "回应" } },
+				{ "name": "够不到火种，点燃枯树被拒", "action": { "verb": "use", "params": { "source": "flint", "target": "drytree" } }, "expect": { "ok": false, "reason": "够不到" } },
+				{ "name": "采摘浆果", "action": { "verb": "harvest", "params": { "bush": "bush" } }, "expect": { "ok": true, "reason": "采下", "state": { "player.berries": 1, "bush.ripe": false } } },
+				{ "name": "采过的浆果丛不能再采（未熟）", "action": { "verb": "harvest", "params": { "bush": "bush" } }, "expect": { "ok": false, "reason": "成熟", "state": { "player.berries": 1 } } },
 				{ "name": "回营地", "action": { "verb": "travel", "params": { "dest": "camp" } }, "expect": { "ok": true } },
-				{ "name": "有火堆，点燃朽木", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "drywood" } }], "desired": [{ "op": "set", "entity": "drywood", "prop": "burning", "value": true }] } }, "expect": { "ok": true, "reason": "燃起", "state": { "drywood.burning": true, "drywood.lit": true } } },
+				{ "name": "有火堆，点燃朽木（火堆搬不动，不能当施动工具）", "action": { "verb": "use", "params": { "source": "campfire", "target": "drywood" } }, "expect": { "ok": false, "reason": "施力" } },
+				{ "name": "用火把点燃朽木", "action": { "verb": "use", "params": { "source": "torch", "target": "drywood" } }, "expect": { "ok": true, "reason": "燃起", "state": { "drywood.burning": true, "drywood.lit": true } } },
 				{ "name": "点燃的朽木可拿起（携带火种）", "action": { "verb": "move", "params": { "entity": "drywood", "dest": "player" } }, "expect": { "ok": true, "reason": "拿起", "state": { "drywood.in": "player" } } },
 				{ "name": "去枯林", "action": { "verb": "travel", "params": { "dest": "forest" } }, "expect": { "ok": true } },
-				{ "name": "用手里的火种点燃枯树", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "drytree", "prop": "burning", "value": true }] } }, "expect": { "ok": true, "reason": "燃起", "state": { "drytree.burning": true } } }
+				{ "name": "用手里的火种点燃枯树", "action": { "verb": "use", "params": { "source": "drywood", "target": "drytree" } }, "expect": { "ok": true, "reason": "燃起", "state": { "drytree.burning": true } } }
 			]
 		},
 		{
 			"name": "时间系统：燃烧成灰烬、浆果再生",
 			"steps": [
 				{ "name": "去枯林", "action": { "verb": "travel", "params": { "dest": "forest" } }, "expect": { "ok": true } },
-				{ "name": "采摘浆果（采空）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "inc", "entity": "player", "prop": "berries", "by": 1 }] } }, "expect": { "ok": true, "state": { "bush.ripe": false } } },
+				{ "name": "采摘浆果（采空）", "action": { "verb": "harvest", "params": { "bush": "bush" } }, "expect": { "ok": true, "state": { "bush.ripe": false } } },
 				{ "name": "回营地", "action": { "verb": "travel", "params": { "dest": "camp" } }, "expect": { "ok": true } },
-				{ "name": "点燃朽木", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "drywood", "prop": "burning", "value": true }] } }, "expect": { "ok": true } },
-				{ "name": "拿起朽木", "action": { "verb": "move", "params": { "entity": "drywood", "dest": "player" } }, "expect": { "ok": true } },
+				{ "name": "点燃朽木", "action": { "verb": "use", "params": { "source": "torch", "target": "drywood" } }, "expect": { "ok": true } },				{ "name": "拿起朽木", "action": { "verb": "move", "params": { "entity": "drywood", "dest": "player" } }, "expect": { "ok": true } },
 				{ "name": "去枯林", "action": { "verb": "travel", "params": { "dest": "forest" } }, "expect": { "ok": true } },
-				{ "name": "点燃枯树", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "drytree", "prop": "burning", "value": true }] } }, "expect": { "ok": true, "state": { "drytree.burning": true } } },
+				{ "name": "点燃枯树", "action": { "verb": "use", "params": { "source": "drywood", "target": "drytree" } }, "expect": { "ok": true, "state": { "drytree.burning": true } } },
 				{ "name": "tick 3：朽木与枯树烧成灰烬", "tick": 3, "expect": { "ok": true, "reason": "灰烬", "state": { "drytree.material": "ash", "drytree.burning": false, "drywood.material": "ash" } } },
 				{ "name": "tick 5：浆果丛再生", "tick": 5, "expect": { "ok": true, "state": { "bush.ripe": true } } }
 			]

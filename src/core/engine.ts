@@ -86,6 +86,30 @@ function coerceValue(v: unknown): PropValue {
 	return String(v);
 }
 
+/** claim 里表达式位置的字段（模型偶发把实体引用写成裸 id 字符串而非 {k:"lit",v} 对象，
+ *  裸串直接求值会失败）。此函数把字符串裹成字面量表达式，避免浪费一次 tool call。
+ *  只裹表达式位字段，不裹 op/type/set 等元数据字段。 */
+const CLAIM_EXPR_FIELDS = new Set(["e", "a", "b", "from", "to", "t", "f"]);
+function wrapClaimExpr(v: unknown): unknown {
+	if (typeof v === "string") return { k: "lit", v };
+	if (Array.isArray(v)) return v.map(wrapClaimExpr);
+	if (v && typeof v === "object" && "k" in (v as object)) return v;
+	return v;
+}
+function normalizeProof(proof: Proof): Proof {
+	if (!proof.claims?.length) return proof;
+	const claims = proof.claims.map((c) => {
+		const o = c as unknown as Record<string, unknown>;
+		const out: Record<string, unknown> = { ...o };
+		for (const f of CLAIM_EXPR_FIELDS) {
+			if (f in out) out[f] = wrapClaimExpr(out[f]);
+		}
+		if ("xs" in out && Array.isArray(out.xs)) out.xs = (out.xs as unknown[]).map(wrapClaimExpr);
+		return out as Proof["claims"][number];
+	});
+	return { ...proof, claims };
+}
+
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
 interface ActGate {
 	active: boolean;
@@ -573,7 +597,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				Type.Object({ op: Type.Literal("relInc"), from: Type.String(), to: Type.String(), type: Type.String(), by: Type.Number() }),
 				Type.Object({ op: Type.Literal("relDel"), from: Type.String(), to: Type.String(), type: Type.String() }),
 			]),
-			{ description: "期望后果：世界会反查开放法则（Law.open），能由某法则产出该后果才授予——不会直接写入（仅能改动已存在实体）" },
+			{ description: "期望后果：经软通道（fallback:\"soft\" 动词）写入 access:\"soft\" 的环境属性——结构性属性（位置/材质/燃烧/钱币等）一律被世界拒绝；实体须可达，且值类型须与属性注册表一致" },
 		),
 		reason: Type.Optional(Type.String({ description: "世界腔陈述（可选，法则未提供理由时的缺省）" })),
 	});
@@ -637,7 +661,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 					verb: a.verb ?? "",
 					params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
 				};
-				const proof = a.proof ? (coerceValue(a.proof) as unknown as Proof) : undefined;
+				const proof = a.proof ? normalizeProof(coerceValue(a.proof) as unknown as Proof) : undefined;
 				const verb = def.verbs[action.verb];
 				if (!verb) {
 					return { ok: false, reason: messagesFor(def).unknownVerb(action.verb), changes: [], action, deniedBy: "rule" };
