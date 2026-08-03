@@ -10,7 +10,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
 import { Type } from "typebox";
-import { Simulation, TICK_VERB, messagesFor, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { checkAssertions } from "./util.ts";
+import type { Proof } from "./verify.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -249,7 +251,7 @@ export class Engine {
 		const revealed = [...visibleAfter].filter((id) => !visibleBefore.has(id));
 		const involved = this.involvedEntities(results, this.outcome.refusal, revealed);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, this.def.internalProps, pending, action.intent, revealed),
+			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, [...internalPropsOf(this.def)], pending, action.intent, revealed),
 			changes,
 			involved,
 		);
@@ -264,7 +266,7 @@ export class Engine {
 			: [];
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, state, results, undefined, instruction, this.def.internalProps, pending),
+			buildExpressionPrompt(this.sim, state, results, undefined, instruction, [...internalPropsOf(this.def)], pending),
 			changes,
 			this.involvedEntities(results, undefined, []),
 		);
@@ -328,8 +330,10 @@ export class Engine {
 	}
 
 	private async expressionPass(prompt: string, changes: Change[], involved: Set<string>): Promise<string> {
-		const internal = new Set(this.def.internalProps ?? []);
-		const visible = changes.filter((c) => !internal.has(c.prop));
+		const internal = internalPropsOf(this.def);
+		const visible = changes.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
+		// 声明校验的涉及集保留 #spawn/#destroy 变更（本回合新生的实体须可被 facts 提及），仅剔除内部属性变更。
+		const touchedChanges = changes.filter((c) => !internal.has(c.prop));
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const run = async (p: string): Promise<{ text: string; err: string | null }> => {
 			this.buf = [];
@@ -341,9 +345,9 @@ export class Engine {
 			const text = this.buf.join("");
 			const decl = this.parseDeclaration(text);
 			if (!decl) return { text, err: "缺少首行 [facts: ...] 结构化声明。" };
-			const declErr = this.validateDeclaration(decl, visible, pending, involved);
+			const declErr = this.validateDeclaration(decl, touchedChanges, pending, involved);
 			if (declErr) return { text, err: declErr };
-			const bodyErr = this.validateNarration(decl.body, visible, pending);
+			const bodyErr = this.validateNarration(decl.body, pending);
 			if (bodyErr) return { text: decl.body, err: bodyErr };
 			return { text: decl.body, err: null };
 		};
@@ -364,13 +368,19 @@ export class Engine {
 		return this.sim.serialize();
 	}
 
-	private validateNarration(text: string, changes: Change[], pending: Change[]): string | null {
+	private validateNarration(text: string, pending: Change[]): string | null {
 		if (!text.trim()) return "叙述为空。";
 		const leaked = this.leakageCheck(text);
 		if (leaked) return leaked;
-		const hook = this.def.validateText;
-		if (hook) {
-			const err = hook({ text, world: this.sim.world, changes, actor: this.sim.actor, pending });
+		const rules = this.def.assertionRules;
+		if (rules?.length) {
+			const err = checkAssertions(
+				{ text, world: this.sim.world, actor: this.sim.actor, pending },
+				rules,
+				this.def.negationWords ?? [],
+				this.def.sentencePunct,
+				this.def.assertionPunct,
+			);
 			if (err) return err;
 		}
 		return null;
@@ -380,7 +390,7 @@ export class Engine {
 	 *   - 结构化形态：JSON 键值对、声明头 [facts: 复现——任何语言下都是实现痕迹。
 	 *   - 「实现形状」的标识符：实体 id / 属性名中非纯小写单词者（含大写/数字/下划线等，如 wooden_chest、wedgedBy、burnTicks），
 	 *     在任何语言都不是自然词；纯小写自然词（chest / open）与散文同词，不作禁止。
-	 *   - 语言相关词汇约束是游戏的事：经 GameDef.forbiddenTerms / validateText 声明，引擎不感知语言。
+	 *   - 语言相关词汇约束是游戏的事：经 GameDef.forbiddenTerms / assertionRules 声明，引擎不感知语言。
 	 *  词边界策略：含非 ASCII 的术语用 includes（\b 对中文无效）；纯 ASCII 用词边界（避免命中英文子串）。 */
 	private leakageCheck(text: string): string | null {
 		if (/"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*(?=["{[]|true|false|null|-?\d)/.test(text)) {
@@ -474,6 +484,11 @@ function buildExpressionPrompt(
 ): string {
 	const internal = new Set(internalProps);
 	const lines: string[] = [`[当前状态]（JSON，唯一真相源）：`, state, ""];
+	const stylistic = stylisticPropsOf(sim.def);
+	if (stylistic.size) {
+		const list = [...stylistic].map((p) => `${p}（${propLabelOf(sim.def, p) ?? p}）`).join("、");
+		lines.push(`[可润饰属性] ${list}：描述这些属性时允许合理的文学润饰（如「刻痕斑驳」），但不得虚构其他状态、属性或后果。`, "");
+	}
 	if (sim.focus) {
 		const e = sim.world.entities.find((x) => x.id === sim.focus);
 		if (e) lines.push(`[焦点] ${e.name} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。叙述可围绕它展开，也可如实描写场景中其他可见实体；不得因此虚构该实体的任何状态。`, "");
@@ -481,7 +496,7 @@ function buildExpressionPrompt(
 	if (results.length) {
 		lines.push("本回合尝试：");
 		for (const r of results) {
-			const visible = r.changes.filter((c) => !internal.has(c.prop));
+			const visible = r.changes.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
 			const changes = visible.length
 				? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}`
 				: "";
@@ -495,7 +510,7 @@ function buildExpressionPrompt(
 	} else {
 		lines.push("没有任何改变。");
 	}
-	const pendingVisible = pending.filter((c) => !internal.has(c.prop));
+	const pendingVisible = pending.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
 	if (pendingVisible.length) {
 		lines.push("即将发生（下一时刻）：");
 		for (const c of pendingVisible) {
@@ -525,12 +540,50 @@ function buildExpressionPrompt(
 }
 
 function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
+	/** 开放通道的提案 schema（描述性：嵌套表达式用宽松类型，运行时经 coerceValue 清洗）。 */
+	const exprSchema = Type.Union([
+		Type.Object({ k: Type.Literal("lit"), v: Type.Any() }),
+		Type.Object({ k: Type.Literal("var"), name: Type.String() }),
+		Type.Object({ k: Type.Literal("prop"), e: Type.Any(), p: Type.String() }),
+		Type.Object({ k: Type.Literal("sum"), xs: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("max"), xs: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("min"), xs: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("if"), c: Type.Any(), t: Type.Any(), f: Type.Any() }),
+	]);
+	const claimSchema = Type.Union([
+		Type.Object({ k: Type.Literal("cmp"), a: exprSchema, op: Type.String(), b: exprSchema }),
+		Type.Object({ k: Type.Literal("in"), a: exprSchema, set: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("has"), e: exprSchema, p: Type.String() }),
+		Type.Object({ k: Type.Literal("exists"), e: exprSchema }),
+		Type.Object({ k: Type.Literal("reach"), e: exprSchema }),
+		Type.Object({ k: Type.Literal("rel"), from: exprSchema, to: exprSchema, type: Type.String(), op: Type.Optional(Type.String()), b: Type.Optional(exprSchema) }),
+		Type.Object({ k: Type.Literal("and"), xs: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("or"), xs: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("not"), p: Type.Any() }),
+	]);
+	const proofSchema = Type.Object({
+		claims: Type.Optional(Type.Array(claimSchema, { description: "前置事实（可选，逐条对当前世界求值，全部成立才进入解析；如材质/可达/持有断言）" })),
+		desired: Type.Array(
+			Type.Union([
+				Type.Object({ op: Type.Literal("set"), entity: Type.String(), prop: Type.String(), value: Type.Any() }),
+				Type.Object({ op: Type.Literal("inc"), entity: Type.String(), prop: Type.String(), by: Type.Number() }),
+				Type.Object({ op: Type.Literal("push"), entity: Type.String(), prop: Type.String(), value: Type.Any() }),
+				Type.Object({ op: Type.Literal("del"), entity: Type.String(), prop: Type.String() }),
+				Type.Object({ op: Type.Literal("relSet"), from: Type.String(), to: Type.String(), type: Type.String(), value: Type.Any() }),
+				Type.Object({ op: Type.Literal("relInc"), from: Type.String(), to: Type.String(), type: Type.String(), by: Type.Number() }),
+				Type.Object({ op: Type.Literal("relDel"), from: Type.String(), to: Type.String(), type: Type.String() }),
+			]),
+			{ description: "期望后果：世界会反查开放法则（Law.open），能由某法则产出该后果才授予——不会直接写入（仅能改动已存在实体）" },
+		),
+		reason: Type.Optional(Type.String({ description: "世界腔陈述（可选，法则未提供理由时的缺省）" })),
+	});
 	const actionSchema = Type.Union(
 		Object.entries(def.verbs).map(([name, v]) =>
 			Type.Object(
 				{
 					verb: Type.Literal(name),
 					params: v.schema,
+					proof: Type.Optional(proofSchema),
 				},
 				{ additionalProperties: false },
 			),
@@ -578,13 +631,13 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 					details: {},
 				};
 			}
-			const vis = sim.visible();
 			const run = (raw: unknown): StepResult => {
-				const a = raw as { verb?: string; params?: Record<string, unknown> };
+				const a = raw as { verb?: string; params?: Record<string, unknown>; proof?: unknown };
 				const action: Action = {
 					verb: a.verb ?? "",
 					params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
 				};
+				const proof = a.proof ? (coerceValue(a.proof) as unknown as Proof) : undefined;
 				const verb = def.verbs[action.verb];
 				if (!verb) {
 					return { ok: false, reason: messagesFor(def).unknownVerb(action.verb), changes: [], action, deniedBy: "rule" };
@@ -594,14 +647,17 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 					const known = Object.keys((verb.schema as { properties?: Record<string, unknown> }).properties ?? {}).join("/");
 					return { ok: false, reason: messagesFor(def).invalidParams(verb.label, known), changes: [], action, deniedBy: "rule" };
 				}
+				// 可见性须按当前状态逐动作计算：同一工具调用内的多动作（如先 travel 到新地点再移动实体）
+				// 不能沿用调用起始时的快照，否则后续动作会对旧位置做可见性裁决。
+				const curVis = sim.visible();
 				const invalid = (verb.entityParams ?? []).filter((p) => {
 					const id = action.params[p];
-					return typeof id === "string" && id.length > 0 && !vis.has(id);
+					return typeof id === "string" && id.length > 0 && !curVis.has(id);
 				});
 				if (invalid.length) {
 					return { ok: false, reason: messagesFor(def).invisibleEntity(invalid), changes: [], action, deniedBy: "rule" };
 				}
-				return sim.apply(action);
+				return sim.apply(action, proof);
 			};
 			if (params.refusal && !(params.actions?.length)) {
 				return { content: [{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label } }) }], details: {} };

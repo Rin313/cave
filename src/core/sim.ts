@@ -1,4 +1,6 @@
 import type { TObject } from "typebox";
+import { evaluateLaw, type ExprCtx, type Law } from "./expr.ts";
+import { resolveUnscripted, type Proof } from "./verify.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
 
@@ -23,10 +25,12 @@ export interface World {
 	entities: Entity[];
 	/** 显著性焦点：本回合动作/拒绝涉及的实体，跨回合指代锚点。 */
 	focus?: string | null;
-	/** 拒绝痕迹：实体 id → 玩家累计尝试/被拒次数（rule 与 denyAll 拒绝时累加）。 */
+	/** 拒绝痕迹：实体 id → 玩家累计尝试/被拒次数（法则拒绝时累加）。 */
 	traces?: Record<string, number>;
 	/** 关系边表：from→to 的 type 关系（信任/记忆/派系等）。游戏声明，规则以 deltas 变更。 */
 	relations?: Rel[];
+	/** 确定性实体 id 计数器：spawn 未显式指定 id 时派生（e0/e1/...）。 */
+	nextId?: number;
 }
 
 /** 结构化变更原语：法则产出 deltas，模拟层裁定提交。prop 支持点路径（如 relations.guard.trust）。
@@ -38,26 +42,23 @@ export type Delta =
 	| { op: "del"; entity: string; prop: string }
 	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean }
 	| { op: "relInc"; from: string; to: string; type: string; by: number }
-	| { op: "relDel"; from: string; to: string; type: string };
+	| { op: "relDel"; from: string; to: string; type: string }
+	| { op: "spawn"; id?: string; kind: string; name: string; tags?: string[]; props?: Record<string, PropValue> }
+	| { op: "destroy"; entity: string };
 
 export interface Change {
 	entity: string;
 	prop: string;
 	from: PropValue;
 	to: PropValue;
+	/** 变更来源（law:spread / rule:move / system:burnout / proof:...），审计与回滚依据。 */
+	src?: string;
 }
 
 /** 动作提案：由游戏声明的动词表（verb）驱动，参数由动词 schema 约束。 */
 export interface Action {
 	verb: string;
 	params: Record<string, PropValue>;
-}
-
-export interface RuleCtx {
-	world: World;
-	action: Action | null;
-	actor: string;
-	def: GameDef;
 }
 
 /** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言。 */
@@ -93,7 +94,50 @@ export interface Fact {
 	entities: string[];
 }
 
-/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
+/** 通用断言校验规则的输入（表达层调用）。 */
+export interface AssertionInput {
+	text: string;
+	world: World;
+	actor: string;
+	/** 即将发生（下一 tick）的变更，供弱断言豁免"预言"。 */
+	pending: Change[];
+}
+
+/** 通用断言校验规则（声明式）：游戏声明物理属性的断言词与"矛盾目标"，
+ *  core 用 scanClaims 执行——散文断言了与状态相反的事实即报错。引擎不感知语言，词表由游戏注入。 */
+export interface AssertionRule {
+	/** 被断言的物理属性（注册表中非 stylistic 的属性）。 */
+	prop: string;
+	/** 弱断言词：当前状态不成立、但"即将发生"（pending 中该实体该属性将成立）时豁免（合法预言）。 */
+	weak: string[];
+	/** 强断言词：必须当前成立，不豁免 pending。 */
+	strong?: string[];
+	/** 目标实体：当前状态与该断言"成立"相矛盾的实体（命中即幻觉）。 */
+	targets: (world: World, actor: string) => Entity[];
+	/** 弱断言词是否接受 pending 豁免（覆盖"即将成立"的预言实体）。缺省 true；
+	 *  如「持有」类断言（握着/手里）不接受预言豁免——当前不在手就是幻觉。 */
+	exemptPending?: boolean;
+	/** 命中时返回的错误文案。 */
+	error: (e: Entity) => string;
+}
+
+/** 属性类型。 */
+export type PropType = "string" | "number" | "boolean" | "id" | "any";
+
+/** 属性注册表条目：类型的声明、世界化标签、内部标记、可选值域。
+ *  取代 GameDef 的 internalProps（internal 标记）与 propLabels（label）。 */
+export interface PropDef {
+	type: PropType;
+	/** 世界化说法（拒绝/变更文本里的属性名）。 */
+	label?: string;
+	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验（从源头杜绝泄漏）。 */
+	internal?: boolean;
+	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性，如「刻痕斑驳」），
+	 *  不参与断言校验规则（assertionRules）；非润饰的物理属性须与状态严格一致。 */
+	stylistic?: boolean;
+}
+
+	/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
 export interface Denial {
 	/** 法则标识，如 "pry.soft"（审计与探测依据）。 */
 	law: string;
@@ -105,25 +149,9 @@ export interface Denial {
 	prop?: string;
 	/** 可选世界腔覆盖文本（如标准库返回的 prose）；缺省用 GameDef.denialTemplates。 */
 	reason?: string;
+	/** 审计用诊断（不进玩家文案；如 proof 通道的断言失败详情）。 */
+	debug?: string;
 }
-
-export interface RuleResult {
-	granted: boolean;
-	/** 授予时的世界腔陈述（可选，表达层可自由发挥；缺省由引擎生成）。 */
-	reason?: string;
-	changes?: Delta[];
-	/** 法则背书的结构化新事实（表达层的合法新事实词汇，防止模型发明后果）。 */
-	facts?: Fact[];
-	/** 因果涉及集：本法则涉及的全部实体（含未变更的因果源，如引燃木箱的火把）。声明校验依据。 */
-	involved?: string[];
-	/** 结构化拒绝（granted=false 时给出）。 */
-	denial?: Denial;
-}
-
-export type Rule = (ctx: RuleCtx) => RuleResult;
-
-/** 时间系统：每 tick 按注册顺序运行，产出 deltas。 */
-export type SystemDef = { id: string; run: Rule };
 
 /** 引擎保留伪动词：时间系统（tick）产出 StepResult 时的动作标识。
  *  不是游戏声明的动词，游戏不应声明同名动词；describeAction 据此渲染「时间流逝」。 */
@@ -145,7 +173,10 @@ export interface VerbDef {
 	propParams?: string[];
 	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
-	rules: Rule[];
+	/** 声明式法则（数据行，解释器裁决，短路语义：首个授予即裁决）。 */
+	laws?: Law[];
+	/** 无法则匹配时的降级：缺省 deny（由动词末尾的 denyAll.* 兜底法则拒绝）；proven 走断言核验通道（开放世界非预设动作）。 */
+	fallback?: "deny" | "proven";
 }
 
 export interface GameDef {
@@ -154,18 +185,27 @@ export interface GameDef {
 	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
-	systems?: SystemDef[];
-	/** 兜底法则：某动词所有法则未表态且无具体理由时调用。 */
-	denyAll?: Rule;
+	/** 时间系统：每 tick 按注册顺序运行的声明式法则（over/when/each/facts）。 */
+	systems?: Law[];
+	/** 开放通道法则：非预设动词（fallback:"proven"）反向解析的候选法则，按声明顺序短路。
+	 *  也可直接在某动词的 laws 上标 open:true（该法则同时服务预设与开放通道）。 */
+	openLaws?: Law[];
 	/** 结构化拒绝的世界腔渲染：按法则 id 提供模板。缺省返回通用兜底。 */
 	denialTemplates?: Record<string, (d: Denial, world: World) => string>;
 	hint?: string;
-	/** 属性展示名：拒绝/变更文本中属性名的世界化说法。 */
-	propLabels?: Record<string, string>;
-	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验。 */
-	internalProps?: string[];
-	/** 表达层后置校验钩子；pending 为即将发生（下一 tick）的变更，供钩子区分"预言"与"已发生"。 */
-	validateText?: (input: { text: string; world: World; changes: Change[]; actor: string; pending: Change[] }) => string | null;
+	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 与表达校验读 internal，
+	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
+	props?: Record<string, PropDef>;
+	/** 通用断言校验规则（声明式，取代 per-game 硬编码校验词表）。
+	 *  engine 在泄漏检查后自动执行：散文断言了与物理状态相反的事实即报错；stylistic 属性不入规则。
+	 *  weak 断言词按 pending（即将发生）豁免预言，strong 不豁免；exemptPending:false 的规则完全不豁免。 */
+	assertionRules?: AssertionRule[];
+	/** 否定词表（断言校验用）：断言词前近旁出现任一即跳过该断言。引擎不感知语言，由游戏注入。 */
+	negationWords?: string[];
+	/** 句子边界标点（断言校验用）：按此切分断言作用域。缺省按换行切分。 */
+	sentencePunct?: RegExp;
+	/** 词-实体相邻判定标点（断言校验用）：名称与断言词之间出现这些才算"不相邻"（跨主语误报拦截）。缺省同 sentencePunct。 */
+	assertionPunct?: RegExp;
 	/** 确定性回退摘要钩子。 */
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
@@ -183,8 +223,47 @@ export interface GameDef {
 	/** 额外禁止词：游戏自定义的实现术语（内部概念名等），表达校验按词边界匹配，不进散文。
 	 *  语言相关的词汇约束由游戏声明（引擎不感知语言）。 */
 	forbiddenTerms?: string[];
+	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
+	invariants?: Invariant[];
 	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
 	messages: Messages;
+}
+
+/** 不变式检查上下文：世界 + 游戏定义（注册表等）。 */
+export interface InvariantCtx {
+	def: GameDef;
+	actor: string;
+}
+
+/** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。 */
+export interface Invariant {
+	id: string;
+	check: (world: World, ctx: InvariantCtx) => string | null;
+}
+
+/** core 默认硬墙：引用完整性——实体 id 唯一、in/注册表 id 属性/关系端点/焦点指向存在的实体。
+ *  检测规则把世界改坏的 bug（悬空引用），任何提交都无法绕过。 */
+export function integrityInvariant(): Invariant {
+	return {
+		id: "integrity",
+		check: (world, ctx) => {
+			const ids = new Set(world.entities.map((e) => e.id));
+			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
+			const idProps = new Set<string>(["in"]);
+			for (const [k, p] of Object.entries(ctx.def.props ?? {})) if (p.type === "id") idProps.add(k);
+			for (const e of world.entities) {
+				for (const p of idProps) {
+					const v = e.props[p];
+					if (typeof v === "string" && v !== "" && !ids.has(v)) return `integrity: ${e.id}.${p} -> missing entity ${v}`;
+				}
+			}
+			for (const r of world.relations ?? []) {
+				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
+			}
+			if (world.focus && !ids.has(world.focus)) return "integrity: focus -> missing entity";
+			return null;
+		},
+	};
 }
 
 /** 获取游戏声明的用户可见文案（core 不内嵌任何语言，由游戏必填注入）。 */
@@ -192,17 +271,46 @@ export function messagesFor(def: GameDef): Messages {
 	return def.messages;
 }
 
+/** 从属性注册表计算内部属性集（不进序列化/变更/表达校验）。 */
+export function internalPropsOf(def: GameDef): Set<string> {
+	const s = new Set<string>();
+	for (const [k, p] of Object.entries(def.props ?? {})) if (p.internal) s.add(k);
+	return s;
+}
+
+/** 从属性注册表计算润饰属性集（表达层可文学润饰、不参与断言校验）。 */
+export function stylisticPropsOf(def: GameDef): Set<string> {
+	const s = new Set<string>();
+	for (const [k, p] of Object.entries(def.props ?? {})) if (p.stylistic) s.add(k);
+	return s;
+}
+
+/** 属性世界化标签（拒绝/变更文本中的说法；无则返回 undefined）。 */
+export function propLabelOf(def: GameDef, prop: string): string | undefined {
+	return def.props?.[prop]?.label;
+}
+
+/** 开放通道可反查的法则集：GameDef.openLaws + 全部动词法则中 open:true 者（按声明顺序）。 */
+export function openLawsOf(def: GameDef): Law[] {
+	return [
+		...(def.openLaws ?? []),
+		...Object.values(def.verbs).flatMap((v) => v.laws ?? []).filter((l) => l.open),
+	];
+}
+
 export interface StepResult {
 	ok: boolean;
 	reason: string;
 	changes: Change[];
 	action: Action;
-	/** 否决来源：具体法则给了世界性理由（rule），还是所有法则都未表态落到兜底（denyAll）。 */
+	/** 否决来源：具体法则给了世界性理由（rule），还是落到通用兜底（denyAll.* 法则）。 */
 	deniedBy?: "rule" | "denyAll";
 	/** 结构化拒绝（deniedBy=rule 时给出），供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
 	involved?: string[];
+	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
+	src?: string;
 }
 
 export function entity(world: World, id: string): Entity | undefined {
@@ -258,17 +366,6 @@ export function prop(world: World, id: string, path: string): PropValue {
 	const e = entity(world, id);
 	return e ? propGet(e, path) : null;
 }
-
-/** delta 构造器命名空间：法则用 D.set/inc/push/del 表达结构化变更。 */
-export const D = {
-	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
-	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
-	push: (entity: string, prop: string, value: PropValue): Delta => ({ op: "push", entity, prop, value }),
-	del: (entity: string, prop: string): Delta => ({ op: "del", entity, prop }),
-	relSet: (from: string, to: string, type: string, value: number | string | boolean): Delta => ({ op: "relSet", from, to, type, value }),
-	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
-	relDel: (from: string, to: string, type: string): Delta => ({ op: "relDel", from, to, type }),
-};
 
 /** 关系查询：from→to 的指定 type 的值（无则 null）。 */
 export function relVal(world: World, from: string, to: string, type: string): number | string | boolean | null {
@@ -331,14 +428,7 @@ export function inTreeVisible(world: World, actor: string, opts: ReachOpts = {})
 	return vis;
 }
 
-/** 标准库可达性拒绝构造：实体不可达时返回结构化拒绝（law=reach，散文由 GameDef.denialTemplates 渲染）。
- *  games 层规则里的可达性前置检查共用（cave 楔门/wuxia 取物等），不再各自复制实现。 */
-export function stdReachDenial(c: RuleCtx, id: string): { granted: false; denial: Denial } | null {
-	const acc = inTreeReach(c.world, c.actor, id, reachOptsFor(c.def));
-	if (acc.ok) return null;
-	return { granted: false, denial: { law: "reach", subject: id, reason: acc.reason } };
-}
-
+/** 序列化：可见实体 + 非内部属性 + 关系表（焦点优先）。 */
 export function serialize(world: World, visible: Iterable<string>, internalProps: readonly string[] = []): string {
 	const vis = new Set(visible);
 	const internal = new Set(internalProps);
@@ -390,14 +480,15 @@ export class Simulation {
 		s.world.focus = world.focus ?? null;
 		s.world.traces = world.traces ? { ...world.traces } : undefined;
 		s.world.relations = world.relations ? JSON.parse(JSON.stringify(world.relations)) : undefined;
+		s.world.nextId = world.nextId ?? 0;
 		return s;
 	}
 
 	/** 只读裁决（不提交、不入日志）：动作空间接地与法则探测共用。
 	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
-	check(action: Action): StepResult {
-		const r = this.adjudicateRaw(action);
-		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial };
+	check(action: Action, proof?: Proof): StepResult {
+		const r = this.adjudicateRaw(action, proof);
+		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src };
 	}
 
 	/** 探测专用：跳过施动工具前提（instrumentParams）检查的只读裁决。
@@ -413,7 +504,7 @@ export class Simulation {
 		}
 	}
 
-	private adjudicateRaw(action: Action): RawResult {
+	private adjudicateRaw(action: Action, proof?: Proof): RawResult {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
 			return { ok: false, reason: messagesFor(this.def).unknownVerb(action.verb), changes: [], deltas: [], action, deniedBy: "rule" };
@@ -422,21 +513,71 @@ export class Simulation {
 		if (inst) {
 			return { ok: false, reason: renderDenial(this.def, inst, this.world), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}
-		const ctx: RuleCtx = { world: this.world, action, actor: this.actor, def: this.def };
 		let denial: Denial | null = null;
-		for (const rule of verb.rules) {
-			const res = rule(ctx);
+		const lctx = this.exprCtx({ ...action.params, actor: this.actor });
+		for (const law of verb.laws ?? []) {
+			const res = evaluateLaw(lctx, law);
 			if (res.granted) {
-				return { ok: true, reason: res.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: res.changes ?? [], action, facts: res.facts, involved: res.involved };
+				return { ok: true, reason: res.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: res.deltas ?? [], action, facts: res.facts, involved: res.involved, src: `law:${law.id}` };
 			}
 			if (res.denial != null && denial == null) denial = res.denial;
 		}
-		const deniedBy: "rule" | "denyAll" = denial != null ? "rule" : "denyAll";
-		const denyAllDenial = !denial && this.def.denyAll ? this.def.denyAll(ctx).denial : null;
+		// proven 降级：fallback proven 且无具体法则拒绝（通用兜底 denyAll 法则不阻断）时走开放通道反向解析。
+		if (verb.fallback === "proven" && proof && (denial == null || denial.law.startsWith("denyAll."))) {
+			const vres = resolveUnscripted(lctx, openLawsOf(this.def), proof, { internalProps: internalPropsOf(this.def) });
+			if (vres.granted) {
+				return { ok: true, reason: vres.reason ?? proof.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: vres.deltas ?? [], action, facts: vres.facts, involved: vres.involved, src: `proof:${action.verb}@${vres.lawId}` };
+			}
+			if (vres.denial) denial = vres.denial;
+		}
+		// 通用兜底：无具体法则拒绝时，由动词末尾的 denyAll.* 兜底法则产出（deniedBy 据此分类）。
+		const deniedBy: "rule" | "denyAll" = denial != null && !denial.law.startsWith("denyAll.") ? "rule" : "denyAll";
 		const reason = denial != null
 			? renderDenial(this.def, denial, this.world)
-			: (denyAllDenial ? renderDenial(this.def, denyAllDenial, this.world) : messagesFor(this.def).noResponse);
-		return { ok: false, reason, changes: [], deltas: [], action, deniedBy, denial: denial ?? denyAllDenial ?? undefined };
+			: messagesFor(this.def).noResponse;
+		return { ok: false, reason, changes: [], deltas: [], action, deniedBy, denial: denial ?? undefined };
+	}
+
+	/** 构造表达式求值上下文：世界访问经闭包注入（expr 层零运行时依赖）。 */
+	private exprCtx(env: Record<string, PropValue>): ExprCtx {
+		const world = this.world;
+		const actor = this.actor;
+		return {
+			actor,
+			env,
+			prop: (id, path) => {
+				const e = entity(world, id);
+				return e ? propGet(e, path) : null;
+			},
+			hasProp: (id, path) => {
+				const e = entity(world, id);
+				if (!e) return false;
+				let cur: PropValue = e.props;
+				for (const k of path.split(".")) {
+					if (cur === null || typeof cur !== "object") return false;
+					if (Array.isArray(cur)) {
+						const i = Number(k);
+						if (Number.isNaN(i) || !(i in cur)) return false;
+						cur = cur[i]!;
+					} else {
+						const o = cur as Record<string, PropValue>;
+						if (!(k in o)) return false;
+						cur = o[k]!;
+					}
+				}
+				return true;
+			},
+			reach: (id) => inTreeReach(world, actor, id, reachOptsFor(this.def)).ok,
+			rel: (from, to, type) => relVal(world, from, to, type),
+			reachReason: (id) => {
+				const acc = inTreeReach(world, actor, id, reachOptsFor(this.def));
+				return acc.ok ? null : (acc.reason || null);
+			},
+			name: (id) => entity(world, id)?.name ?? id,
+			propLabel: (prop) => propLabelOf(this.def, prop),
+			entityIds: world.entities.map((e) => e.id),
+			visibleIds: [...this.visible()],
+		};
 	}
 
 	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（grabbable）且可达。
@@ -454,13 +595,51 @@ export class Simulation {
 		return null;
 	}
 
-	apply(action: Action): StepResult {
+	/** 提交 + 不变式硬墙：先快照，提交后校验；违反则回滚整个提交并拒绝（原子）。 */
+	private commitChecked(deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
+		const before = this.snapshot();
+		const changes = this.commit(deltas, src);
+		const inv = this.checkInvariants();
+		if (inv) {
+			// 回滚：先删掉提交期间新建的键（relations/nextId 等快照中不存在的），再整体恢复。
+			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
+			Object.assign(this.world, before);
+			const d: Denial = { law: `invariant.${inv.id}`, debug: inv.message };
+			return { ok: false, changes: [], denial: d, reason: renderDenial(this.def, d, this.world) };
+		}
+		return { ok: true, changes };
+	}
+
+	/** 运行全部不变式（core 默认引用完整性 + 游戏声明），返回首个违反者。 */
+	private checkInvariants(): { id: string; message: string } | null {
+		const list: Invariant[] = [integrityInvariant(), ...(this.def.invariants ?? [])];
+		for (const inv of list) {
+			const err = inv.check(this.world, { def: this.def, actor: this.actor });
+			if (err) return { id: inv.id, message: err };
+		}
+		return null;
+	}
+
+	apply(action: Action, proof?: Proof): StepResult {
 		const beforeVisible = this.visible();
-		const r = this.adjudicateRaw(action);
-		const changes = r.ok ? this.commit(r.deltas) : [];
-		let sr: StepResult = r.ok
-			? { ok: true, reason: r.reason, changes, action, facts: r.facts, involved: r.involved }
-			: { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial };
+		const r = this.adjudicateRaw(action, proof);
+		let sr: StepResult;
+		if (r.ok) {
+			const src = r.src ?? `action:${action.verb}`;
+			const cc = this.commitChecked(r.deltas, src);
+			if (!cc.ok) {
+				// 不变式硬墙拒绝同样维护焦点/拒绝痕迹（与普通拒绝一致）；subject 取动作首个实体参数。
+				// 返回的 sr.denial 与 updateFocus 用同一个带 subject 的 denial，保证两处口径一致。
+				const denial = cc.denial ? { ...cc.denial, subject: this.firstEntityParam(action) ?? undefined } : undefined;
+				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "rule", denial };
+				this.updateFocus({ ok: false, denial }, action, beforeVisible);
+				this.log.push(sr);
+				return sr;
+			}
+			sr = { ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src };
+		} else {
+			sr = { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial };
+		}
 
 		if (r.ok && this.def.reactiveSystems === true) {
 			const reactive = this.runSystems(true);
@@ -481,10 +660,10 @@ export class Simulation {
 	}
 
 	/** 焦点与拒绝痕迹的确定性维护。 */
-	private updateFocus(r: { ok: boolean; denial?: Denial }, action: Action, beforeVisible: Set<string>): void {
+	private updateFocus(r: { ok: boolean; denial?: Denial; involved?: string[] }, action: Action, beforeVisible: Set<string>): void {
 		if (r.ok) {
 			const revealed = [...this.visible()].filter((id) => id !== this.actor && !beforeVisible.has(id));
-			const id = revealed.length ? revealed[0] : this.firstEntityParam(action);
+			const id = revealed.length ? revealed[0] : (this.firstEntityParam(action) ?? r.involved?.find((x) => x !== this.actor));
 			if (id) this.world.focus = id;
 		} else {
 			const subj = r.denial?.subject;
@@ -590,7 +769,7 @@ export class Simulation {
 		const entityParams = new Set(verb.entityParams ?? []);
 		const propParams = verb.propParams ?? [];
 		const parts = Object.entries(action.params).map(([k, v]) => {
-			if (propParams.includes(k)) return this.def.propLabels?.[String(v)] ?? String(v);
+			if (propParams.includes(k)) return propLabelOf(this.def, String(v)) ?? String(v);
 			if (entityParams.has(k)) return name(v);
 			if (typeof v === "string") return name(v);
 			return String(v);
@@ -611,22 +790,39 @@ export class Simulation {
 	 *  silent=true 时不写日志（reactive 场景：事件已并入动作的 sr，避免重复记录）。 */
 	private runSystems(silent = false): StepResult[] {
 		const out: StepResult[] = [];
+		const emit = (sr: StepResult): void => {
+			if (!silent) this.log.push(sr);
+			out.push(sr);
+		};
 		for (const sys of this.def.systems ?? []) {
-			const ctx: RuleCtx = { world: this.world, action: null, actor: this.actor, def: this.def };
-			const res = sys.run(ctx);
-			if (res.granted && (res.changes?.length ?? 0) > 0) {
-				const changes = this.commit(res.changes ?? []);
-				const sr: StepResult = {
-					ok: true,
-					reason: res.reason ?? messagesFor(this.def).defaultReason,
-					changes,
+			const src = `system:${sys.id}`;
+			// 与动作裁决一致注入 actor 伪参数：系统法则的 when/each 可用 E.v("actor") 引用玩家。
+			const res = evaluateLaw(this.exprCtx({ actor: this.actor }), sys, true);
+			const deltas = res.deltas ?? [];
+			if (!res.granted || deltas.length === 0) continue;
+			const cc = this.commitChecked(deltas, src);
+			if (!cc.ok) {
+				emit({
+					ok: false,
+					reason: cc.reason ?? messagesFor(this.def).noResponse,
+					changes: [],
 					action: { verb: TICK_VERB, params: { n: this.world.time } },
-					facts: res.facts,
-					involved: res.involved,
-				};
-				if (!silent) this.log.push(sr);
-				out.push(sr);
+					deniedBy: "rule",
+					denial: cc.denial,
+					src,
+				});
+				continue;
 			}
+			emit({
+				ok: true,
+				reason: res.reason ?? messagesFor(this.def).defaultReason,
+				changes: cc.changes,
+				action: { verb: TICK_VERB, params: { n: this.world.time } },
+				facts: res.facts,
+				// 自动派生 id 的 spawn 无法在 deltas 阶段预知实体 id，须并入提交后的 #spawn 变更实体。
+				involved: [...new Set([...(res.involved ?? []), ...cc.changes.filter((c) => c.prop === "#spawn").map((c) => String(c.to))])],
+				src,
+			});
 		}
 		return out;
 	}
@@ -643,7 +839,7 @@ export class Simulation {
 	}
 
 	serialize(): string {
-		return serialize(this.world, this.visible(), this.def.internalProps);
+		return serialize(this.world, this.visible(), [...internalPropsOf(this.def)]);
 	}
 
 	/** 序列化投影：映射/表达 prompt 用的状态呈现。游戏可声明 def.digest 覆盖。 */
@@ -652,7 +848,7 @@ export class Simulation {
 		return this.serialize();
 	}
 
-	private commit(deltas: Delta[]): Change[] {
+	private commit(deltas: Delta[], src: string): Change[] {
 		const changes: Change[] = [];
 		const rels = (this.world.relations = this.world.relations ?? []);
 		const upsertRel = (from: string, to: string, type: string, value: number | string | boolean) => {
@@ -661,11 +857,45 @@ export class Simulation {
 			else rels.push({ from, to, type, value });
 		};
 		for (const d of deltas) {
+			if (d.op === "spawn") {
+				const id = d.id ?? `e${this.world.nextId ?? 0}`;
+				if (!this.world.entities.some((x) => x.id === id)) {
+					this.world.entities.push({
+						id,
+						kind: d.kind,
+						name: d.name,
+						tags: d.tags ?? [],
+						props: d.props ?? {},
+					});
+					changes.push({ entity: id, prop: "#spawn", from: null, to: id, src });
+				}
+				if (!d.id) this.world.nextId = (this.world.nextId ?? 0) + 1;
+				continue;
+			}
+			if (d.op === "destroy") {
+				if (!entity(this.world, d.entity)) continue;
+				this.world.entities = this.world.entities.filter((x) => x.id !== d.entity);
+				if (rels.length) {
+					const filtered = rels.filter((r) => r.from !== d.entity && r.to !== d.entity);
+					rels.length = 0;
+					rels.push(...filtered);
+				}
+				if (this.world.focus === d.entity) this.world.focus = null;
+				if (this.world.traces) delete this.world.traces[d.entity];
+				const refProps = Object.entries(this.def.props ?? {}).filter(([, p]) => p.type === "id").map(([k]) => k);
+				for (const x of this.world.entities) {
+					for (const p of refProps) {
+						if (x.props[p] === d.entity) x.props[p] = null;
+					}
+				}
+				changes.push({ entity: d.entity, prop: "#destroy", from: d.entity, to: null, src });
+				continue;
+			}
 			if (d.op === "relSet") {
 				const from = relVal(this.world, d.from, d.to, d.type);
 				if (from === d.value) continue;
 				upsertRel(d.from, d.to, d.type, d.value);
-				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: d.value });
+				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: d.value, src });
 				continue;
 			}
 			if (d.op === "relInc") {
@@ -673,7 +903,7 @@ export class Simulation {
 				if (!Number.isFinite(prev)) continue;
 				const to = prev + d.by;
 				upsertRel(d.from, d.to, d.type, to);
-				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from: prev, to });
+				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from: prev, to, src });
 				continue;
 			}
 			if (d.op === "relDel") {
@@ -681,7 +911,7 @@ export class Simulation {
 				if (from === null) continue;
 				const idx = rels.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
 				if (idx >= 0) rels.splice(idx, 1);
-				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: null });
+				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: null, src });
 				continue;
 			}
 			const e = entity(this.world, d.entity);
@@ -690,24 +920,24 @@ export class Simulation {
 				const from = propGet(e, d.prop);
 				if (from === d.value) continue;
 				propSet(e, d.prop, d.value);
-				changes.push({ entity: d.entity, prop: d.prop, from, to: d.value });
+				changes.push({ entity: d.entity, prop: d.prop, from, to: d.value, src });
 			} else if (d.op === "inc") {
 				const from = Number(propGet(e, d.prop) ?? 0);
 				if (!Number.isFinite(from)) continue;
 				const to = from + d.by;
 				propSet(e, d.prop, to);
-				changes.push({ entity: d.entity, prop: d.prop, from, to });
+				changes.push({ entity: d.entity, prop: d.prop, from, to, src });
 			} else if (d.op === "push") {
 				const prev = propGet(e, d.prop);
 				const arr = Array.isArray(prev) ? [...(prev as PropValue[])] : [];
 				arr.push(d.value);
 				propSet(e, d.prop, arr);
-				changes.push({ entity: d.entity, prop: d.prop, from: prev, to: arr });
+				changes.push({ entity: d.entity, prop: d.prop, from: prev, to: arr, src });
 			} else if (d.op === "del") {
 				const from = propGet(e, d.prop);
 				if (from === null) continue;
 				propSet(e, d.prop, null);
-				changes.push({ entity: d.entity, prop: d.prop, from, to: null });
+				changes.push({ entity: d.entity, prop: d.prop, from, to: null, src });
 			}
 		}
 		return changes;
