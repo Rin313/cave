@@ -1,6 +1,7 @@
 import type { TObject } from "typebox";
 import { evaluateLaw, matchPred, type ExprCtx, type Law } from "./expr.ts";
 import { collectEntityIds, describeClaim, type Proof } from "./verify.ts";
+import { roll as rollDice } from "./util.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
 
@@ -579,6 +580,8 @@ export class Simulation {
 			propLabel: (prop) => propLabelOf(this.def, prop),
 			entityIds: world.entities.map((e) => e.id),
 			visibleIds: [...this.visible()],
+			roll: (key, sides) => rollDice(world, key, sides),
+			time: world.time,
 		};
 	}
 

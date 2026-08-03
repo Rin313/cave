@@ -31,6 +31,17 @@ export function collectEntityIds(ctx: ExprCtx, node: Pred | Expr, out: Set<strin
 		case "min":
 			for (const x of node.xs) collectEntityIds(ctx, x, out);
 			break;
+		case "binop":
+			collectEntityIds(ctx, node.a, out);
+			collectEntityIds(ctx, node.b, out);
+			break;
+		case "roll":
+			collectEntityIds(ctx, node.key, out);
+			collectEntityIds(ctx, node.sides, out);
+			break;
+		case "reachReason":
+			collectEntityIds(ctx, node.e, out);
+			break;
 		case "if":
 			collectEntityIds(ctx, node.c, out);
 			collectEntityIds(ctx, node.t, out);
@@ -74,7 +85,10 @@ function fmtExpr(ctx: ExprCtx, e: Expr): string {
 		if (typeof e.v === "string" && ctx.entityIds.includes(e.v)) return ctx.name(e.v);
 		return String(e.v);
 	}
-	if (e.k === "var") return ctx.name(String(ctx.env[e.name] ?? ""));
+	if (e.k === "var") return ctx.name(String(evalExpr(ctx, e) ?? ""));
+	if (e.k === "binop") return `(${fmtExpr(ctx, e.a)} ${e.op} ${fmtExpr(ctx, e.b)})`;
+	if (e.k === "time") return "此刻";
+	if (e.k === "roll") return `骰子(${fmtExpr(ctx, e.key)}, ${fmtExpr(ctx, e.sides)}面)`;
 	return "…";
 }
 

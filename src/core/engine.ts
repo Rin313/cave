@@ -572,7 +572,10 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 		Type.Object({ k: Type.Literal("sum"), xs: Type.Array(Type.Any()) }),
 		Type.Object({ k: Type.Literal("max"), xs: Type.Array(Type.Any()) }),
 		Type.Object({ k: Type.Literal("min"), xs: Type.Array(Type.Any()) }),
+		Type.Object({ k: Type.Literal("binop"), op: Type.String({ description: "+ - * / %" }), a: Type.Any(), b: Type.Any() }),
 		Type.Object({ k: Type.Literal("if"), c: Type.Any(), t: Type.Any(), f: Type.Any() }),
+		Type.Object({ k: Type.Literal("time") }),
+		Type.Object({ k: Type.Literal("roll"), key: Type.Any(), sides: Type.Any() }),
 	]);
 	const claimSchema = Type.Union([
 		Type.Object({ k: Type.Literal("cmp"), a: exprSchema, op: Type.String(), b: exprSchema }),

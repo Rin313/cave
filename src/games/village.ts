@@ -1,0 +1,301 @@
+import type { AssertionRule, Entity, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
+import { entity, inTreeVisible, internalPropsOf } from "../core/sim.ts";
+import { sumProp } from "../core/util.ts";
+import { E, P, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
+import { Type } from "typebox";
+
+/**
+ * era/DoL 极研究探针：河畔村。
+ * 用现有 core 原语（零 core 改动）构造最小"强一致数值系统"：
+ * 多尺度时间调度、三数值互锁、经济守恒、NPC 关系、顺序过程（阶段链）。
+ * 验证目标：core 是否服务 era/DoL 极；缺的是机制还是原语。
+ */
+
+const VILLAGE_PROPS: Record<string, PropDef> = {
+	"in": { type: "id", label: "位置" },
+	actor: { type: "boolean", internal: true },
+	space: { type: "boolean", label: "场景" },
+	grabbable: { type: "boolean", label: "可持握" },
+	alive: { type: "boolean", label: "存活" },
+	hp: { type: "number", label: "体力" },
+	fatigue: { type: "number", label: "疲劳" },
+	satiety: { type: "number", label: "饱腹" },
+	down: { type: "boolean", label: "状态" },
+	coins: { type: "number", label: "铜币" },
+	berries: { type: "number", label: "浆果" },
+	ripe: { type: "boolean", label: "成熟" },
+	price: { type: "number", label: "价钱" },
+	phase: { type: "number", label: "阶段" },
+	supply: { type: "boolean", label: "出水量" },
+	aggressive: { type: "boolean", label: "攻击性" },
+};
+
+const PROP_LABELS: Record<string, string> = Object.fromEntries(
+	Object.entries(VILLAGE_PROPS).filter(([, p]) => p.label).map(([k, p]) => [k, p.label!]),
+);
+
+function name(w: World, id: string): string {
+	return entity(w, id)?.name ?? id;
+}
+
+function summarizeVillage(input: { world: World; changes: import("../core/sim.ts").Change[]; actor: string }): string {
+	const { world, changes, actor } = input;
+	const player = entity(world, actor);
+	const bits: string[] = [];
+	if (player) {
+		bits.push(`体力 ${player.props.hp ?? 0}，疲劳 ${player.props.fatigue ?? 0}，饱腹 ${player.props.satiety ?? 0}，铜币 ${player.props.coins ?? 0}，浆果 ${player.props.berries ?? 0}`);
+		if (player.props.down === true) bits.push("你昏迷着。");
+	}
+	return ["你站在河畔村。"].concat(bits, changes.filter((c) => !c.prop.startsWith("#")).map((c) => `变更：${name(world, c.entity)}的${PROP_LABELS[c.prop] ?? c.prop} ${String(c.from)} → ${String(c.to)}`)).join("\n");
+}
+
+function digestVillage(sim: Simulation): string {
+	const vis = sim.visible();
+	const internal = internalPropsOf(sim.def);
+	const items = sim.world.entities
+		.filter((e) => vis.has(e.id))
+		.map((e) => ({
+			id: e.id,
+			name: e.name,
+			kind: e.kind,
+			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
+		}));
+	const rels = (sim.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
+	return JSON.stringify({ time: sim.world.time, relations: rels, entities: items }, null, 2);
+}
+
+/** 老店主对玩家的信任：>=2 时米价 8 折（关系边 → 经济耦合，算术表达式：10 - 折扣）。 */
+const trustPred: { k: "rel"; from: Expr; to: Expr; type: string; op: "gte"; b: Expr } = {
+	k: "rel", from: E.lit("merchant"), to: E.lit("player"), type: "信任", op: "gte", b: E.lit(2),
+};
+const priceExpr = (sign: 1 | -1): Expr =>
+	E.mul(E.lit(sign), E.sub(E.lit(10), { k: "if", c: trustPred, t: E.lit(2), f: E.lit(0) }));
+
+const gatherLaws: Law[] = [
+	{ id: "gather.take", when: [P.reach(E.v("entity")), P.eq(E.p("entity", "grabbable"), E.lit(true)), P.neq(E.p("entity", "in"), E.v("actor"))], each: [{ op: "set", e: E.v("entity"), p: "in", v: E.v("actor") }], reason: (ctx) => `你拾起了${ctx.name(String(ctx.env.entity))}。` },
+	{ id: "gather.reach", reject: { when: [P.not(P.reach(E.v("entity")))], denial: { law: "reach", subject: E.v("entity"), reason: { k: "reachReason", e: E.v("entity") } } } },
+	{ id: "gather.grabbable", reject: { when: [P.reach(E.v("entity")), P.neq(E.p("entity", "grabbable"), E.lit(true))], denial: { law: "gather.grabbable", subject: E.v("entity") } } },
+	{ id: "denyAll.gather", reject: { when: [], denial: { law: "denyAll.gather", subject: E.v("entity") } } },
+];
+
+const eatLaws: Law[] = [
+	{ id: "eat.berry", when: [P.gte(E.p("actor", "berries"), E.lit(1))], each: [{ op: "inc", e: E.v("actor"), p: "berries", by: E.lit(-1) }, { op: "inc", e: E.v("actor"), p: "satiety", by: E.lit(25) }, { op: "inc", e: E.v("actor"), p: "hp", by: E.lit(5) }], reason: () => "你吃下了一颗浆果，肚子舒服了些。" },
+	{ id: "eat.none", reject: { when: [P.eq(E.p("actor", "berries"), E.lit(0))], denial: { law: "eat.none" } } },
+	{ id: "denyAll.eat", reject: { when: [], denial: { law: "denyAll.eat" } } },
+];
+
+const restLaws: Law[] = [
+	{ id: "rest.down", when: [P.eq(E.p("actor", "down"), E.lit(true))], each: [{ op: "set", e: E.v("actor"), p: "down", v: E.lit(false) }, { op: "set", e: E.v("actor"), p: "fatigue", v: E.lit(0) }, { op: "set", e: E.v("actor"), p: "hp", v: E.lit(30) }, { op: "set", e: E.v("actor"), p: "satiety", v: E.lit(10) }], reason: () => "你昏昏沉沉睡了一夜，醒来后重新站起。" },
+	{ id: "rest.normal", when: [P.neq(E.p("actor", "down"), E.lit(true))], each: [{ op: "set", e: E.v("actor"), p: "fatigue", v: E.lit(0) }, { op: "inc", e: E.v("actor"), p: "hp", by: E.lit(8) }, { op: "inc", e: E.v("actor"), p: "satiety", by: E.lit(-5) }], reason: () => "你歇了歇，缓过劲来。" },
+	{ id: "denyAll.rest", reject: { when: [], denial: { law: "denyAll.rest" } } },
+];
+
+const talkLaws: Law[] = [
+	{ id: "talk.nice", when: [P.reach(E.v("target"))], each: [{ op: "relInc", from: E.lit("merchant"), to: E.lit("player"), type: "信任", by: E.lit(1) }], reason: (ctx) => `你和${ctx.name(String(ctx.env.target))}攀谈了一阵，关系亲近了些。` },
+	{ id: "talk.bored", reject: { when: [P.reach(E.v("target")), { ...trustPred, op: "gte", b: E.lit(5) }], denial: { law: "talk.bored", subject: E.v("target") } } },
+	{ id: "denyAll.talk", reject: { when: [], denial: { law: "denyAll.talk", subject: E.v("target") } } },
+];
+
+const buyLaws: Law[] = [
+	{ id: "buy.flour", when: [P.reach(E.lit("flour")), P.eq(E.p("flour", "in"), E.lit("village")), P.gte(E.p("actor", "coins"), priceExpr(1))], each: [{ op: "set", e: E.lit("flour"), p: "in", v: E.lit("player") }, { op: "inc", e: E.lit("merchant"), p: "coins", by: priceExpr(1) }, { op: "inc", e: E.v("actor"), p: "coins", by: priceExpr(-1) }], reason: () => "你用铜币买了一袋米。" },
+	{ id: "buy.held", reject: { when: [P.eq(E.p("flour", "in"), E.v("actor"))], denial: { law: "buy.held" } } },
+	{ id: "buy.broke", reject: { when: [P.lt(E.p("actor", "coins"), priceExpr(1))], denial: { law: "buy.broke" } } },
+	{ id: "denyAll.buy", reject: { when: [], denial: { law: "denyAll.buy" } } },
+];
+
+const sellLaws: Law[] = [
+	{ id: "sell.flour", when: [P.eq(E.p("flour", "in"), E.v("actor"))], each: [{ op: "set", e: E.lit("flour"), p: "in", v: E.lit("village") }, { op: "inc", e: E.v("actor"), p: "coins", by: E.lit(5) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-5) }], reason: () => "你把一袋米卖回给了老店主。" },
+	{ id: "sell.notheld", reject: { when: [P.neq(E.p("flour", "in"), E.v("actor"))], denial: { law: "sell.notheld" } } },
+	{ id: "denyAll.sell", reject: { when: [], denial: { law: "denyAll.sell" } } },
+];
+
+const harvestLaws: Law[] = [
+	{ id: "harvest.bush", when: [P.reach(E.v("bush")), P.eq(E.p("bush", "ripe"), E.lit(true))], each: [{ op: "inc", e: E.v("actor"), p: "berries", by: E.lit(1) }, { op: "set", e: E.v("bush"), p: "ripe", v: E.lit(false) }], reason: () => "你采下了一颗浆果。" },
+	{ id: "harvest.unripe", reject: { when: [P.eq(E.p("bush", "ripe"), E.lit(false))], denial: { law: "harvest.unripe", subject: E.v("bush") } } },
+	{ id: "denyAll.harvest", reject: { when: [], denial: { law: "denyAll.harvest", subject: E.v("bush") } } },
+];
+
+/** 顺序过程（阶段链）：清理 → 修葺 → 封底。每步有显式顺序守卫（phase == N），拒绝走具体法则而非 denyAll。
+ *  常量实体直接写 E.p("well","phase")——var 回退把名字解析为实体 id，无需 E.prop(E.lit(...))。 */
+const wellClearLaws: Law[] = [
+	{ id: "well.clear", when: [P.reach(E.lit("well")), P.eq(E.p("well", "phase"), E.lit(0))], each: [{ op: "inc", e: E.lit("well"), p: "phase", by: E.lit(1) }], reason: () => "你清理了枯井里的淤泥。" },
+	{ id: "well.order", reject: { when: [P.neq(E.p("well", "phase"), E.lit(0))], denial: { law: "well.order", subject: E.lit("well") } } },
+	{ id: "denyAll.clear", reject: { when: [], denial: { law: "denyAll.clear", subject: E.lit("well") } } },
+];
+
+const wellFixLaws: Law[] = [
+	{ id: "well.fix", when: [P.reach(E.lit("well")), P.eq(E.p("well", "phase"), E.lit(1)), P.eq(E.p("timber", "in"), E.v("actor"))], each: [{ op: "inc", e: E.lit("well"), p: "phase", by: E.lit(1) }], reason: () => "你用木料加固了井壁。" },
+	{ id: "well.order", reject: { when: [P.neq(E.p("well", "phase"), E.lit(1))], denial: { law: "well.order", subject: E.lit("well") } } },
+	{ id: "well.needtimber", reject: { when: [P.neq(E.p("timber", "in"), E.v("actor"))], denial: { law: "well.needtimber", subject: E.lit("well") } } },
+	{ id: "denyAll.fix", reject: { when: [], denial: { law: "denyAll.fix", subject: E.lit("well") } } },
+];
+
+const wellSealLaws: Law[] = [
+	{ id: "well.seal", when: [P.reach(E.lit("well")), P.eq(E.p("well", "phase"), E.lit(2))], each: [{ op: "inc", e: E.lit("well"), p: "phase", by: E.lit(1) }, { op: "set", e: E.lit("well"), p: "supply", v: E.lit(true) }, { op: "inc", e: E.v("actor"), p: "coins", by: E.lit(10) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-10) }], reason: () => "你为枯井封好了底，清泉涌出！老店主赏了你十枚铜币。" },
+	{ id: "well.order", reject: { when: [P.neq(E.p("well", "phase"), E.lit(2))], denial: { law: "well.order", subject: E.lit("well") } } },
+	{ id: "denyAll.seal", reject: { when: [], denial: { law: "denyAll.seal", subject: E.lit("well") } } },
+];
+
+/** 驱逐野狗：伤害 = -(2 + 骰子 d3)，随 tick 变化（roll 是 World 纯函数，check/apply/dryTick 一致）。 */
+const dogBite = (): Expr => E.mul(E.lit(-1), E.add(E.lit(2), E.roll(E.lit("dog.bite"), E.lit(3))));
+
+const subdueLaws: Law[] = [
+	{ id: "dog.chase", when: [P.reach(E.v("dog")), P.eq(E.p("dog", "alive"), E.lit(true)), P.lt(E.p("actor", "fatigue"), E.lit(40))], each: [{ op: "set", e: E.v("dog"), p: "alive", v: E.lit(false) }, { op: "inc", e: E.v("actor"), p: "hp", by: dogBite() }], reason: (ctx) => `你抄起家伙赶跑了${ctx.name(String(ctx.env.dog))}，被它咬了一口。` },
+	{ id: "dog.gone", reject: { when: [P.reach(E.v("dog")), P.neq(E.p("dog", "alive"), E.lit(true))], denial: { law: "dog.gone", subject: E.v("dog") } } },
+	{ id: "dog.tired", reject: { when: [P.reach(E.v("dog")), P.gte(E.p("actor", "fatigue"), E.lit(40))], denial: { law: "dog.tired", subject: E.v("dog") } } },
+	{ id: "denyAll.subdue", reject: { when: [], denial: { law: "denyAll.subdue", subject: E.v("dog") } } },
+];
+
+/** 软通道动词（do）：era 语境下结构性墙照常（凭空铸币被拒）。 */
+const doLaws: Law[] = [
+	{ id: "denyAll.do", reject: { when: [], denial: { law: "denyAll.do" } } },
+];
+
+/** 侦察：roll-in-when 演示——运气门槛（骰子 >= 3 命中得 2 铜币；守恒：从店主账上扣）。 */
+const scoutLaws: Law[] = [
+	{ id: "scout.luck", when: [P.reach(E.lit("merchant")), P.gte(E.roll(E.lit("find.coin"), E.lit(4)), E.lit(3))], each: [{ op: "inc", e: E.v("actor"), p: "coins", by: E.lit(2) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-2) }], reason: () => "你四处翻了翻，在墙角捡到了两枚铜币。" },
+	{ id: "scout.unlucky", reject: { when: [P.lt(E.roll(E.lit("find.coin"), E.lit(4)), E.lit(3))], denial: { law: "scout.unlucky" } } },
+	{ id: "denyAll.scout", reject: { when: [], denial: { law: "denyAll.scout" } } },
+];
+
+/** 时间调度 + 随机判定：入夜（time%4==3）时野狗有 1/4 概率偷袭玩家。roll 是 World 纯函数，确定性可验证。 */
+const dogNightSys: Law = {
+	id: "dog.night",
+	over: [{ var: "d", source: "entities", where: [P.eq(E.p("d", "alive"), E.lit(true)), P.eq(E.p("d", "aggressive"), E.lit(true)), P.neq(E.p("actor", "down"), E.lit(true))] }],
+	when: [P.eq(E.mod(E.time(), E.lit(4)), E.lit(3)), P.eq(E.roll(E.lit("dog.night"), E.lit(4)), E.lit(1))],
+	each: [{ op: "inc", e: E.v("actor"), p: "hp", by: E.lit(-1) }],
+	facts: (ctx) => [{ text: "夜色里，野狗窜出来在你小腿上咬了一口！", entities: [String(ctx.env.d), ctx.actor] }],
+};
+
+/** 每 tick = 一个时段。数值互锁：疲劳累积、饥饿消耗、饿到扣体力、累到昏厥、体力见底昏迷。 */
+const bodyFatigue: Law = { id: "body.fatigue", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true))] }], each: [{ op: "inc", e: E.v("p"), p: "fatigue", by: E.lit(2) }] };
+const bodyHunger: Law = { id: "body.hunger", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.gt(E.p("p", "satiety"), E.lit(0))] }], each: [{ op: "inc", e: E.v("p"), p: "satiety", by: E.lit(-6) }] };
+const bodyStarve: Law = { id: "body.starve", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.lte(E.p("p", "satiety"), E.lit(0))] }], each: [{ op: "set", e: E.v("p"), p: "satiety", v: E.lit(0) }, { op: "inc", e: E.v("p"), p: "hp", by: E.lit(-4) }] };
+const bodyExhaust: Law = { id: "body.exhaust", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.gte(E.p("p", "fatigue"), E.lit(100))] }], each: [{ op: "set", e: E.v("p"), p: "down", v: E.lit(true) }, { op: "set", e: E.v("p"), p: "fatigue", v: E.lit(0) }] };
+const bodyCollapse: Law = { id: "body.collapse", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.lte(E.p("p", "hp"), E.lit(0))] }], each: [{ op: "set", e: E.v("p"), p: "down", v: E.lit(true) }, { op: "set", e: E.v("p"), p: "hp", v: E.lit(0) }] };
+
+const VILLAGE_ASSERTION_RULES: AssertionRule[] = [
+	{
+		prop: "in",
+		weak: ["手里", "手上", "握着", "拿着"],
+		exemptPending: false,
+		targets: (world, actor) => world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && e.props["in"] !== actor),
+		error: (e) => `描述虚构了「${e.name}」在你手中，但当前它不在你这里。`,
+	},
+];
+
+const VILLAGE_NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾", "不曾"];
+const VILLAGE_SENTENCE_PUNCT = /[。！？!?；;]/;
+const VILLAGE_ASSERTION_PUNCT = /[，。；！？、—]/;
+
+export const village: GameDef = {
+	id: "village",
+	title: "河畔村（era/DoL 极探针）",
+	playerId: "player",
+	messages: {
+		noResponse: "世界没有以这种方式回应。",
+		unknownVerb: (verb) => `世界不认识「${verb}」这种动作。`,
+		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
+		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
+		reachMissing: "这里没有这个东西。",
+		reachCycle: "位置存在循环引用。",
+		reachNotHere: "它不在这里。",
+		reachClosed: (n) => `${n}是关着的。`,
+		defaultReason: "……",
+		notInActionPhase: "当前不在行动阶段，无法执行操作。",
+		timePassed: "时间流逝",
+		timeChanged: "时间流逝，世界发生了变化。",
+	},
+	verbs: {
+		gather: {
+			label: "拾取", description: "把可达的可持握物品拿到手中（如木料、掉在地上的米）。", schema: Type.Object({ entity: Type.String({ description: "目标物品 id" }) }), entityParams: ["entity"], candidates: (sim) => ({ entity: sim.world.entities.filter((e) => e.props.grabbable === true).map((e) => e.id) }), laws: gatherLaws,
+		},
+		eat: { label: "进食", description: "吃一颗浆果：饱腹 +25、体力 +5，消耗 1 颗浆果。", schema: Type.Object({}), laws: eatLaws },
+		rest: { label: "歇息", description: "休息：疲劳归零、体力 +8、饱腹 -5；昏迷时休息可醒来恢复。", schema: Type.Object({}), laws: restLaws },
+		talk: { label: "交谈", description: "与老店主攀谈：信任 +1；信任 >= 2 后米价打八折。", schema: Type.Object({ target: Type.String({ description: "交谈对象 id" }) }), entityParams: ["target"], candidates: (sim) => ({ target: sim.world.entities.filter((e) => e.kind === "npc").map((e) => e.id) }), laws: talkLaws },
+		buy: { label: "购买", description: "从老店主处买一袋米（10 铜币，信任 >= 2 后 8 铜币），钱不够被拒。", schema: Type.Object({}), laws: buyLaws },
+		sell: { label: "出售", description: "把手里的米以 5 铜币卖回给老店主。", schema: Type.Object({}), laws: sellLaws },
+		harvest: { label: "采集", description: "从成熟的浆果丛采下一颗浆果。", schema: Type.Object({ bush: Type.String({ description: "浆果丛 id" }) }), entityParams: ["bush"], candidates: (sim) => ({ bush: sim.world.entities.filter((e) => e.props.ripe === true).map((e) => e.id) }), laws: harvestLaws },
+		clear: { label: "清理枯井", description: "清理枯井里的淤泥（阶段 0 → 1）。", schema: Type.Object({}), laws: wellClearLaws },
+		fix: { label: "修葺枯井", description: "手持木料时加固井壁（阶段 1 → 2）。", schema: Type.Object({}), laws: wellFixLaws },
+		seal: { label: "封底枯井", description: "为枯井封底，清泉涌出，获 10 铜币（阶段 2 → 3）。", schema: Type.Object({}), laws: wellSealLaws },
+		subdue: { label: "驱逐野狗", description: "在不太疲惫时驱赶野狗，代价是被咬一口（骰子伤害，随时刻变化）。", schema: Type.Object({ dog: Type.String({ description: "野狗 id" }) }), entityParams: ["dog"], candidates: (sim) => ({ dog: sim.world.entities.filter((e) => e.props.aggressive === true).map((e) => e.id) }), laws: subdueLaws },
+		scout: { label: "侦察", description: "四处翻找：骰子运气 >= 3 时捡到 2 铜币（从店主账上扣，守恒），否则一无所获。", schema: Type.Object({}), laws: scoutLaws },
+		do: { label: "自由行动", description: "提出未被覆盖的自由动作。结构性属性（位置、体力、钱币等）由世界法则管理，直接更改会被拒绝。", schema: Type.Object({}), laws: doLaws, fallback: "soft" },
+	},
+	world: {
+		time: 0,
+		entities: [
+			{ id: "village", name: "河畔村", kind: "space", tags: ["room"], props: { space: true } },
+			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "village", hp: 50, fatigue: 0, satiety: 60, coins: 40, berries: 2, down: false } },
+			{ id: "merchant", name: "老店主", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 80 } },
+			{ id: "flour", name: "一袋米", kind: "item", tags: ["goods"], props: { in: "village", grabbable: true, price: 10 } },
+			{ id: "timber", name: "木料", kind: "item", tags: ["wood"], props: { in: "village", grabbable: true } },
+			{ id: "bush", name: "浆果丛", kind: "plant", tags: [], props: { in: "village", ripe: true } },
+			{ id: "well", name: "枯井", kind: "structure", tags: ["quest"], props: { in: "village", phase: 0, supply: false } },
+			{ id: "dog", name: "野狗", kind: "creature", tags: ["beast"], props: { in: "village", alive: true, aggressive: true, hp: 10 } },
+		],
+		relations: [
+			{ from: "merchant", to: "player", type: "信任", value: 0 },
+		],
+	},
+	systems: [dogNightSys, bodyFatigue, bodyHunger, bodyStarve, bodyExhaust, bodyCollapse],
+	denialTemplates: {
+		reach: (d, w) => d.reason ?? "它不在这里。",
+		"gather.grabbable": (d, w) => `${name(w, d.subject ?? "")}搬不动。`,
+		"eat.none": () => "你翻遍了口袋，没有浆果可吃。",
+		"talk.bored": (d, w) => `${name(w, d.subject ?? "")}已经没什么新鲜话可说了。`,
+		"buy.held": () => "你手里已经有一袋米了。",
+		"buy.broke": () => "你的钱不够买这袋米。",
+		"sell.notheld": () => "你手里没有米可卖。",
+		"harvest.unripe": (d, w) => `${name(w, d.subject ?? "")}还没有成熟。`,
+		"well.order": (d, w) => `${name(w, d.subject ?? "")}当前不需要这一步，顺序不对。`,
+		"well.needtimber": (d, w) => `你得先把木料拿到手。`,
+		"dog.gone": (d, w) => `${name(w, d.subject ?? "")}已经被赶跑了，不在这里了。`,
+		"dog.tired": (d, w) => `你太疲惫了，挥不动手，${name(w, d.subject ?? "")}只是远远地龇牙。`,
+		"scout.unlucky": () => "你翻找了一圈，一无所获。",
+		"denyAll.scout": () => "这里没什么可找的。",
+		"denyAll.gather": (d, w) => `你拿不起${name(w, d.subject ?? "")}。`,
+		"denyAll.eat": () => "你暂时吃不了东西。",
+		"denyAll.rest": () => "你无法在这里歇息。",
+		"denyAll.talk": (d, w) => `你试着和${name(w, d.subject ?? "")}搭话，但对方没有回应。`,
+		"denyAll.buy": () => "货摊上暂时没有可买的。",
+		"denyAll.sell": () => "你没有可卖的东西。",
+		"denyAll.harvest": (d, w) => `${name(w, d.subject ?? "")}无法被采集。`,
+		"denyAll.clear": (d, w) => `${name(w, d.subject ?? "")}没有动静。`,
+		"denyAll.fix": (d, w) => `${name(w, d.subject ?? "")}修不了。`,
+		"denyAll.seal": (d, w) => `${name(w, d.subject ?? "")}封不了底。`,
+		"denyAll.subdue": (d, w) => `你没能赶走${name(w, d.subject ?? "")}。`,
+		"denyAll.do": () => "世界没有以这种方式回应。",
+		"proof.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
+		"soft.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
+		"invariant.integrity": () => "世界拒绝了这个变化。",
+		"invariant.coins.conserved": (d) => d.debug ?? "世界拒绝了这个变化。",
+	},
+	props: VILLAGE_PROPS,
+	invariants: [
+		{
+			id: "coins.conserved",
+			// era/DoL 守恒模式：铜币总量 == 种子值。任何提交凭空铸币/灭币都被回滚。
+			check: (world, ctx) => {
+				const seed = sumProp(ctx.def.world, "coins");
+				const now = sumProp(world, "coins");
+				return now === seed ? null : `铜币总量 ${now} ≠ 种子值 ${seed}，经济被打破。`;
+			},
+		},
+	],
+	grounding: (world, actor) => [...inTreeVisible(world, actor)],
+	summarize: summarizeVillage,
+	digest: digestVillage,
+	assertionRules: VILLAGE_ASSERTION_RULES,
+	negationWords: VILLAGE_NEGATIONS,
+	sentencePunct: VILLAGE_SENTENCE_PUNCT,
+	assertionPunct: VILLAGE_ASSERTION_PUNCT,
+	hint: `世界法则（模拟层强制执行）：
+1. 每个时刻（tick）：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来。
+2. 入夜（时刻 % 4 == 3）时，野狗有 1/4 概率偷袭（骰子判定，确定性）。
+3. 浆果可采集（成熟时）可进食；米可买卖：买入 10 铜币（信任 >= 2 后 8 铜币）、卖出 5 铜币；侦察掷骰子运气 >= 3 可得 2 铜币。
+4. 与老店主交谈提升信任（关系边），影响米价。
+5. 枯井修缮是顺序过程：清理 →（手持木料）修葺 → 封底，不得跳步。
+6. 铜币总量守恒；自由动作只能写软属性，结构性属性（体力/钱币/位置等）由世界法则管理。`,
+};

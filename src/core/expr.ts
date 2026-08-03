@@ -1,6 +1,7 @@
 import type { Delta, Denial, Fact, PropValue } from "./sim.ts";
 
-/** 值表达式：字面量 / 变量绑定 / 实体属性 / 算术 / 条件。纯函数，可在法则与断言核验间共享。 */
+/** 值表达式：字面量 / 变量绑定 / 实体属性 / 算术 / 条件 / 确定性骰子。纯函数，可在法则与断言核验间共享。
+ *  var 解析回退：env 无绑定且名字命中实体 id 时视为字面量 id（常量实体可直接 E.p("flour","in")，无需 E.prop(E.lit(...))）。 */
 export type Expr =
 	| { k: "lit"; v: PropValue }
 	| { k: "var"; name: string }
@@ -8,8 +9,14 @@ export type Expr =
 	| { k: "sum"; xs: Expr[] }
 	| { k: "max"; xs: Expr[] }
 	| { k: "min"; xs: Expr[] }
+	| { k: "binop"; op: BinOp; a: Expr; b: Expr }
 	| { k: "if"; c: Pred; t: Expr; f: Expr }
-	| { k: "reachReason"; e: Expr };
+	| { k: "reachReason"; e: Expr }
+	| { k: "time" }
+	| { k: "roll"; key: Expr; sides: Expr };
+
+/** 二元算术：数值表达式（era 数值表：价格、伤害、成长公式）。/ 与 % 除零返回 null。 */
+export type BinOp = "+" | "-" | "*" | "/" | "%";
 
 /** 谓词：可机械核验的条件。法则 when/denies 与断言核验共用同一求值器。 */
 export type Pred =
@@ -46,6 +53,11 @@ export interface ExprCtx {
 	entityIds: string[];
 	/** 可见实体 id 列表（over 枚举用）。 */
 	visibleIds: string[];
+	/** 确定性骰子：从 World 派生（hashStr(`${world.time}#${key}`)），纯函数——check/apply/dryTick 一致。
+	 *  key 需在同 tick 内唯一（含实体 id 或自持计数器，如 `dog.bite#${id}`）。 */
+	roll: (key: string, sides: number) => number;
+	/** 当前时刻（world.time）：时段调度（夜/日）读取。 */
+	time: number;
 }
 
 /** 效果模板：法则 each 部分。e/from/to 求值为实体 id，v/by 求值为值。 */
@@ -111,8 +123,11 @@ export function evalExpr(ctx: ExprCtx, e: Expr): PropValue {
 	switch (e.k) {
 		case "lit":
 			return e.v;
-		case "var":
-			return ctx.env[e.name] ?? null;
+		case "var": {
+			const v = ctx.env[e.name];
+			if (v !== undefined) return v;
+			return ctx.entityIds.includes(e.name) ? e.name : null;
+		}
 		case "prop": {
 			const id = String(evalExpr(ctx, e.e) ?? "");
 			return ctx.prop(id, e.p);
@@ -135,11 +150,31 @@ export function evalExpr(ctx: ExprCtx, e: Expr): PropValue {
 			}
 			return m === Infinity ? null : m;
 		}
+		case "binop": {
+			const a = num(evalExpr(ctx, e.a));
+			const b = num(evalExpr(ctx, e.b));
+			if (Number.isNaN(a) || Number.isNaN(b)) return null;
+			switch (e.op) {
+				case "+": return a + b;
+				case "-": return a - b;
+				case "*": return a * b;
+				case "/": return b === 0 ? null : a / b;
+				case "%": return b === 0 ? null : a % b;
+			}
+			return null;
+		}
 		case "if":
 			return matchPred(ctx, e.c) ? evalExpr(ctx, e.t) : evalExpr(ctx, e.f);
 		case "reachReason": {
 			const id = String(evalExpr(ctx, e.e) ?? "");
 			return ctx.reachReason(id) ?? "";
+		}
+		case "time":
+			return ctx.time;
+		case "roll": {
+			const key = String(evalExpr(ctx, e.key) ?? "");
+			const sides = Math.max(1, Math.floor(num(evalExpr(ctx, e.sides)) || 1));
+			return ctx.roll(key, sides);
 		}
 	}
 }
@@ -377,13 +412,22 @@ export function evaluateLaw(ctx: ExprCtx, law: Law, collect = false): LawResult 
 	return { granted: false };
 }
 
-/** 表达式构造器（游戏侧作者语法糖，与手写 Expr/Pred 等价）。 */
+/** 表达式构造器（游戏侧作者语法糖，与手写 Expr/Pred 等价）。
+ *  p(name, p) 的 name 可以是动作参数名（env 绑定）或常量实体 id（var 回退），两者等价。 */
 export const E = {
 	v: (name: string): Expr => ({ k: "var", name }),
 	lit: (v: PropValue): Expr => ({ k: "lit", v }),
 	prop: (e: Expr, p: string): Expr => ({ k: "prop", e, p }),
 	p: (name: string, p: string): Expr => ({ k: "prop", e: { k: "var", name }, p }),
 	pp: (name: string, p1: string, p2: string): Expr => ({ k: "prop", e: { k: "prop", e: { k: "var", name }, p: p1 }, p: p2 }),
+	binop: (op: BinOp, a: Expr, b: Expr): Expr => ({ k: "binop", op, a, b }),
+	add: (a: Expr, b: Expr): Expr => ({ k: "binop", op: "+", a, b }),
+	sub: (a: Expr, b: Expr): Expr => ({ k: "binop", op: "-", a, b }),
+	mul: (a: Expr, b: Expr): Expr => ({ k: "binop", op: "*", a, b }),
+	div: (a: Expr, b: Expr): Expr => ({ k: "binop", op: "/", a, b }),
+	mod: (a: Expr, b: Expr): Expr => ({ k: "binop", op: "%", a, b }),
+	roll: (key: Expr, sides: Expr): Expr => ({ k: "roll", key, sides }),
+	time: (): Expr => ({ k: "time" }),
 };
 
 export const P = {

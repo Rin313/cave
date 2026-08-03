@@ -4,7 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"verify": "node src/tools/sim.ts scenario scenarios/cave.json",
+		"verify": "node src/tools/sim.ts verify",
 		"sim": "node src/tools/sim.ts",
 		"loop": "node src/tools/loop.ts"
 	},

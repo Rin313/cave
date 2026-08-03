@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult, VerbDef } from "../core/sim.ts";
 import type { Proof } from "../core/verify.ts";
@@ -130,14 +131,16 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	};
 }
 
-async function cmdScenario(scenarioPath: string): Promise<void> {
+function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
 	const def = getGame(file.game);
 	const reports = file.scenarios.map((s) => runScenario(s, def));
-
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);
+	return { file, reports, passed, total };
+}
 
+function printReports(reports: ScenarioReport[]): void {
 	for (const sc of reports) {
 		console.log(`\n【${sc.name}】`);
 		for (const r of sc.steps) {
@@ -147,8 +150,50 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 			if (!r.pass) console.log(`    problems: ${r.detail}`);
 		}
 	}
+}
+
+async function cmdScenario(scenarioPath: string): Promise<void> {
+	const { reports, passed, total } = loadScenarioFile(scenarioPath);
+	printReports(reports);
 	console.log(`\nRESULT: ${passed}/${total} PASS`);
 	process.exit(passed === total ? 0 : 1);
+}
+
+/** 验证全部场景：自动发现 scenarios/*.json，跳过未注册游戏（归档的游戏场景保留作参考）。
+ *  不绑定任何特定游戏/场景文件——新增场景即被纳入，移除游戏只需从注册表摘除。 */
+async function cmdVerify(): Promise<void> {
+	let files: string[];
+	try {
+		files = readdirSync("scenarios").filter((f) => f.endsWith(".json")).sort();
+	} catch {
+		console.log("scenarios/ 目录不存在，无场景可验证。");
+		process.exit(0);
+	}
+	if (files.length === 0) {
+		console.log("scenarios/ 下没有场景文件。");
+		process.exit(0);
+	}
+	let allPassed = 0;
+	let allTotal = 0;
+	let failedFiles = 0;
+	let skipped = 0;
+	for (const f of files) {
+		const path = join("scenarios", f);
+		try {
+			const { file, reports, passed, total } = loadScenarioFile(path);
+			console.log(`\n=== ${path}（game: ${file.game}${file.name ? `，${file.name}` : ""}）===`);
+			printReports(reports);
+			console.log(`RESULT: ${passed}/${total} PASS`);
+			allPassed += passed;
+			allTotal += total;
+			if (passed !== total) failedFiles++;
+		} catch (err) {
+			skipped++;
+			console.log(`\n=== ${path} === 跳过：${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	console.log(`\nVERIFY: ${allPassed}/${allTotal} PASS（跳过 ${skipped} 个文件，失败 ${failedFiles} 个文件）`);
+	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
 /** 标量参数解析：true/false/null/数字/字符串（实体参数不走这里）。 */
@@ -356,7 +401,8 @@ async function main(): Promise<void> {
 	const a: ParsedArgs = parseArgs(argv);
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  sim scenario <scenario.json>    运行法则引擎场景验证（场景文件内声明 game）
+  sim scenario <scenario.json>    运行单个法则引擎场景验证（场景文件内声明 game）
+  sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
@@ -366,8 +412,12 @@ async function main(): Promise<void> {
 	const positionals = a.positionals;
 	if (cmd === "scenario") {
 		const path = positionals[0];
-		if (!path) throw new Error("scenario 需要场景文件路径（如 scenarios/cave.json）");
+		if (!path) throw new Error("scenario 需要场景文件路径（如 scenarios/waste.json）");
 		await cmdScenario(path);
+		return;
+	}
+	if (cmd === "verify") {
+		await cmdVerify();
 		return;
 	}
 	if (cmd === "run") {

@@ -1,9 +1,9 @@
 import type { GameDef } from "../core/sim.ts";
-import { cave } from "./cave.ts";
+import { village } from "./village.ts";
 import { waste } from "./waste.ts";
 
 export const GAMES: Record<string, GameDef> = {
-	[cave.id]: cave,
+	[village.id]: village,
 	[waste.id]: waste
 };
 
