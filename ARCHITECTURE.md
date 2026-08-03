@@ -41,9 +41,8 @@
 - **`denyAll.*` 兜底法则**：每个动词末尾挂一条无条件拒绝的 `denyAll.<verb>` 法则（`reject.when` 为空），某动词所有法则未授予且无具体拒绝时兜底（状态不变）；散文由 `denialTemplates` 渲染，`deniedBy` 据此标记为 `"denyAll"`。
 - **`denialTemplates`**：拒绝理由的世界腔渲染（按 law 模板）；`denyAll` 等终端兜底的理由也经此渲染，不泄漏属性名/实现术语。
 - **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas（火蔓延、燃尽、日程等）。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交后立即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱等"动作→世界响应"的因果链在当回合成立，不依赖显式 wait。reactive 产出并入动作的 StepResult（facts/involved 合并），不重复入日志。
-- **`grounding`**：可见实体索引钩子，决定哪些实体进 LLM 序列化；缺省全部可见。容器包含树语义已降为标准库 `inTreeReach/inTreeVisible`，由游戏选择接入。
-- **`containerAccess`**（GameDef 可选）：标准库可达性的关容器放行谓词 `(world, container, id) => boolean`——关着的容器是否对实体放行。缺省一律拦截；关容器对特定实体的放行（如楔在门缝里的东西仍够得到）由游戏经此谓词裁决，不进入标准库。
-- **`messages`**（GameDef 必填）：core 产出的用户可见文案（校验层拒绝、时间流逝、标准库可达性兜底等）由游戏注入自有语言；core 不内嵌任何语言，缺省为空、倒逼游戏声明。
+- **`grounding`**：可见实体索引钩子，决定哪些实体进 LLM 序列化；缺省全部可见。**`reach`/`reachReason`（GameDef 可选）是可达性空槽**：`P.reach`/soft 通道/施动工具前提共用的谓词，缺省全可达、无理由——core 不内嵌任何空间模型；容器包含树语义是游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`/`reachFor`），需要空间语义的游戏自选接入。
+- **`messages`**（GameDef 必填）：core 产出的用户可见文案（校验层拒绝、时间流逝等）由游戏注入自有语言；core 不内嵌任何语言，缺省为空、倒逼游戏声明。可达性理由文案（`reachMissing` 等）可选，供游戏侧空间构件注入。
 - **`probeScope`**（GameDef 可选）：法则探测域钩子，决定 `sim probe` 枚举动作参数候选时使用的实体集；缺省 = 可见实体 - 玩家 - `space` 标记的场景实体。大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。
 - **禁止词（引擎不感知语言）**：通用泄漏检查只禁止与语言无关的实现工件——结构化形态（JSON 键值对、声明头 `[facts:` 复现）与「实现形状」的标识符（实体 id / 属性名中非纯小写单词者，如 `wooden_box`、`hasItem`、`isBurning`）；纯小写自然词（`box` / `open`）与散文同词，不作禁止。语言相关的词汇约束由游戏声明：`forbiddenTerms`（可选）为游戏自定义实现术语，按词边界匹配进散文即判泄漏；语义断言由 `assertionRules` 声明式承担。词边界策略：含非 ASCII 的术语用 includes（`\b` 对中文无效），纯 ASCII 用词边界。
 - **`props`（属性注册表）**：`{ prop: { type, label?, internal?, stylistic? } }`。`internal: true` 的属性（如 `burnTicks`、`actor` 标记）不进 LLM 序列化 / changes / 表达校验，从源头杜绝泄漏；`label` 是属性世界化说法（拒绝/变更文本用）；`stylistic: true` 标记润饰属性（表达层可文学润饰，如「刻痕斑驳」，不参与断言校验）。`internalPropsOf(def)` / `stylisticPropsOf(def)` 派生内部/润饰属性集。
@@ -58,7 +57,7 @@
 - **引擎保留伪动词 `TICK_VERB`**：`"tick"` 是引擎级时间流逝动作标识（`systems` 产出的 StepResult 与 `loop wait` 用），非游戏声明的动词；游戏不应声明同名动词。`sim run` 的 `tick N` 关键字在游戏声明同名动词时优先走游戏动词。
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`assertionRules`（通用断言校验规则，词表/标点由游戏声明；weak 断言词按 `pending` 豁免预言）、`props`（属性注册表：type/label/internal/stylistic）。
 - **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性（`integrityInvariant`：实体 id 唯一、id 型属性/关系端点/焦点指向存在的实体），游戏可追加领域不变式（如「燃着必须明火」）。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），AI 软通道、法则、系统 bug 都无法绕过。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式（如 village 的 `coins.conserved`：铜币总量 == 初始世界总量），凭空铸币/灭币一律被回滚。
-- **core 只提供通用工具，不耦合游戏**：状态化 rng 已移除——随机由 games 层以 World 状态自持（纯函数派生），`World` 即完整真相源，check/apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`roll`（确定性骰子，`hashStr(time#key)` 派生 [1,sides]，key 需同 tick 唯一——现为 Expr 节点 `{k:"roll",key,sides}`，法则 `when/each` 可直接引用，check/apply/dryTick 天然一致）、`sumProp`（聚合助手，守恒不变式用）、`scanClaims`（文本断言扫描算法，词表/标点/否定词由游戏注入，core 不感知语言）、`inTreeReach`（标准库可达性，理由经 `reachReason` 表达式注入法则拒绝）、`integrityInvariant`（引用完整性硬墙）。Expr 提供 `binop(+,-,*,/,%)`（era 数值表）与 `time`（`world.time` 读取，时段调度）节点；var 解析回退（`env[name] ?? (实体id ? name : null)`）让常量实体可直接写 `E.p("flour","in")`。多时间尺度（回合/日/月）由游戏自持（`world.day` 等计数器 + systems `when`），core 不内置历法。
+- **core 只提供通用工具，不耦合游戏**：状态化 rng 已移除——随机由 games 层以 World 状态自持（纯函数派生），`World` 即完整真相源，check/apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`roll`（确定性骰子，`hashStr(time#key)` 派生 [1,sides]，key 需同 tick 唯一——现为 Expr 节点 `{k:"roll",key,sides}`，法则 `when/each` 可直接引用，check/apply/dryTick 天然一致）、`sumProp`（聚合助手，守恒不变式用）、`scanClaims`（文本断言扫描算法，词表/标点/否定词由游戏注入，core 不感知语言）、`reach`/`reachReason`（可达性空槽，空间构件由游戏自选，如 `src/games/space.ts`）、`integrityInvariant`（引用完整性硬墙）。Expr 提供 `binop(+,-,*,/,%)`（era 数值表）与 `time`（`world.time` 读取，时段调度）节点；var 解析回退（`env[name] ?? (实体id ? name : null)`）让常量实体可直接写 `E.p("flour","in")`。多时间尺度（回合/日/月）由游戏自持（`world.day` 等计数器 + systems `when`），core 不内置历法。
 
 ## 3. 持久化边界
 
@@ -89,3 +88,4 @@
 4. **映射层会拆解复合意图，掩盖"菜单"缺陷。** 精确匹配（proven/openLaws）在单动作 e2e 上与 soft 几乎等价——因为 AI 会把"烤暖+刻痕"拆成两条 do，各自命中一条 openLaw。菜单的真实代价（组合面 2^N、作者负担）在 e2e 上看不出来，要用 **sim 层判别用例**（单 proof 复合 desired）和**作者负担行数对比**来暴露。**e2e 成功率高不等于设计好。**
 5. **映射层会产出非法形状，core 应做归一化兜底。** 实测：AI 把 `proof.claims[].e` 写成裸 id 字符串或 `{k:"prop"}` 非法 claim，首个 tool call 失败后自我纠正——浪费一次调用。已加 `normalizeProof`（裸 id 裹成 `{k:"lit",v}`）。凡是"模型可能产生、但多数时候能自我纠正"的形态，都值得在 core 层归一化，而不是指望每次都重试。
 6. **自由度提升后，语义一致性责任转移到领域不变式。** soft 让 AI 直接写软属性后，端到端立刻出现"湿柴在燃烧"的洞（soft 把燃着的柴写成 damp=true）。一条声明式不变式（湿柴不得燃烧）即原子回滚，且不误伤合法软写。**开放世界极的"一致" = 一小撮领域不变式，不是法则网络穷举**——这是约束化重量模型成立的前提。
+7. **实体名子串包含会误杀合法声明。** 表达校验的声明实体匹配用 `includes`，「伯爵」⊂「伯爵夫人」，合法声明「伯爵夫人对你的信任将淡去」被误判为提及了未涉及的「伯爵」→ 无效重试一次。修复为**最长命中名归属**（`engine.ts` validateDeclaration）。中文实体名互相包含是常态，任何 `includes` 匹配都要防同类误判。

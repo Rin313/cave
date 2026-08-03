@@ -1,7 +1,8 @@
 import type { AssertionRule, Entity, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
-import { entity, inTreeVisible, internalPropsOf } from "../core/sim.ts";
+import { entity, internalPropsOf } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
 import { E, P, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
+import { reachFor, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -188,6 +189,10 @@ const VILLAGE_NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "
 const VILLAGE_SENTENCE_PUNCT = /[。！？!?；;]/;
 const VILLAGE_ASSERTION_PUNCT = /[，。；！？、—]/;
 
+/** 容器包含树可达性的理由文案与接线（游戏侧构件接入 core 的 reach/reachReason 槽位）。 */
+const REACH_MSGS = { reachMissing: "这里没有这个东西。", reachCycle: "位置存在循环引用。", reachNotHere: "它不在这里。", reachClosed: (n: string) => `${n}是关着的。` };
+const REACH_OPTS = { msgs: REACH_MSGS };
+
 export const village: GameDef = {
 	id: "village",
 	title: "河畔村（era/DoL 极探针）",
@@ -197,10 +202,7 @@ export const village: GameDef = {
 		unknownVerb: (verb) => `世界不认识「${verb}」这种动作。`,
 		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
 		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
-		reachMissing: "这里没有这个东西。",
-		reachCycle: "位置存在循环引用。",
-		reachNotHere: "它不在这里。",
-		reachClosed: (n) => `${n}是关着的。`,
+		...REACH_MSGS,
 		defaultReason: "……",
 		notInActionPhase: "当前不在行动阶段，无法执行操作。",
 		timePassed: "时间流逝",
@@ -284,7 +286,8 @@ export const village: GameDef = {
 			},
 		},
 	],
-	grounding: (world, actor) => [...inTreeVisible(world, actor)],
+	grounding: (world, actor) => [...inTreeVisible(world, actor, REACH_OPTS)],
+	...reachFor(REACH_OPTS),
 	summarize: summarizeVillage,
 	digest: digestVillage,
 	assertionRules: VILLAGE_ASSERTION_RULES,

@@ -25,7 +25,7 @@ export type Pred =
 	| { k: "has"; e: Expr; p: string }
 	| { k: "exists"; e: Expr }
 	| { k: "reach"; e: Expr }
-	| { k: "rel"; from: Expr; to: Expr; type: string; op?: "eq" | "gte" | "gt" | "lt" | "lte"; b?: Expr }
+	| { k: "rel"; from: Expr; to: Expr; type: string; op?: "eq" | "neq" | "gte" | "gt" | "lt" | "lte"; b?: Expr }
 	| { k: "and"; xs: Pred[] }
 	| { k: "or"; xs: Pred[] }
 	| { k: "not"; p: Pred };
@@ -218,8 +218,10 @@ export function matchPred(ctx: ExprCtx, p: Pred): boolean {
 			const v = ctx.rel(from, to, p.type);
 			if (!p.op) return v !== null;
 			if (p.op === "eq") return v === b;
-			if (v === null) return false;
-			const x = num(v);
+			if (p.op === "neq") return v !== b;
+			// 排序比较：缺失的边按 0 参与（与 cmp 对缺失数值属性的行为一致，Number(null)===0）。
+			// 否则「信任 < 3」在信任边不存在时求值为 false，作者的自然表达会静默落到 denyAll 兜底。
+			const x = num(v ?? 0);
 			const y = num(b);
 			if (Number.isNaN(x) || Number.isNaN(y)) return false;
 			if (p.op === "gte") return x >= y;

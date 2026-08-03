@@ -1,6 +1,7 @@
 import type { AssertionRule, Change, Entity, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
-import { entity, inTreeVisible, internalPropsOf } from "../core/sim.ts";
+import { entity, internalPropsOf } from "../core/sim.ts";
 import { E, P, type ExprCtx, type Law } from "../core/expr.ts";
+import { reachFor, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -355,6 +356,10 @@ const harvestVerb: VerbDef = {
 	laws: harvestLaws,
 };
 
+/** 容器包含树可达性的理由文案与接线（游戏侧构件接入 core 的 reach/reachReason 槽位）。 */
+const REACH_MSGS = { reachMissing: "这里没有这个东西。", reachCycle: "位置存在循环引用。", reachNotHere: "它不在这里。", reachClosed: (n: string) => `${n}是关着的。` };
+const REACH_OPTS = { msgs: REACH_MSGS };
+
 export const waste: GameDef = {
 	id: "waste",
 	title: "流沙荒原（开放世界）",
@@ -364,10 +369,7 @@ export const waste: GameDef = {
 		unknownVerb: (verb) => `世界不认识「${verb}」这种动作。`,
 		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
 		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
-		reachMissing: "这里没有这个东西。",
-		reachCycle: "位置存在循环引用。",
-		reachNotHere: "它不在这里。",
-		reachClosed: (name) => `${name}是关着的。`,
+		...REACH_MSGS,
 		defaultReason: "……",
 		notInActionPhase: "当前不在行动阶段，无法执行操作。",
 		timePassed: "时间流逝",
@@ -445,7 +447,8 @@ export const waste: GameDef = {
 		"invariant.integrity": () => "世界拒绝了这个变化。",
 	},
 	props: WASTE_PROPS,
-	grounding: (world, actor) => [...inTreeVisible(world, actor)],
+	grounding: (world, actor) => [...inTreeVisible(world, actor, REACH_OPTS)],
+	...reachFor(REACH_OPTS),
 	summarize: summarizeWaste,
 	digest: digestWaste,
 	assertionRules: WASTE_ASSERTION_RULES,

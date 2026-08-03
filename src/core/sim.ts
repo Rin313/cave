@@ -72,11 +72,11 @@ export interface Messages {
 	invalidParams: (label: string, known: string) => string;
 	/** 实体参数不可见/不存在（core 校验层拒绝）。 */
 	invisibleEntity: (ids: string[]) => string;
-	/** 标准库 inTreeReach 的可达性理由（作为 denial.reason 的缺省）。 */
-	reachMissing: string;
-	reachCycle: string;
-	reachNotHere: string;
-	reachClosed: (name: string) => string;
+	/** 容器包含树构件（games 侧可选）的可达性理由（作为 denial.reason 的缺省）。 */
+	reachMissing?: string;
+	reachCycle?: string;
+	reachNotHere?: string;
+	reachClosed?: (name: string) => string;
 	/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
 	defaultReason: string;
 	/** 行动阶段门闩拦截（表达 pass 中误调 act 工具时的防御性拒绝）。 */
@@ -152,7 +152,7 @@ export interface Denial {
 	object?: string;
 	/** 涉及属性（denyAll 等按属性兜底的模板用）。 */
 	prop?: string;
-	/** 可选世界腔覆盖文本（如标准库返回的 prose）；缺省用 GameDef.denialTemplates。 */
+	/** 可选世界腔覆盖文本（如可达性构件返回的 prose）；缺省用 GameDef.denialTemplates。 */
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如 proof 通道的断言失败详情）。 */
 	debug?: string;
@@ -213,8 +213,11 @@ export interface GameDef {
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, actor: string) => string[];
-	/** 标准库容器可达性扩展：关着的容器是否对实体放行（楔住等）。inTreeReach/inTreeVisible 的缺省 opts。 */
-	containerAccess?: (world: World, container: Entity, id: string) => boolean;
+	/** 可达性槽位（游戏声明）：实体是否够得着。core 不内嵌任何空间模型——容器包含树等由游戏自选
+	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / soft 通道 / 施动工具前提共用此谓词。 */
+	reach?: (world: World, actor: string, id: string) => boolean;
+	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
+	reachReason?: (world: World, actor: string, id: string) => string | null;
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
 	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
 	probeScope?: (world: World, actor: string) => string[];
@@ -252,7 +255,7 @@ export function integrityInvariant(): Invariant {
 		check: (world, ctx) => {
 			const ids = new Set(world.entities.map((e) => e.id));
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
-			const idProps = new Set<string>(["in"]);
+			const idProps = new Set<string>();
 			for (const [k, p] of Object.entries(ctx.def.props ?? {})) if (p.type === "id") idProps.add(k);
 			for (const e of world.entities) {
 				for (const p of idProps) {
@@ -377,57 +380,6 @@ export function relVal(world: World, from: string, to: string, type: string): nu
 /** 关系查询：from 的全部关系边（可按 type 过滤）。 */
 export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
-}
-
-/** 标准库可达性选项：理由文案 + 关着的容器放行谓词（楔住等游戏机制）。 */
-export interface ReachOpts {
-	/** 理由文案（游戏注入；缺省为空——core 不内嵌任何语言）。 */
-	msgs?: Messages;
-	/** 关着的容器（openable 且未 open）是否对实体 id 放行。缺省一律拦截。
-	 *  如"楔在门缝里的东西仍可够到"由游戏以容器属性裁决（wedgedBy），不进入标准库。 */
-	containerAccess?: (world: World, container: Entity, id: string) => boolean;
-}
-
-/** 从 GameDef 构造标准库可达性选项（游戏理由文案 + 容器放行谓词）。 */
-export function reachOptsFor(def: GameDef): ReachOpts {
-	return { msgs: messagesFor(def), containerAccess: def.containerAccess };
-}
-
-/** 标准库可达性：容器包含树语义（space / openable / open / in）。游戏可选接入。
- *  理由文案与关容器放行谓词用 opts 定制（缺省为空、关着的容器一律拦截）。 */
-export function inTreeReach(world: World, actor: string, id: string, opts: ReachOpts = {}): { ok: boolean; reason: string } {
-	const msgs = opts.msgs;
-	const e = entity(world, id);
-	if (!e) return { ok: false, reason: msgs?.reachMissing ?? "" };
-	let cur = e.props["in"] as string | null;
-	const seen = new Set<string>();
-	while (cur != null && cur !== actor) {
-		if (seen.has(cur)) return { ok: false, reason: msgs?.reachCycle ?? "" };
-		seen.add(cur);
-		const parent = entity(world, cur);
-		if (!parent) return { ok: false, reason: msgs?.reachNotHere ?? "" };
-		if (parent.props.space === true) {
-			return parent.id === (entity(world, actor)?.props["in"] as string)
-				? { ok: true, reason: "" }
-				: { ok: false, reason: msgs?.reachNotHere ?? "" };
-		}
-		if (parent.props.openable === true && parent.props.open !== true) {
-			if (opts.containerAccess?.(world, parent, id)) return { ok: true, reason: "" };
-			return { ok: false, reason: msgs?.reachClosed(parent.name) ?? "" };
-		}
-		cur = parent.props["in"] as string | null;
-	}
-	return { ok: true, reason: "" };
-}
-
-/** 标准库可见性：容器包含树语义下玩家可达的全部实体（opts 同 inTreeReach）。 */
-export function inTreeVisible(world: World, actor: string, opts: ReachOpts = {}): Set<string> {
-	const vis = new Set<string>([actor]);
-	for (const e of world.entities) {
-		if (e.props.space === true) vis.add(e.id);
-		if (inTreeReach(world, actor, e.id, opts).ok) vis.add(e.id);
-	}
-	return vis;
 }
 
 /** 序列化：可见实体 + 非内部属性 + 关系表（焦点优先）。 */
@@ -570,12 +522,9 @@ export class Simulation {
 				}
 				return true;
 			},
-			reach: (id) => inTreeReach(world, actor, id, reachOptsFor(this.def)).ok,
+			reach: (id) => (this.def.reach ? this.def.reach(world, actor, id) : true),
 			rel: (from, to, type) => relVal(world, from, to, type),
-			reachReason: (id) => {
-				const acc = inTreeReach(world, actor, id, reachOptsFor(this.def));
-				return acc.ok ? null : (acc.reason || null);
-			},
+			reachReason: (id) => (this.def.reachReason ? this.def.reachReason(world, actor, id) : null),
 			name: (id) => entity(world, id)?.name ?? id,
 			propLabel: (prop) => propLabelOf(this.def, prop),
 			entityIds: world.entities.map((e) => e.id),
@@ -626,7 +575,7 @@ export class Simulation {
 			const e = entity(this.world, d.entity);
 			if (!e) return fail("所指实体不存在。");
 			if (!this.visible().has(d.entity)) return fail(`「${e.name}」不在可见范围。`);
-			if (!inTreeReach(this.world, this.actor, d.entity, reachOptsFor(this.def)).ok) return fail(`「${e.name}」不在可达范围。`);
+			if (!(this.def.reach ? this.def.reach(this.world, this.actor, d.entity) : true)) return fail(`「${e.name}」不在可达范围。`);
 			const pdef = this.def.props?.[d.prop];
 			if (!pdef || pdef.access !== "soft" || pdef.internal) {
 				return fail(`「${e.name}」的${pdef?.label ?? d.prop}是世界法则管理的属性，不能直接更改。`);
@@ -746,10 +695,11 @@ export class Simulation {
 		return this.world.focus ?? null;
 	}
 
-	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。 */
+	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。
+	 *  可达性走游戏声明的 GameDef.reach 槽位（core 不内嵌空间模型）。 */
 	wieldable(id: string): boolean {
 		if (prop(this.world, id, "grabbable") !== true) return false;
-		return inTreeReach(this.world, this.actor, id, reachOptsFor(this.def)).ok;
+		return this.def.reach ? this.def.reach(this.world, this.actor, id) : true;
 	}
 
 	/** 动作空间接地：枚举 动词 × 可见实体 × 候选值，返回当前世界会授予的动作（世界腔理由，去重）。

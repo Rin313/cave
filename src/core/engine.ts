@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
 import { Type } from "typebox";
-import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type Entity, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { checkAssertions } from "./util.ts";
 import type { Proof } from "./verify.ts";
 
@@ -339,13 +339,17 @@ export class Engine {
 			if (typeof c.to === "string") touched.add(c.to);
 		}
 		for (const f of decl.facts) {
+			// 子串匹配有歧义：实体名可能互相包含（「伯爵」⊂「伯爵夫人」）。取最长命中的实体归属，
+			// 避免合法声明被误判为提及了未涉及实体。
+			let matched: Entity | null = null;
 			for (const e of this.sim.world.entities) {
 				if (!vis.has(e.id)) continue;
 				if (f.includes(e.id) || f.includes(e.name)) {
-					if (!touched.has(e.id)) {
-						return `声明「${f}」提及了实体「${e.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
-					}
+					if (!matched || e.name.length > matched.name.length) matched = e;
 				}
+			}
+			if (matched && !touched.has(matched.id)) {
+				return `声明「${f}」提及了实体「${matched.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
 			}
 			const leaked = this.leakageCheck(f);
 			if (leaked) return `声明「${f}」中：${leaked}`;
