@@ -37,16 +37,16 @@
 - NetHack / DoL / C:DDA 级别的法则网络：实体、属性、关系、法则组成的约束网络。
 - 接受**结构化动作**（action），返回新状态与结构化结果。
 - 统一模式：**动作动词表 + 声明式法则（Law）裁决**
-  - 动作空间由游戏声明：`GameDef.verbs` 是动词表（`{ verb: { schema, entityParams, candidates, laws } }`），引擎据此生成 act 工具的 schema，并在每回合以 `Simulation.affordances()`（枚举 动词×可见实体×候选值 的只读裁决 `check()`，预算按动词均分、实体按相关属性排序）把**当前世界会授予的动作**注入映射 prompt——动作空间接地，映射不再冷猜测参数。不再硬编码 apply/move/set——era 类游戏可声明 `talk/travel/equip`，开放世界可声明 `attack/trade/craft`。当前参考游戏按两极各自声明动词集并内置法则集：era 极 village（`gather/eat/rest/talk/buy/sell/clear/fix/seal/subdue/scout` 等 + `do` 软通道）、开放世界极 waste（`travel/move/open/use/harvest` + `do`）。
+  - 动作空间由游戏声明：`GameDef.verbs` 是动词表（`{ verb: { schema, entityParams, candidates, laws } }`），引擎据此生成 act 工具的 schema，并在每回合以 `Simulation.affordances()`（枚举 动词×可见实体×候选值 的只读裁决 `check()`，预算按动词均分、实体按相关属性排序）把**当前世界会授予的动作**注入映射 prompt——动作空间接地，映射不再冷猜测参数。不再硬编码 apply/move/set——era 类游戏可声明 `talk/travel/equip`，开放世界可声明 `attack/trade/craft`。当前参考游戏按两极各自声明动词集并内置法则集：era 极 village（`gather/eat/rest/talk/buy/sell/clear/fix/seal/subdue/scout`）、开放世界极 waste（`travel/move/open/use/harvest/mark/examine`）。环境响应（刻痕、勘察等）由实体不可知法则承担，不再需要 core 级"AI 提后果"通道（软通道已移除，研究结论见 ARCHITECTURE §5-8~11）。
   - 每个动词挂一组**声明式法则**（`Law`：`over` 量词 / `when` 条件 / `each` 后果 / `denies` 拒绝 / `reject` 前置拒绝），解释器 `evaluateLaw` 裁决：`granted` + 世界性理由 + **delta 变更列表**（`set/inc/push/del`，支持点路径；`spawn/destroy` 仅 tick 系统使用）；法则按声明顺序短路。全部否决且无具体理由时，落到动词末尾的 `denyAll.*` 兜底法则（状态不变，数据法则承载，散文由 `denialTemplates` 渲染）。
   - 每个否决结果标记 `deniedBy: "rule" | "denyAll"`：具体法则给了世界性理由（rule）还是落到通用兜底法则（denyAll.*）。这是"法则无洞"探测与拒绝质量审计的语义基础，不依赖理由字符串匹配。
   - **动作的组合由 LLM 自由提出（提案），世界的回应由法则层确定完成，LLM 不参与任何状态变更，也不提案数值**——数值与后果由法则产出（如 `{ op: "inc", e, p: "will", by: -20 }`）。
   - `采下浆果` → LLM 提案 `harvest(bush)` → 动词 `harvest` 的对应法则裁决返回变更 `[berries+1, ripe→false]`。
   - 代价：创作者负担从"写交互"转为"声明动词表 + 法则网络"；未覆盖的动作用世界性 `denyAll.*` 回应。
-  - **软通道（有重量的"AI 提后果"）**：非预设动词（`fallback: "soft"`，如 `do`）接受 AI 直接写期望后果——proof 给出**期望后果（desired）+ 可选前置事实（claims，须为真）**，世界以**约束校验**授予，不做模板匹配：实体须存在/可见/可达，属性须注册为 `access:"soft"`（环境氛围类），值类型须一致，提交经 `commitChecked`（引用完整性 + 游戏声明不变式原子回滚）。由此"重量"由访问级 + 不变式给出：`set X.material=gold` 无访问级 → 拒绝；`set X.in=Y`（结构性）→ 拒绝，移动须走预设 `move` 法则；软属性（温暖/烟雾/潮湿/刻痕/披戴…）自由写、组合免费，语义一致性由领域不变式兜底（如「湿柴不得燃烧」一条声明式取代逐条法则守卫）。`claims` 不参与授权，只做"前置事实必须为真"的防谎 + 表达层归因。
+  - **环境响应（声明式，取代"AI 提后果"通道）**：非预设的"自由动作"由游戏声明动词 + 实体不可知法则承担（如 waste 的 `mark`/`examine`：`when` 按 `reach` 键控，一条法则覆盖全部可达实体）。结构性属性（位置/材质/明火/燃烧/钱币…）仍只能由法则/系统变更；语义一致性由领域不变式兜底（如「湿柴不得燃烧」一条声明式取代逐条守卫）。**研究结论**：软通道（`fallback:"soft"` + `access:"soft"`，AI 直接写期望后果）与实体不可知法则在 e2e 上等价、可写面相同，且带授予理由退化与静默假授予 bug，已移除（ARCHITECTURE §5-8~11）。「AI 不产生系统后果」（§1）因此重新成立——后果只能由法则/系统产出，经提交硬墙（引用完整性 + 领域不变式）原子裁决。
   - **规则必须按属性组合键控，不能按实体键控**（承重墙）：规则只读实体的属性/关系来裁决，禁止特判实体 id。这让规则随新实体加入自动泛化（检查双方的 `material` 硬度来裁决，不关心具体是哪个实体），也是组合爆炸的唯一可行出路。属性组合系统（DF material system 风格：实体属性集 + 动作作为属性解析器）是天然实现手段。
   - **时间系统**：`GameDef.systems` 是按序执行的系统注册表（每 tick 运行，产出 deltas），取代单链 tickLaws，承载火蔓延、燃尽、日程等时间驱动逻辑。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱，"动作→世界响应"的因果链当回合成立，不依赖显式 wait。reactive 产出并入动作 StepResult，不重复入日志。
-  - **守恒与数值（era/DoL 强一致系统）**：提交后不变式硬墙（core 默认引用完整性 + 游戏声明）违反即**原子回滚整个提交并拒绝**——AI 软通道、法则、系统 bug 都无法凭空铸币/灭币。era 类游戏以聚合助手 `sumProp`（core 通用原语）声明守恒不变式（如「铜币总量 == 种子值」），数值经 `inc/relInc` + `cmp/gte/lte` + `binop(+,-,*,/,%)`/`sum/max/min` 表达；随机是 World 的纯函数——`roll` 现为 Expr 节点（`{k:"roll",key,sides}`），法则 `when/each` 可直接引用（key 需同 tick 唯一，可含实体 id），check/apply/dryTick/存档天然一致；多时间尺度（回合/日/月）由游戏自持计数器 + systems `when`，core 不内置历法。实体生灭经 `spawn/destroy`（仅 tick 系统可用，软通道与预设法则均禁止）。
+  - **守恒与数值（era/DoL 强一致系统）**：提交后不变式硬墙（core 默认引用完整性 + 游戏声明）违反即**原子回滚整个提交并拒绝**——法则、系统 bug 都无法凭空铸币/灭币。era 类游戏以聚合助手 `sumProp`（core 通用原语）声明守恒不变式（如「铜币总量 == 种子值」），数值经 `inc/relInc` + `cmp/gte/lte` + `binop(+,-,*,/,%)`/`sum/max/min` 表达；随机是 World 的纯函数——`roll` 现为 Expr 节点（`{k:"roll",key,sides}`），法则 `when/each` 可直接引用（key 需同 tick 唯一，可含实体 id），check/apply/dryTick/存档天然一致；多时间尺度（回合/日/月）由游戏自持计数器 + systems `when`，core 不内置历法。实体生灭经 `spawn/destroy`（仅 tick 系统可用）。
   - **接地钩子**：`grounding` 决定哪些实体进 LLM 序列化；可达性是 core 的**空槽**（`reach`/`reachReason` 谓词，缺省全可达），core 不内嵌任何空间模型——容器包含树语义（`space`/`openable`/`open`/`in`）降为游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`），需要空间语义的游戏自选接入，不强制；关容器对实体的放行（如楔住的门缝）由构件 opts 的 `containerAccess` 谓词在 game 层裁决。**`digest`（GameDef 可选）是序列化投影**：决定状态以什么形态进 prompt（裁剪冗余、格式化关系边、聚焦点置顶），缺省全量 JSON。
   - **施动工具前提**：动词可声明 `instrumentParams`（哪些实体参数是"挥动的工具"，如 use 的 source）。核心在规则前跑共享检查——必须可持握（`grabbable`）且可达；不满足直接拒绝（`instrument.*` 法则），不进入规则。这消除了"用搬不动的重物施力"式的荒谬授予，且让 affordances 枚举自动跳过不可持握工具、`sim probe` 可审计"规则会在不可持握工具上授予"的潜在洞。
   - **关系边与焦点/痕迹**：`world.relations`（`{ from, to, type, value }` 边表）表达社会/叙事状态（信任、记忆、派系），法则以 `relSet/relInc/relDel` 变更。`world.focus`（本回合显著实体，跨回合指代锚点）与 `world.traces`（实体累计被拒次数，拒绝痕迹）由核心确定性维护，二者进序列化。
@@ -153,7 +153,7 @@ const game: GameDef = {
 
 先验证完整闭环（表达→选取→映射→执行→再表达），核心指标是**接地一致性**——不测映射层孤立准确率，因为映射成功率依赖表达层接地质量：
 
-1. 最小种子状态机：一个场景、若干带属性实体 + 基础法则网络（基线场景已覆盖：village 的数值互锁 / 经济守恒 / 顺序过程 / 随机判定，waste 的路径探索 / 拾取放置 / soft 通道 / 时间系统）。
+1. 最小种子状态机：一个场景、若干带属性实体 + 基础法则网络（基线场景已覆盖：village 的数值互锁 / 经济守恒 / 顺序过程 / 随机判定，waste 的路径探索 / 拾取放置 / 环境响应（mark/examine）/ 时间系统）。
 2. Function-calling 映射层（`act(actions)`，schema 从动词表生成）+ 实体接地 + JSON schema。
 3. 跑 50 条刁钻交互用例：否定、跨句指代、隐含宾语、怪异措辞、歧义实体。
 4. 量出指标：

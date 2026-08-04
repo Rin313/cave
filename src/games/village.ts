@@ -147,11 +147,6 @@ const subdueLaws: Law[] = [
 	{ id: "denyAll.subdue", reject: { when: [], denial: { law: "denyAll.subdue", subject: E.v("dog") } } },
 ];
 
-/** 软通道动词（do）：era 语境下结构性墙照常（凭空铸币被拒）。 */
-const doLaws: Law[] = [
-	{ id: "denyAll.do", reject: { when: [], denial: { law: "denyAll.do" } } },
-];
-
 /** 侦察：roll-in-when 演示——运气门槛（骰子 >= 3 命中得 2 铜币；守恒：从店主账上扣）。 */
 const scoutLaws: Law[] = [
 	{ id: "scout.luck", when: [P.reach(E.lit("merchant")), P.gte(E.roll(E.lit("find.coin"), E.lit(4)), E.lit(3))], each: [{ op: "inc", e: E.v("actor"), p: "coins", by: E.lit(2) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-2) }], reason: () => "你四处翻了翻，在墙角捡到了两枚铜币。" },
@@ -223,7 +218,6 @@ export const village: GameDef = {
 		seal: { label: "封底枯井", description: "为枯井封底，清泉涌出，获 10 铜币（阶段 2 → 3）。", schema: Type.Object({}), laws: wellSealLaws },
 		subdue: { label: "驱逐野狗", description: "在不太疲惫时驱赶野狗，代价是被咬一口（骰子伤害，随时刻变化）。", schema: Type.Object({ dog: Type.String({ description: "野狗 id" }) }), entityParams: ["dog"], candidates: (sim) => ({ dog: sim.world.entities.filter((e) => e.props.aggressive === true).map((e) => e.id) }), laws: subdueLaws },
 		scout: { label: "侦察", description: "四处翻找：骰子运气 >= 3 时捡到 2 铜币（从店主账上扣，守恒），否则一无所获。", schema: Type.Object({}), laws: scoutLaws },
-		do: { label: "自由行动", description: "提出未被覆盖的自由动作。结构性属性（位置、体力、钱币等）由世界法则管理，直接更改会被拒绝。", schema: Type.Object({}), laws: doLaws, fallback: "soft" },
 	},
 	world: {
 		time: 0,
@@ -268,9 +262,6 @@ export const village: GameDef = {
 		"denyAll.fix": (d, w) => `${name(w, d.subject ?? "")}修不了。`,
 		"denyAll.seal": (d, w) => `${name(w, d.subject ?? "")}封不了底。`,
 		"denyAll.subdue": (d, w) => `你没能赶走${name(w, d.subject ?? "")}。`,
-		"denyAll.do": () => "世界没有以这种方式回应。",
-		"proof.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
-		"soft.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
 		"invariant.integrity": () => "世界拒绝了这个变化。",
 		"invariant.coins.conserved": (d) => d.debug ?? "世界拒绝了这个变化。",
 	},
@@ -300,5 +291,5 @@ export const village: GameDef = {
 3. 浆果可采集（成熟时）可进食；米可买卖：买入 10 铜币（信任 >= 2 后 8 铜币）、卖出 5 铜币；侦察掷骰子运气 >= 3 可得 2 铜币。
 4. 与老店主交谈提升信任（关系边），影响米价。
 5. 枯井修缮是顺序过程：清理 →（手持木料）修葺 → 封底，不得跳步。
-6. 铜币总量守恒；自由动作只能写软属性，结构性属性（体力/钱币/位置等）由世界法则管理。`,
+6. 铜币总量守恒；结构性属性（体力/钱币/位置等）只能由世界法则变更。`,
 };

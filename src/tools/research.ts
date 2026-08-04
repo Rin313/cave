@@ -1,4 +1,4 @@
-// 研究辅助：跑一个 loop act 并打印精简结果（toolCalls 的动词/proof、kind、拒绝理由、表达校验、叙述）。
+// 研究辅助：跑一个 loop act 并打印精简结果（toolCalls 的动词、kind、拒绝理由、表达校验、叙述）。
 import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
@@ -11,11 +11,7 @@ const out = JSON.parse(String(r.stdout));
 console.log(`INTENT: ${out.intent}`);
 console.log(`KIND: ${out.kind}  REFUSAL: ${out.refusal?.label ?? "-"}`);
 for (const tc of out.toolCalls ?? []) {
-	const actions = (tc.actions ?? []).map((a: { verb?: string; params?: unknown; proof?: unknown }) => {
-		const head: { verb?: string; params?: unknown; proof?: unknown } = { verb: a.verb, params: a.params };
-		if (a.proof) head.proof = (a.proof as { desired?: unknown; claims?: unknown }).desired;
-		return head;
-	});
+	const actions = (tc.actions ?? []).map((a: { verb?: string; params?: unknown }) => ({ verb: a.verb, params: a.params }));
 	console.log(`  CALL(${tc.actionCount}): ${JSON.stringify(actions)}`);
 }
 for (const res of out.results ?? []) {

@@ -22,16 +22,15 @@
 			]
 		},
 		{
-			"name": "soft 通道：可见性、结构性墙",
+			"name": "环境响应与结构性墙：mark/examine 动词 + 无自由动作通道",
 			"steps": [
-				{ "name": "从营地勘察石碑（石碑不可见，前置事实先不成立）", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "stele" } }], "desired": [{ "op": "set", "entity": "stele", "prop": "examined", "value": true }] } }, "expect": { "ok": false, "reason": "前置事实" } },
+				{ "name": "从营地勘察石碑（不可达，被拒）", "action": { "verb": "examine", "params": { "entity": "stele" } }, "expect": { "ok": false, "reason": "不在这里" } },
 				{ "name": "去河床", "action": { "verb": "travel", "params": { "dest": "riverbed" } }, "expect": { "ok": true } },
 				{ "name": "去土丘", "action": { "verb": "travel", "params": { "dest": "mound" } }, "expect": { "ok": true } },
-				{ "name": "勘察石碑（examined 是 soft，可达即授予）", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "stele" } }], "desired": [{ "op": "set", "entity": "stele", "prop": "examined", "value": true }], "reason": "你仔细察看了无名石碑。" } }, "expect": { "ok": true, "reason": "察看", "state": { "stele.examined": true } } },
-				{ "name": "凭空把石碑材质改成黄金被拒（material 是 law）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "stele", "prop": "material", "value": "gold" }] } }, "expect": { "ok": false, "reason": "世界法则", "state": { "stele.material": "stone" } } },
-				{ "name": "去沙海", "action": { "verb": "travel", "params": { "dest": "dune" } }, "expect": { "ok": true } },
-				{ "name": "击杀沙虫被拒（alive 是 law）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "worm", "prop": "alive", "value": false }] } }, "expect": { "ok": false, "reason": "世界法则", "state": { "worm.alive": true } } },
-				{ "name": "传送不可达的旧铁剑被拒（不在可见范围）", "action": { "verb": "do", "params": {}, "proof": { "desired": [{ "op": "set", "entity": "sword", "prop": "in", "value": "player" }] } }, "expect": { "ok": false, "reason": "可见" } }
+				{ "name": "勘察石碑（可达即授予）", "action": { "verb": "examine", "params": { "entity": "stele" } }, "expect": { "ok": true, "reason": "勘察", "state": { "stele.examined": true } } },
+				{ "name": "刻记号（可达即授予）", "action": { "verb": "mark", "params": { "entity": "stele" } }, "expect": { "ok": true, "reason": "刻下", "state": { "stele.marked": true } } },
+				{ "name": "重复刻记号被拒（mark.done）", "action": { "verb": "mark", "params": { "entity": "stele" } }, "expect": { "ok": false, "reason": "已经刻过", "state": { "stele.marked": true } } },
+				{ "name": "结构性墙：没有 do 动词，凭空改材质无从谈起", "action": { "verb": "do", "params": {} }, "expect": { "ok": false, "reason": "不认识", "state": { "stele.material": "stone" } } }
 			]
 		},
 		{

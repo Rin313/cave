@@ -5,12 +5,12 @@ import { reachFor, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
 /**
- * 开放世界（流沙荒原）：约束化重量（soft 通道）示例。
+ * 开放世界（流沙荒原）：约束化重量（声明式法则）示例。
  *  - 预设动词覆盖物理/资源动作：travel（路径移动）、move（拿起/放下/放入）、open（开合）、use（点燃）、harvest（采集）。
- *  - 自由环境响应走 do（fallback:"soft"）：AI 直接提期望后果（desired），世界以约束校验授予——
- *    实体须可达、属性须 access:"soft"（marked 刻痕/examined 勘察），结构性属性一律拒绝。
- *  - 验证目标：AI 无法凭一句话凭空改材质、传送不可达物体、创造/销毁实体、击杀生物——
- *    开放世界的自由度由属性注册表的访问级声明（重量拨盘）决定，不再枚举开放法则（去菜单化）。
+ *  - 环境响应走声明式动词：mark（刻记号 marked）、examine（勘察 examined）——实体不可知法则按 reach 授予。
+ *  - 结构性属性（位置/材质/明火/燃烧/生灭/钱币）由法则/系统变更，凭任意通道都改不了（提交硬墙 + 不变式）。
+ *  - 验证目标：AI 无法凭一句话凭空改材质、传送不可达物体、创造/销毁实体、击杀生物——开放世界的自由度
+ *    由 动词表 + 法则 + 不变式硬墙 给出，不再需要 core 的 AI 提后果通道。
  */
 
 const MATERIAL_LABELS: Record<string, string> = {
@@ -37,8 +37,8 @@ const WASTE_PROPS: Record<string, PropDef> = {
 	alive: { type: "boolean", label: "存活" },
 	ripe: { type: "boolean", label: "成熟" },
 	berries: { type: "number", label: "浆果" },
-	marked: { type: "boolean", label: "刻痕", stylistic: true, access: "soft" },
-	examined: { type: "boolean", label: "勘察", access: "soft" },
+	marked: { type: "boolean", label: "刻痕", stylistic: true },
+	examined: { type: "boolean", label: "勘察" },
 	inscription: { type: "string", label: "铭文" },
 	burnTicks: { type: "number", internal: true },
 	regrowTicks: { type: "number", internal: true },
@@ -167,11 +167,6 @@ const moveLaws: Law[] = [
 	{ id: "move.grabbable", reject: { when: [P.reach(E.v("entity")), P.neq(E.p("entity", "grabbable"), E.lit(true))], denial: { law: "move.grabbable", subject: E.v("entity") } } },
 	{ id: "move.dest", reject: { when: [P.not(P.exists(E.v("dest")))], denial: { law: "move.dest", subject: E.v("entity"), object: E.v("dest") } } },
 	{ id: "denyAll.move", reject: { when: [], denial: { law: "denyAll.move", subject: E.v("entity"), object: E.v("dest") } } },
-];
-
-/** 软通道动词（do）的兜底法则：无 proof 时一律拒绝（soft 授予在 fallback 通道进行）。 */
-const doLaws: Law[] = [
-	{ id: "denyAll.do", reject: { when: [], denial: { law: "denyAll.do" } } },
 ];
 
 /** 容器开合（原 openLaws.container.open/close 迁为预设动词法则）。 */
@@ -315,12 +310,51 @@ const moveVerb: VerbDef = {
 	laws: moveLaws,
 };
 
-const doVerb: VerbDef = {
-	label: "自由行动",
-	description: `提出一个没有被预设动词覆盖的自由动作。proof 格式：{ "claims": [可选前置事实，须全部为真], "desired": [期望后果，至少一条] }。世界只允许更改软属性（access:"soft"）：刻痕 marked、勘察 examined（实体须可达）。结构性属性（位置 in、材质 material、明火 lit、燃烧 burning、开合 open、成熟 ripe、存活 alive 等）由世界法则管理，直接更改会被拒绝——开/关容器用 open、点燃用 use、采集用 harvest、移动用 move。`,
-	schema: Type.Object({}),
-	laws: doLaws,
-	fallback: "soft",
+/** 刻记号/勘察：实体不可知法则（按 reach 授予），自由环境响应脱离枚举，但结构性属性仍由法则管理。 */
+const markLaws: Law[] = [
+	{
+		id: "mark.carve",
+		when: [P.reach(E.v("entity")), P.neq(E.p("entity", "marked"), E.lit(true))],
+		each: [{ op: "set", e: E.v("entity"), p: "marked", v: E.lit(true) }],
+		denies: [{ when: [P.eq(E.p("entity", "marked"), E.lit(true))], denial: { law: "mark.done", subject: E.v("entity") } }],
+		reason: (ctx) => `你在${ctx.name(String(ctx.env.entity))}上刻下了一道记号。`,
+	},
+	{ id: "mark.reach", reject: { when: [P.not(P.reach(E.v("entity")))], denial: { law: "reach", subject: E.v("entity"), reason: { k: "reachReason", e: E.v("entity") } } } },
+	{ id: "denyAll.mark", reject: { when: [], denial: { law: "denyAll.mark", subject: E.v("entity") } } },
+];
+
+const examineLaws: Law[] = [
+	{
+		id: "examine.look",
+		when: [P.reach(E.v("entity"))],
+		each: [{ op: "set", e: E.v("entity"), p: "examined", v: E.lit(true) }],
+		reason: (ctx) => `你仔细勘察了${ctx.name(String(ctx.env.entity))}。`,
+	},
+	{ id: "examine.reach", reject: { when: [P.not(P.reach(E.v("entity")))], denial: { law: "reach", subject: E.v("entity"), reason: { k: "reachReason", e: E.v("entity") } } } },
+	{ id: "denyAll.examine", reject: { when: [], denial: { law: "denyAll.examine", subject: E.v("entity") } } },
+];
+
+/** 环境响应动词的候选域：可见实体 - 玩家 - 场景（mark/examine 共用）。 */
+const envTargetCandidates = (sim: Simulation): Record<string, string[]> => ({
+	entity: [...sim.visible()].filter((id) => id !== sim.actor && sim.world.entities.find((e) => e.id === id)?.props.space !== true),
+});
+
+const markVerb: VerbDef = {
+	label: "刻记号",
+	description: "在可达的实体上刻下一道记号（marked）。刻过的不能再刻。",
+	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
+	entityParams: ["entity"],
+	candidates: envTargetCandidates,
+	laws: markLaws,
+};
+
+const examineVerb: VerbDef = {
+	label: "勘察",
+	description: "仔细查看一个可达的实体（examined），记下它的细节。",
+	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
+	entityParams: ["entity"],
+	candidates: envTargetCandidates,
+	laws: examineLaws,
 };
 
 const openVerb: VerbDef = {
@@ -381,7 +415,8 @@ export const waste: GameDef = {
 		open: openVerb,
 		use: useVerb,
 		harvest: harvestVerb,
-		do: doVerb,
+		mark: markVerb,
+		examine: examineVerb,
 	},
 	world: {
 		time: 0,
@@ -441,9 +476,9 @@ export const waste: GameDef = {
 		"denyAll.open": (d, w) => `${name(w, d.subject ?? "")}没有变化。`,
 		"denyAll.use": (d, w) => `你用${name(w, d.subject ?? "")}碰了碰${name(w, d.object ?? "")}，什么也没有发生。`,
 		"denyAll.harvest": (d, w) => `${name(w, d.subject ?? "")}无法被采集。`,
-		"denyAll.do": () => "世界没有以这种方式回应。",
-		"proof.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
-		"soft.fail": (d) => d.debug ?? "世界没有以这种方式回应。",
+		"mark.done": (d, w) => `${name(w, d.subject ?? "")}上已经刻过记号了。`,
+		"denyAll.mark": (d, w) => `你没能在这上面刻下记号。`,
+		"denyAll.examine": (d, w) => `你没能看清这个东西。`,
 		"invariant.integrity": () => "世界拒绝了这个变化。",
 	},
 	props: WASTE_PROPS,
@@ -459,6 +494,6 @@ export const waste: GameDef = {
 1. 荒原有五处地点，经路径（relations type "path"）连通；travel 只能沿路径前往相邻地点，凭空换地点被拒。
 2. 可持握（grabbable）物品可用 move 拿起（放到你手中）、放下（放到当前地点）、放入打开的容器；搬不动、够不着、目标不存在一律被拒。
 3. 开/关可开启物用 open；明火源（lit）用 use 点燃可燃物（flammable）；成熟（ripe）的可达浆果丛用 harvest 采下 1 颗浆果。
-4. 自由的环境动作走 do（soft 通道）：只能改变软属性——刻痕 marked、勘察 examined（实体须可达）。结构性属性（位置、材质、明火、燃烧、开合、成熟、存活等）由世界法则管理，直接改会被拒绝。
+4. 在可达实体上刻记号用 mark，细看一个实体用 examine。
 5. 时间系统：燃烧 3 个时刻后烧成灰烬；浆果丛被采后约 5 个时刻再生。`,
 };

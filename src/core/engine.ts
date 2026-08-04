@@ -12,7 +12,6 @@ import { Compile } from "typebox/compile";
 import { Type } from "typebox";
 import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type Entity, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { checkAssertions } from "./util.ts";
-import type { Proof } from "./verify.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -84,30 +83,6 @@ function coerceValue(v: unknown): PropValue {
 		return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, coerceValue(val)]));
 	}
 	return String(v);
-}
-
-/** claim 里表达式位置的字段（模型偶发把实体引用写成裸 id 字符串而非 {k:"lit",v} 对象，
- *  裸串直接求值会失败）。此函数把字符串裹成字面量表达式，避免浪费一次 tool call。
- *  只裹表达式位字段，不裹 op/type/set 等元数据字段。 */
-const CLAIM_EXPR_FIELDS = new Set(["e", "a", "b", "from", "to", "t", "f"]);
-function wrapClaimExpr(v: unknown): unknown {
-	if (typeof v === "string") return { k: "lit", v };
-	if (Array.isArray(v)) return v.map(wrapClaimExpr);
-	if (v && typeof v === "object" && "k" in (v as object)) return v;
-	return v;
-}
-function normalizeProof(proof: Proof): Proof {
-	if (!proof.claims?.length) return proof;
-	const claims = proof.claims.map((c) => {
-		const o = c as unknown as Record<string, unknown>;
-		const out: Record<string, unknown> = { ...o };
-		for (const f of CLAIM_EXPR_FIELDS) {
-			if (f in out) out[f] = wrapClaimExpr(out[f]);
-		}
-		if ("xs" in out && Array.isArray(out.xs)) out.xs = (out.xs as unknown[]).map(wrapClaimExpr);
-		return out as Proof["claims"][number];
-	});
-	return { ...proof, claims };
 }
 
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
@@ -568,53 +543,12 @@ function buildExpressionPrompt(
 }
 
 function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
-	/** 开放通道的提案 schema（描述性：嵌套表达式用宽松类型，运行时经 coerceValue 清洗）。 */
-	const exprSchema = Type.Union([
-		Type.Object({ k: Type.Literal("lit"), v: Type.Any() }),
-		Type.Object({ k: Type.Literal("var"), name: Type.String() }),
-		Type.Object({ k: Type.Literal("prop"), e: Type.Any(), p: Type.String() }),
-		Type.Object({ k: Type.Literal("sum"), xs: Type.Array(Type.Any()) }),
-		Type.Object({ k: Type.Literal("max"), xs: Type.Array(Type.Any()) }),
-		Type.Object({ k: Type.Literal("min"), xs: Type.Array(Type.Any()) }),
-		Type.Object({ k: Type.Literal("binop"), op: Type.String({ description: "+ - * / %" }), a: Type.Any(), b: Type.Any() }),
-		Type.Object({ k: Type.Literal("if"), c: Type.Any(), t: Type.Any(), f: Type.Any() }),
-		Type.Object({ k: Type.Literal("time") }),
-		Type.Object({ k: Type.Literal("roll"), key: Type.Any(), sides: Type.Any() }),
-	]);
-	const claimSchema = Type.Union([
-		Type.Object({ k: Type.Literal("cmp"), a: exprSchema, op: Type.String(), b: exprSchema }),
-		Type.Object({ k: Type.Literal("in"), a: exprSchema, set: Type.Array(Type.Any()) }),
-		Type.Object({ k: Type.Literal("has"), e: exprSchema, p: Type.String() }),
-		Type.Object({ k: Type.Literal("exists"), e: exprSchema }),
-		Type.Object({ k: Type.Literal("reach"), e: exprSchema }),
-		Type.Object({ k: Type.Literal("rel"), from: exprSchema, to: exprSchema, type: Type.String(), op: Type.Optional(Type.String()), b: Type.Optional(exprSchema) }),
-		Type.Object({ k: Type.Literal("and"), xs: Type.Array(Type.Any()) }),
-		Type.Object({ k: Type.Literal("or"), xs: Type.Array(Type.Any()) }),
-		Type.Object({ k: Type.Literal("not"), p: Type.Any() }),
-	]);
-	const proofSchema = Type.Object({
-		claims: Type.Optional(Type.Array(claimSchema, { description: "前置事实（可选，逐条对当前世界求值，全部成立才进入解析；如材质/可达/持有断言）" })),
-		desired: Type.Array(
-			Type.Union([
-				Type.Object({ op: Type.Literal("set"), entity: Type.String(), prop: Type.String(), value: Type.Any() }),
-				Type.Object({ op: Type.Literal("inc"), entity: Type.String(), prop: Type.String(), by: Type.Number() }),
-				Type.Object({ op: Type.Literal("push"), entity: Type.String(), prop: Type.String(), value: Type.Any() }),
-				Type.Object({ op: Type.Literal("del"), entity: Type.String(), prop: Type.String() }),
-				Type.Object({ op: Type.Literal("relSet"), from: Type.String(), to: Type.String(), type: Type.String(), value: Type.Any() }),
-				Type.Object({ op: Type.Literal("relInc"), from: Type.String(), to: Type.String(), type: Type.String(), by: Type.Number() }),
-				Type.Object({ op: Type.Literal("relDel"), from: Type.String(), to: Type.String(), type: Type.String() }),
-			]),
-			{ description: "期望后果：经软通道（fallback:\"soft\" 动词）写入 access:\"soft\" 的环境属性——结构性属性（位置/材质/燃烧/钱币等）一律被世界拒绝；实体须可达，且值类型须与属性注册表一致" },
-		),
-		reason: Type.Optional(Type.String({ description: "世界腔陈述（可选，法则未提供理由时的缺省）" })),
-	});
 	const actionSchema = Type.Union(
 		Object.entries(def.verbs).map(([name, v]) =>
 			Type.Object(
 				{
 					verb: Type.Literal(name),
 					params: v.schema,
-					proof: Type.Optional(proofSchema),
 				},
 				{ additionalProperties: false },
 			),
@@ -663,12 +597,11 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				};
 			}
 			const run = (raw: unknown): StepResult => {
-				const a = raw as { verb?: string; params?: Record<string, unknown>; proof?: unknown };
+				const a = raw as { verb?: string; params?: Record<string, unknown> };
 				const action: Action = {
 					verb: a.verb ?? "",
 					params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
 				};
-				const proof = a.proof ? normalizeProof(coerceValue(a.proof) as unknown as Proof) : undefined;
 				const verb = def.verbs[action.verb];
 				if (!verb) {
 					return { ok: false, reason: messagesFor(def).unknownVerb(action.verb), changes: [], action, deniedBy: "rule" };
@@ -688,7 +621,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				if (invalid.length) {
 					return { ok: false, reason: messagesFor(def).invisibleEntity(invalid), changes: [], action, deniedBy: "rule" };
 				}
-				return sim.apply(action, proof);
+				return sim.apply(action);
 			};
 			if (params.refusal && !(params.actions?.length)) {
 				return { content: [{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label } }) }], details: {} };

@@ -73,9 +73,9 @@
 			]
 		},
 		{
-			"name": "era 语境结构性墙：soft 通道照常拒绝凭空铸币",
+			"name": "era 语境结构性墙：无自由动作动词（do 已移除），凭空铸币被拒",
 			"steps": [
-				{ "name": "自由动作凭空铸币被拒（coins 是 law）", "action": { "verb": "do", "params": {}, "proof": { "claims": [{ "k": "reach", "e": { "k": "lit", "v": "merchant" } }], "desired": [{ "op": "inc", "entity": "player", "prop": "coins", "by": 500 }] } }, "expect": { "ok": false, "reason": "世界法则", "state": { "player.coins": 40 } } },
+				{ "name": "自由动作动词不存在：do 被拒为未知动词，铜币不被改变", "action": { "verb": "do", "params": {} }, "expect": { "ok": false, "reason": "不认识", "state": { "player.coins": 40 } } },
 				{ "name": "正常行动后守恒不变式仍成立", "action": { "verb": "gather", "params": { "entity": "flour" } }, "expect": { "ok": true, "state": { "player.coins": 40 } } }
 			]
 		}

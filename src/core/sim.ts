@@ -1,6 +1,5 @@
 import type { TObject } from "typebox";
-import { evaluateLaw, matchPred, type ExprCtx, type Law } from "./expr.ts";
-import { collectEntityIds, describeClaim, type Proof } from "./verify.ts";
+import { evaluateLaw, type ExprCtx, type Law } from "./expr.ts";
 import { roll as rollDice } from "./util.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
@@ -52,7 +51,7 @@ export interface Change {
 	prop: string;
 	from: PropValue;
 	to: PropValue;
-	/** 变更来源（law:spread / rule:move / system:burnout / proof:...），审计与回滚依据。 */
+	/** 变更来源（law:spread / rule:move / system:burnout），审计与回滚依据。 */
 	src?: string;
 }
 
@@ -136,15 +135,11 @@ export interface PropDef {
 	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性，如「刻痕斑驳」），
 	 *  不参与断言校验规则（assertionRules）；非润饰的物理属性须与状态严格一致。 */
 	stylistic?: boolean;
-	/** 访问级（重量拨盘）：law（缺省，只能由法则/系统变更——结构性属性）、
-	 *  soft（开放通道可直接写——环境氛围类属性，AI 提后果、世界以 完整性+守恒+可达 约束校验后提交）、
-	 *  readonly（任何通道不可写——世界固有事实）。soft 让"环境响应"脱离法则枚举（去菜单化）。 */
-	access?: "law" | "soft" | "readonly";
 }
 
 	/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
 export interface Denial {
-	/** 法则标识，如 "pry.soft"（审计与探测依据）。 */
+	/** 法则标识，如 "move.reach"（审计与探测依据）。 */
 	law: string;
 	/** 施动实体 id。 */
 	subject?: string;
@@ -154,7 +149,7 @@ export interface Denial {
 	prop?: string;
 	/** 可选世界腔覆盖文本（如可达性构件返回的 prose）；缺省用 GameDef.denialTemplates。 */
 	reason?: string;
-	/** 审计用诊断（不进玩家文案；如 proof 通道的断言失败详情）。 */
+	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
 	debug?: string;
 }
 
@@ -180,9 +175,6 @@ export interface VerbDef {
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	/** 声明式法则（数据行，解释器裁决，短路语义：首个授予即裁决）。 */
 	laws?: Law[];
-	/** 无法则匹配时的降级：缺省 deny（由动词末尾的 denyAll.* 兜底法则拒绝）；
-	 *  soft 走约束校验通道（开放通道可直接写 access:"soft" 的属性，不要求精确模板匹配）。 */
-	fallback?: "deny" | "soft";
 }
 
 export interface GameDef {
@@ -214,7 +206,7 @@ export interface GameDef {
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, actor: string) => string[];
 	/** 可达性槽位（游戏声明）：实体是否够得着。core 不内嵌任何空间模型——容器包含树等由游戏自选
-	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / soft 通道 / 施动工具前提共用此谓词。 */
+	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / 施动工具前提共用此谓词。 */
 	reach?: (world: World, actor: string, id: string) => boolean;
 	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
 	reachReason?: (world: World, actor: string, id: string) => string | null;
@@ -288,13 +280,6 @@ export function internalPropsOf(def: GameDef): Set<string> {
 export function stylisticPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
 	for (const [k, p] of Object.entries(def.props ?? {})) if (p.stylistic) s.add(k);
-	return s;
-}
-
-/** 从属性注册表计算软可写属性集（开放通道可直接写，环境氛围类）。 */
-export function softPropsOf(def: GameDef): Set<string> {
-	const s = new Set<string>();
-	for (const [k, p] of Object.entries(def.props ?? {})) if (p.access === "soft") s.add(k);
 	return s;
 }
 
@@ -440,8 +425,8 @@ export class Simulation {
 
 	/** 只读裁决（不提交、不入日志）：动作空间接地与法则探测共用。
 	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
-	check(action: Action, proof?: Proof): StepResult {
-		const r = this.adjudicateRaw(action, proof);
+	check(action: Action): StepResult {
+		const r = this.adjudicateRaw(action);
 		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src };
 	}
 
@@ -458,7 +443,7 @@ export class Simulation {
 		}
 	}
 
-	private adjudicateRaw(action: Action, proof?: Proof): RawResult {
+	private adjudicateRaw(action: Action): RawResult {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
 			return { ok: false, reason: messagesFor(this.def).unknownVerb(action.verb), changes: [], deltas: [], action, deniedBy: "rule" };
@@ -475,15 +460,6 @@ export class Simulation {
 				return { ok: true, reason: res.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: res.deltas ?? [], action, facts: res.facts, involved: res.involved, src: `law:${law.id}` };
 			}
 			if (res.denial != null && denial == null) denial = res.denial;
-		}
-		// soft 降级：fallback soft 时，开放通道直接写 access:"soft" 的属性——
-		// 不要求命中法则模板（去菜单化），由 存在/可见/可达 + 访问级 + 类型 + 不变式硬墙 约束校验。
-		if (verb.fallback === "soft" && proof && (denial == null || denial.law.startsWith("denyAll."))) {
-			const sres = this.softAdjudicate(proof);
-			if (sres.granted) {
-				return { ok: true, reason: sres.reason ?? proof.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: sres.deltas ?? [], action, facts: sres.facts, involved: sres.involved, src: `soft:${action.verb}` };
-			}
-			if (sres.denial) denial = sres.denial;
 		}
 		// 通用兜底：无具体法则拒绝时，由动词末尾的 denyAll.* 兜底法则产出（deniedBy 据此分类）。
 		const deniedBy: "rule" | "denyAll" = denial != null && !denial.law.startsWith("denyAll.") ? "rule" : "denyAll";
@@ -549,59 +525,6 @@ export class Simulation {
 		return null;
 	}
 
-	private readonly MAX_SOFT = 8;
-
-	/** soft 通道裁决：AI 直接提出期望后果（desired deltas），世界以约束校验而非模板匹配来授予。
-	 *  通过条件（全部满足才提交）：
-	 *   - claims 前置事实全部为真（可选）；
-	 *   - 实体存在、可见、可达（环境响应只作用于身边可及之物）；
-	 *   - 属性在注册表且 access:"soft"（结构性属性 law/readonly 一律不可经此通道）；
-	 *   - 值类型与注册表类型一致；
-	 *   - 提交经 commitChecked——引用完整性 + 游戏声明不变式（守恒等）照常硬墙，违反即原子回滚。
-	 *  该通道不要求后果等于某条法则模板：软属性的环境响应由世界自由授予（去菜单化），
-	 *  结构性属性（in/material/燃烧/生命/钱币…）仍只能由法则/系统变更（era 极保持一致）。 */
-	private softAdjudicate(proof: Proof): { granted: boolean; deltas?: Delta[]; reason?: string; involved?: string[]; denial?: Denial; facts?: Fact[] } {
-		const { claims = [], desired = [] } = proof;
-		const fail = (debug: string): { granted: false; denial: Denial } => ({ granted: false, denial: { law: "soft.fail", debug } });
-		if (!desired.length) return fail("没有期望后果（desired 为空）。");
-		if (desired.length > this.MAX_SOFT) return fail(`期望后果过多（超过 ${this.MAX_SOFT} 条）。`);
-		const ctx = this.exprCtx({});
-		for (const p of claims) {
-			if (!matchPred(ctx, p)) return fail(`前置事实不成立：${describeClaim(ctx, p)}`);
-		}
-		for (const d of desired) {
-			if (d.op === "spawn" || d.op === "destroy") return fail("实体生灭不能经此通道（须经法则/系统）。");
-			if (d.op === "relSet" || d.op === "relInc" || d.op === "relDel") return fail("关系边是结构状态，不能经此通道。");
-			const e = entity(this.world, d.entity);
-			if (!e) return fail("所指实体不存在。");
-			if (!this.visible().has(d.entity)) return fail(`「${e.name}」不在可见范围。`);
-			if (!(this.def.reach ? this.def.reach(this.world, this.actor, d.entity) : true)) return fail(`「${e.name}」不在可达范围。`);
-			const pdef = this.def.props?.[d.prop];
-			if (!pdef || pdef.access !== "soft" || pdef.internal) {
-				return fail(`「${e.name}」的${pdef?.label ?? d.prop}是世界法则管理的属性，不能直接更改。`);
-			}
-			if (pdef.type === "id") return fail("位置/引用类属性不能经此通道。");
-			if (d.op === "set") {
-				const okType = pdef.type === "any" || (pdef.type === "boolean" && typeof d.value === "boolean") || (pdef.type === "number" && typeof d.value === "number") || (pdef.type === "string" && typeof d.value === "string");
-				if (!okType) return fail(`「${e.name}」的${pdef.label ?? d.prop}取值类型与属性不符。`);
-			} else if (d.op === "inc") {
-				if (pdef.type !== "number" && pdef.type !== "any") return fail(`「${e.name}」的${pdef.label ?? d.prop}不是数值属性，不能增减。`);
-				if (typeof d.by !== "number") return fail("增减量必须是数字。");
-			} else if (d.op === "push" || d.op === "del") {
-				if (pdef.type !== "any") return fail(`「${e.name}」的${pdef.label ?? d.prop}不支持该操作。`);
-			}
-		}
-		// 注意：这里不提交——adjudicateRaw 是只读裁决（check/apply 共用），提交与不变式硬墙由 apply 的
-		// commitChecked 完成。若此处提交会造成 apply 二次提交：首次产出 changes，二次因值已等于目标而跳过，
-		// 变更记录丢失（世界状态正确但表达层看不到"刚发生的变化"）。
-		const s = new Set<string>();
-		for (const d of desired) {
-			if ("entity" in d && typeof d.entity === "string") s.add(d.entity);
-		}
-		for (const c of claims) collectEntityIds(ctx, c, s);
-		return { granted: true, deltas: desired, involved: [...s] };
-	}
-
 	/** 提交 + 不变式硬墙：先快照，提交后校验；违反则回滚整个提交并拒绝（原子）。 */
 	private commitChecked(deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
 		const before = this.snapshot();
@@ -627,9 +550,9 @@ export class Simulation {
 		return null;
 	}
 
-	apply(action: Action, proof?: Proof): StepResult {
+	apply(action: Action): StepResult {
 		const beforeVisible = this.visible();
-		const r = this.adjudicateRaw(action, proof);
+		const r = this.adjudicateRaw(action);
 		let sr: StepResult;
 		if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;

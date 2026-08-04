@@ -2,15 +2,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult, VerbDef } from "../core/sim.ts";
-import type { Proof } from "../core/verify.ts";
 import { getGame } from "../games/registry.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
 	verb: string;
 	params: Record<string, unknown>;
-	/** 开放通道（fallback:"proven" 动词）：前置事实（claims）+ 期望后果（desired），世界经开放法则反向解析。 */
-	proof?: unknown;
 }
 
 interface StepExpect {
@@ -96,7 +93,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				reason = results.map((r) => r.reason).join(" ");
 			}
 		} else if (step.action) {
-			const r = sim.apply(asAction(step.action), step.action.proof ? (parseValue(step.action.proof) as unknown as Proof) : undefined);
+			const r = sim.apply(asAction(step.action));
 			ok = r.ok;
 			reason = r.reason;
 		} else {
