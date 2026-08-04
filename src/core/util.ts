@@ -114,15 +114,18 @@ export function checkAssertions(
 	const pendingTrue = (prop: string, id: string): boolean =>
 		pending.some((c) => c.prop === prop && c.entity === id && (c.to === true || c.to === actor));
 	for (const rule of rules) {
-		const strongTargets = rule.targets(world, actor);
+		const baseTargets = rule.targets(world, actor);
+		// impossibleOnly 规则收窄为「不可能持有」目标集：只保留当前不可持握（不可握或不可达）的实体。
+		// 此集合同时是强断言词的扫描目标、以及弱断言词豁免 pending 前的基底。
+		const resolvedTargets = rule.impossibleOnly && input.wieldable ? baseTargets.filter((e) => !input.wieldable!(e.id)) : baseTargets;
 		const weakTargets = rule.exemptPending === false
-			? strongTargets
-			: strongTargets.filter((e) => !pendingTrue(rule.prop, e.id));
+			? resolvedTargets
+			: resolvedTargets.filter((e) => !pendingTrue(rule.prop, e.id));
 		const deAfter = (ts: readonly Entity[]) => (after: string): ClaimTarget | null =>
 			ts.find((e) => after.startsWith(e.name)) ?? null;
 		for (const s of text.split(sentencePunct)) {
 			if (rule.strong?.length) {
-				const hit = scanClaims(s, { claims: rule.strong, targets: strongTargets, error: (t) => rule.error(t as Entity), negations, punct: assertionPunct, deAfter: deAfter(strongTargets) });
+				const hit = scanClaims(s, { claims: rule.strong, targets: resolvedTargets, error: (t) => rule.error(t as Entity), negations, punct: assertionPunct, deAfter: deAfter(resolvedTargets) });
 				if (hit) return hit;
 			}
 			const hit = scanClaims(s, { claims: rule.weak, targets: weakTargets, error: (t) => rule.error(t as Entity), negations, punct: assertionPunct, deAfter: deAfter(weakTargets) });

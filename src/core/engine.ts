@@ -10,8 +10,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
 import { Type } from "typebox";
-import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type Entity, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { checkAssertions } from "./util.ts";
+import { parseDeclaration, leakageCheck, validateDeclAInv, validateDeclB, type DeclCtx } from "./declare.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -36,7 +37,8 @@ export type EngineEvent =
 	| { type: "text_delta"; delta: string }
 	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
 	| { type: "tool_result"; results: StepResult[] }
-	| { type: "validation"; round: number; error: string; attempt: string };
+	| { type: "validation"; round: number; error: string; attempt: string }
+	| { type: "raw_attempt"; round: number; text: string; error: string | null };
 
 interface ToolResponse {
 	results?: StepResult[];
@@ -250,7 +252,7 @@ export class Engine {
 		const revealed = [...visibleAfter].filter((id) => !visibleBefore.has(id));
 		const involved = this.involvedEntities(results, this.outcome.refusal, revealed);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, [...internalPropsOf(this.def)], pending, action.intent, revealed),
+			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, [...internalPropsOf(this.def)], pending, action.intent, revealed, this.def.declarationContract === "structured"),
 			changes,
 			involved,
 		);
@@ -265,19 +267,11 @@ export class Engine {
 			: [];
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, state, results, undefined, instruction, [...internalPropsOf(this.def)], pending),
+			buildExpressionPrompt(this.sim, state, results, undefined, instruction, [...internalPropsOf(this.def)], pending, undefined, [], this.def.declarationContract === "structured"),
 			changes,
 			this.involvedEntities(results, undefined, []),
 		);
 		this.emit({ type: "text_delta", delta: narration });
-	}
-
-	/** 从表达输出中提取首行的结构化事实声明（[facts: ...]），返回声明与散文体。 */
-	private parseDeclaration(text: string): { facts: string[]; body: string } | null {
-		const m = text.match(/^\s*\[facts:\s*([^\]]*)\]\s*\n?/);
-		if (!m) return null;
-		const facts = (m[1] ?? "").split(/[；;]/).map((s) => s.trim()).filter(Boolean);
-		return { facts, body: text.slice(m[0].length).trim() };
 	}
 
 	/** 本回合涉及集（结构推导）：actor + 规则声明 involved + 法则 facts 实体 + 动作实体参数 + 拒绝主体 + 本回合新可见实体。声明校验的合法提及来源。 */
@@ -299,37 +293,27 @@ export class Engine {
 		return involved;
 	}
 
-	/** 声明校验：新事实必须可追溯——声明实体 ⊆ 涉及集 ∪ 变更/即将发生实体，且可见。 */
+	/** 声明校验（prose 契约）：新事实必须可追溯——声明实体 ⊆ 涉及集 ∪ 变更/即将发生实体，且可见。核心算法在 core/declare.ts。
+	 *  用 validateDeclAInv（比 A 多一层"提及不可见实体即拒"），堵住"名字子串只在可见实体中匹配、不可见实体静默放行"的洞（A9）。 */
 	private validateDeclaration(decl: { facts: string[]; body: string }, changes: Change[], pending: Change[], involved: Set<string>): string | null {
-		if (!decl.body.trim()) return "散文为空。";
-		if (!decl.facts.length) return null;
-		const vis = this.sim.visible();
-		const touched = new Set<string>(involved);
-		const relTo = (prop: string): string | null => /^rel:([^@]+)@(.+)$/.exec(prop)?.[1] ?? null;
-		for (const c of [...changes, ...pending]) {
-			touched.add(c.entity);
-			const relT = relTo(c.prop);
-			if (relT && this.sim.world.entities.some((e) => e.id === relT)) touched.add(relT);
-			if (typeof c.from === "string") touched.add(c.from);
-			if (typeof c.to === "string") touched.add(c.to);
-		}
-		for (const f of decl.facts) {
-			// 子串匹配有歧义：实体名可能互相包含（「伯爵」⊂「伯爵夫人」）。取最长命中的实体归属，
-			// 避免合法声明被误判为提及了未涉及实体。
-			let matched: Entity | null = null;
-			for (const e of this.sim.world.entities) {
-				if (!vis.has(e.id)) continue;
-				if (f.includes(e.id) || f.includes(e.name)) {
-					if (!matched || e.name.length > matched.name.length) matched = e;
-				}
-			}
-			if (matched && !touched.has(matched.id)) {
-				return `声明「${f}」提及了实体「${matched.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
-			}
-			const leaked = this.leakageCheck(f);
-			if (leaked) return `声明「${f}」中：${leaked}`;
-		}
-		return null;
+		return validateDeclAInv(decl, this.declCtx(changes, pending, involved));
+	}
+
+	/** 声明校验（structured 契约）：事实写作 [id1,id2]: 陈述，按实体 id 精确集合校验，无名字回退。 */
+	private validateStructuredDeclaration(decl: { facts: string[]; body: string }, changes: Change[], pending: Change[], involved: Set<string>): string | null {
+		return validateDeclB(decl, this.declCtx(changes, pending, involved), "strict");
+	}
+
+	/** 装配声明校验上下文（core/declare.ts 的 DeclCtx）：把 sim 状态与游戏视角收窄。 */
+	private declCtx(changes: Change[], pending: Change[], involved: Set<string>): DeclCtx {
+		return {
+			world: this.sim.world,
+			def: { forbiddenTerms: this.def.forbiddenTerms, props: this.def.props },
+			visible: this.sim.visible(),
+			involved,
+			changes,
+			pending,
+		};
 	}
 
 	private async expressionPass(prompt: string, changes: Change[], involved: Set<string>): Promise<string> {
@@ -338,7 +322,7 @@ export class Engine {
 		// 声明校验的涉及集保留 #spawn/#destroy 变更（本回合新生的实体须可被 facts 提及），仅剔除内部属性变更。
 		const touchedChanges = changes.filter((c) => !internal.has(c.prop));
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
-		const run = async (p: string): Promise<{ text: string; err: string | null }> => {
+		const run = async (p: string, round: number): Promise<{ text: string; err: string | null }> => {
 			this.buf = [];
 			try {
 				await this.session.prompt(p);
@@ -346,20 +330,39 @@ export class Engine {
 				return { text: "", err: String(err) };
 			}
 			const text = this.buf.join("");
-			const decl = this.parseDeclaration(text);
-			if (!decl) return { text, err: "缺少首行 [facts: ...] 结构化声明。" };
-			const declErr = this.validateDeclaration(decl, touchedChanges, pending, involved);
-			if (declErr) return { text, err: declErr };
-			const bodyErr = this.validateNarration(decl.body, pending);
-			if (bodyErr) return { text: decl.body, err: bodyErr };
-			return { text: decl.body, err: null };
+			const decl = parseDeclaration(text);
+			let outText = text;
+			let err: string | null = null;
+			if (!decl) {
+				err = "缺少首行 [facts: ...] 结构化声明。";
+			} else {
+				const declErr = this.def.declarationContract === "structured"
+					? this.validateStructuredDeclaration(decl, touchedChanges, pending, involved)
+					: this.validateDeclaration(decl, touchedChanges, pending, involved);
+				if (declErr) {
+					err = declErr;
+				} else {
+					const bodyErr = this.validateNarration(decl.body, pending);
+					if (bodyErr) {
+						err = bodyErr;
+						outText = decl.body;
+					} else {
+						outText = decl.body;
+					}
+				}
+			}
+			this.emit({ type: "raw_attempt", round, text, error: err });
+			return { text: outText, err };
 		};
 
-		const first = await run(prompt);
+		const first = await run(prompt, 1);
 		if (!first.err) return first.text;
 		this.emit({ type: "validation", round: 1, error: first.err, attempt: first.text });
 		const retry = await run(
-			`刚才的描述未通过校验：${first.err}。请重写。必须遵守：首行输出 [facts: 新事实...]（只能来自本回合变更、法则事实、即将发生或本回合新见，无则留空）；只描述状态中真实存在的事物；不要发明不存在的现象或后果。`,
+			this.def.declarationContract === "structured"
+				? `刚才的描述未通过校验：${first.err}。请重写。必须遵守：首行输出 [facts: 实体id: 新事实；实体id2: 新事实...]（每条事实必须以其涉及的实体 id 开头，多实体写作 [id1,id2]: 陈述；id 只能来自本回合变更、法则事实、即将发生或本回合新见涉及的实体，无则留空 [facts:]）；只描述状态中真实存在的事物；不要发明不存在的现象或后果。`
+				: `刚才的描述未通过校验：${first.err}。请重写。必须遵守：首行输出 [facts: 新事实...]（只能来自本回合变更、法则事实、即将发生或本回合新见，无则留空）；只描述状态中真实存在的事物；不要发明不存在的现象或后果。`,
+			2,
 		);
 		if (!retry.err) return retry.text;
 		this.emit({ type: "validation", round: 2, error: retry.err, attempt: retry.text });
@@ -373,43 +376,18 @@ export class Engine {
 
 	private validateNarration(text: string, pending: Change[]): string | null {
 		if (!text.trim()) return "叙述为空。";
-		const leaked = this.leakageCheck(text);
+		const leaked = leakageCheck(text, this.sim.world, { forbiddenTerms: this.def.forbiddenTerms, props: this.def.props });
 		if (leaked) return leaked;
 		const rules = this.def.assertionRules;
 		if (rules?.length) {
 			const err = checkAssertions(
-				{ text, world: this.sim.world, actor: this.sim.actor, pending },
+				{ text, world: this.sim.world, actor: this.sim.actor, pending, wieldable: (id) => this.sim.wieldable(id) },
 				rules,
 				this.def.negationWords ?? [],
 				this.def.sentencePunct,
 				this.def.assertionPunct,
 			);
 			if (err) return err;
-		}
-		return null;
-	}
-
-	/** 通用泄漏检查：只禁止与语言无关的实现工件，无需任何游戏专有知识与语言设定。
-	 *   - 结构化形态：JSON 键值对、声明头 [facts: 复现——任何语言下都是实现痕迹。
-	 *   - 「实现形状」的标识符：实体 id / 属性名中非纯小写单词者（含大写/数字/下划线等，如 wooden_chest、wedgedBy、burnTicks），
-	 *     在任何语言都不是自然词；纯小写自然词（chest / open）与散文同词，不作禁止。
-	 *   - 语言相关词汇约束是游戏的事：经 GameDef.forbiddenTerms / assertionRules 声明，引擎不感知语言。
-	 *  词边界策略：含非 ASCII 的术语用 includes（\b 对中文无效）；纯 ASCII 用词边界（避免命中英文子串）。 */
-	private leakageCheck(text: string): string | null {
-		if (/"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*(?=["{[]|true|false|null|-?\d)/.test(text)) {
-			return "出现了工具调用或状态格式（JSON 键）。";
-		}
-		if (text.includes("[facts:")) return "正文中出现了声明头 [facts: ...]。";
-		const isImplShape = (s: string) => !/^[a-z]+$/.test(s);
-		const forbidden = new Set<string>();
-		for (const e of this.sim.world.entities) {
-			if (isImplShape(e.id) && !e.name.toLowerCase().includes(e.id.toLowerCase())) forbidden.add(e.id);
-			for (const k of Object.keys(e.props)) if (isImplShape(k)) forbidden.add(k);
-		}
-		for (const t of this.def.forbiddenTerms ?? []) forbidden.add(t);
-		for (const t of forbidden) {
-			const hit = /[^\x00-\x7F]/.test(t) ? text.includes(t) : new RegExp(`\\b${t}\\b`).test(text);
-			if (hit) return `出现了实体 id 或实现术语：「${t}」。`;
 		}
 		return null;
 	}
@@ -484,6 +462,7 @@ function buildExpressionPrompt(
 	pending: Change[] = [],
 	intent?: string,
 	revealed: string[] = [],
+	structured = false,
 ): string {
 	const internal = new Set(internalProps);
 	const lines: string[] = [`[当前状态]（JSON，唯一真相源）：`, state, ""];
@@ -530,7 +509,9 @@ function buildExpressionPrompt(
 	lines.push(
 		"",
 		`${directive} 要求：`,
-		"0. 首行输出结构化声明：[facts: 新事实；另一条新事实]——新事实只能来自上面的「本回合尝试」「法则事实」「即将发生」「本回合新见」四处，不得提及这四处之外的实体；没有新事实则写 [facts:]。",
+		structured
+			? "0. 首行输出结构化声明：[facts: 实体id: 新事实；实体id2: 新事实...]——每条事实必须以它涉及的实体 id 开头（一个事实涉及多个实体写作 [id1,id2]: 陈述），id 只能来自上面的「本回合尝试」「法则事实」「即将发生」「本回合新见」四处涉及的实体；没有新事实则写 [facts:]。"
+			: "0. 首行输出结构化声明：[facts: 新事实；另一条新事实]——新事实只能来自上面的「本回合尝试」「法则事实」「即将发生」「本回合新见」四处，不得提及这四处之外的实体；没有新事实则写 [facts:]。",
 		"1. 声明之后空行，再输出面向玩家的散文。",
 		"2. 只描述状态中真实存在的事物与变化；声明之外不得再发明新事实。",
 		"3. 玩家「尝试」过但被拒绝的操作，只描述这次尝试本身，不得声称其产生了后果（实体位置/属性未变）。",

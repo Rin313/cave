@@ -101,6 +101,8 @@ export interface AssertionInput {
 	actor: string;
 	/** 即将发生（下一 tick）的变更，供弱断言豁免"预言"。 */
 	pending: Change[];
+	/** 物理可持握判定（impossibleOnly 规则用）：实体当前是否可持握（可握且可达）。缺省 undefined=不做收窄。 */
+	wieldable?: (id: string) => boolean;
 }
 
 /** 通用断言校验规则（声明式）：游戏声明物理属性的断言词与"矛盾目标"，
@@ -117,6 +119,10 @@ export interface AssertionRule {
 	/** 弱断言词是否接受 pending 豁免（覆盖"即将成立"的预言实体）。缺省 true；
 	 *  如「持有」类断言（握着/手里）不接受预言豁免——当前不在手就是幻觉。 */
 	exemptPending?: boolean;
+	/** 只对"不可能持有"触发：目标实体当前不可持握（不可握或不可达）时才算矛盾。
+	 *  对"随手拿起/放下"可达可持握物品的散文视为动作叙述，不做持有断言——文学宽松策略的机制实现。
+	 *  实现：core 在扫描前用 input.wieldable 收窄 targets（仅当 wieldable 可用时生效）。 */
+	impossibleOnly?: boolean;
 	/** 命中时返回的错误文案。 */
 	error: (e: Entity) => string;
 }
@@ -223,6 +229,9 @@ export interface GameDef {
 	forbiddenTerms?: string[];
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
+	/** 表达层声明契约（可选，缺省 "prose"）：新事实声明 `[facts: ...]` 的校验方式。
+	 *  "prose"（名字子串 + 最长命中归属）与 "structured"（事实写作 [id1,id2]: 陈述，id 精确集合校验，无名字回退）由 core 的 declare.ts 提供。 */
+	declarationContract?: "prose" | "structured";
 	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
 	messages: Messages;
 }

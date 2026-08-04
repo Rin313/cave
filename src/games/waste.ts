@@ -275,9 +275,13 @@ const WASTE_ASSERTION_RULES: AssertionRule[] = [
 		prop: "in",
 		weak: ["手中", "手里", "握着", "拿着"],
 		exemptPending: false,
+		// 不可能持有才拦（impossibleOnly）：可达可持握物品的"随手拿起/放下"是动作叙述（如点燃时"握着火把"），
+		// 不算持有断言。targets 给全域（非场景、非玩家、不在手的实体），core 以 wieldable（grabbable+reach）
+		// 收窄为「不可能持有」——含无 grabbable 属性的实体（陶罐/石碑等未声明可持握即不可持握）与不可达的可持握物。
+		impossibleOnly: true,
 		targets: (world, actor) =>
-			world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && e.props["in"] !== actor),
-		error: (e) => `描述虚构了「${e.name}」在你手中，但当前它不在你这里。`,
+			world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props["in"] !== actor),
+		error: (e) => `描述虚构了「${e.name}」被握住，但它沉重或够不着，不可能拿在手中。`,
 	},
 ];
 
