@@ -11,7 +11,7 @@ import {
 import { Compile } from "typebox/compile";
 import { Type } from "typebox";
 import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
-import { parseDeclaration, leakageCheck, validateDecl, type DeclCtx } from "./declare.ts";
+import { parseDeclaration, validateDecl, type DeclCtx } from "./declare.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -336,13 +336,7 @@ export class Engine {
 				if (declErr) {
 					err = declErr;
 				} else {
-					const bodyErr = this.validateNarration(decl.body);
-					if (bodyErr) {
-						err = bodyErr;
-						outText = decl.body;
-					} else {
-						outText = decl.body;
-					}
+					outText = decl.body;
 				}
 			}
 			this.emit({ type: "raw_attempt", round, text, error: err });
@@ -364,11 +358,6 @@ export class Engine {
 	private summarize(changes: Change[]): string {
 		if (this.def.summarize) return this.def.summarize({ world: this.sim.world, changes, actor: this.sim.actor });
 		return this.sim.serialize();
-	}
-
-	private validateNarration(text: string): string | null {
-		if (!text.trim()) return "叙述为空。";
-		return leakageCheck(text, this.sim.world);
 	}
 
 	dispose(): void {
@@ -486,15 +475,11 @@ function buildExpressionPrompt(
 	}
 	lines.push(
 		"",
-		`${directive} 要求：`,
-		"0. 首行输出结构化声明：[facts: 实体id: 新事实；实体id2: 新事实...]——每条事实必须以它涉及的实体 id 开头（一个事实涉及多个实体写作 id1,id2: 陈述，也可写作 [id1,id2]: 陈述），id 只能来自上面的「本回合尝试」「法则事实」「即将发生」「本回合新见」四处涉及的实体；没有新事实则写 [facts:]。",
-		"1. 声明之后空行，再输出面向玩家的散文。",
-		"2. 只描述状态中真实存在的事物与变化；声明之外不得再发明新事实。",
-		"3. 玩家「尝试」过但被拒绝的操作，只描述这次尝试本身，不得声称其产生了后果（实体位置/属性未变）。",
-		"4. 不要发明不存在的物体、人物、现象或后果。",
-		"5. 一律使用实体的名称（name），不得出现实体 id、属性名、工具调用或任何实现术语。",
-		"6. 输出纯散文，不要调用任何工具。",
-		"7. 「即将发生」区列出的变更，只可叙述为尚未发生的征兆或预兆（用「将」「就要」等表述表明尚未发生），不得写成已发生的事实。",
+		`${directive} 格式：`,
+		"1. 首行声明：[facts: 实体id: 陈述；…]——id 只取「本回合尝试/法则事实/即将发生/本回合新见」涉及的实体；无新事实写 [facts:]。",
+		"2. 空行后只写面向玩家的散文正文；正文中不得再出现任何「id: 」或「id1,id2: 」形式的行。",
+		"3. 用实体名称叙述，不出现 id、属性名、工具调用或实现术语；只叙述状态中真实存在的事物与变更。",
+		"4. 被拒绝的尝试只写尝试本身；「即将发生」区只写征兆（用「将」「就要」），不得写成已发生。",
 	);
 	return lines.join("\n");
 }

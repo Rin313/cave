@@ -1,7 +1,7 @@
 // 表达层声明契约（core 单一来源）：把模型首行 [facts: ...] 的声明与散文体拆分，并按结构化契约校验。
 // 唯一契约 structured：事实必须带实体 id 前缀（id: / id1,id2: / [id1,id2]:），按实体 id 精确集合校验，
 // 无名字回退（prose 契约的名字子串匹配已移除，实证见 ARCHITECTURE §5-10 与实验记录）。
-// 泄漏检查与涉及集（touched）推导在此共享，engine 不重复实现。
+// 声明头的解析、校验与涉及集（touched）推导在此共享，engine 不重复实现。
 import type { Change, World } from "./sim.ts";
 
 export interface Decl {
@@ -16,24 +16,6 @@ export function parseDeclaration(text: string): Decl | null {
 	if (!m) return null;
 	const facts = (m[1] ?? "").split(/[；;]/).map((s) => s.trim()).filter(Boolean);
 	return { facts, body: text.slice(m[0].length).trim() };
-}
-
-/** 通用泄漏检查：只禁止与语言无关的实现工件（JSON 形态 / 声明头复现 / 实现形状标识符）。
- *  语言相关的词汇约束不设硬拦截——交给 prompt 设计与 LLM 能力，不给引擎引入词表。 */
-export function leakageCheck(text: string, world: World): string | null {
-	if (/"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*(?=["{[]|true|false|null|-?\d)/.test(text)) return "出现了工具调用或状态格式（JSON 键）。";
-	if (text.includes("[facts:")) return "正文中出现了声明头 [facts: ...]。";
-	const isImplShape = (s: string) => !/^[a-z]+$/.test(s);
-	const forbidden = new Set<string>();
-	for (const e of world.entities) {
-		if (isImplShape(e.id) && !e.name.toLowerCase().includes(e.id.toLowerCase())) forbidden.add(e.id);
-		for (const k of Object.keys(e.props)) if (isImplShape(k)) forbidden.add(k);
-	}
-	for (const t of forbidden) {
-		const hit = /[^\x00-\x7F]/.test(t) ? text.includes(t) : new RegExp(`\\b${t}\\b`).test(text);
-		if (hit) return `出现了实体 id 或实现术语：「${t}」。`;
-	}
-	return null;
 }
 
 export interface DeclCtx {
@@ -101,8 +83,6 @@ export function validateDecl(decl: Decl, ctx: DeclCtx): string | null {
 				if (!e || !ctx.visible.has(id)) return `声明「${f}」提及了不存在的实体「${id}」。`;
 				if (!touched.has(id)) return `声明「${f}」提及了未涉及的实体「${e.name}」。`;
 			}
-			const leaked = leakageCheck(parsed.rest, ctx.world);
-			if (leaked) return `声明「${f}」中：${leaked}`;
 			continue;
 		}
 		return `声明「${f}」缺少实体 id 声明（应写作 实体id: 陈述 或 id1,id2: 陈述 或 [id1,id2]: 陈述）。`;
