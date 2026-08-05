@@ -385,7 +385,7 @@ function buildMappingPrompt(state: string, intent: string, selection: string | u
 	const intentLine = selection
 		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
 		: `玩家意图：「${intent}」`;
-	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${aff}${focusLine}${intentLine}\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
+	return `[当前状态]（唯一真相源）：\n${state}\n\n${aff}${focusLine}${intentLine}\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
 1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
 2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label }。
 3. 禁止在本阶段输出任何散文或解释文字。
@@ -446,7 +446,7 @@ function buildExpressionPrompt(
 	revealed: string[] = [],
 ): string {
 	const internal = new Set(internalProps);
-	const lines: string[] = [`[当前状态]（JSON，唯一真相源）：`, state, ""];
+	const lines: string[] = [`[当前状态]（唯一真相源）：`, state, ""];
 	const stylistic = stylisticPropsOf(sim.def);
 	if (stylistic.size) {
 		const list = [...stylistic].map((p) => `${p}（${propLabelOf(sim.def, p) ?? p}）`).join("、");
@@ -628,7 +628,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 			return {
 				content: [
 					{ type: "text", text: JSON.stringify({ results }) },
-					{ type: "text", text: `执行后的新状态（JSON，唯一真相源）：\n${sim.digest()}` },
+					{ type: "text", text: `执行后的新状态（唯一真相源）：\n${sim.digest()}` },
 				],
 				details: {},
 			};
