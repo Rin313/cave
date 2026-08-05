@@ -76,6 +76,12 @@ export interface Messages {
 	reachCycle?: string;
 	reachNotHere?: string;
 	reachClosed?: (name: string) => string;
+	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具不可持握时渲染（name 为工具实体名）。 */
+	instrumentUnholdable?: (name: string) => string;
+	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具可达性不满足时渲染（name 为工具实体名）。 */
+	instrumentUnreachable?: (name: string) => string;
+	/** 不变式硬墙拒绝（core 产出，游戏注入语言）：check 返回的 message 渲染为世界腔文案；缺省回落 messages.noResponse（不泄漏实现消息）。 */
+	invariantRejected?: (id: string, message: string) => string;
 	/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
 	defaultReason: string;
 	/** 行动阶段门闩拦截（表达 pass 中误调 act 工具时的防御性拒绝）。 */
@@ -120,7 +126,7 @@ export interface Denial {
 	object?: string;
 	/** 涉及属性（denyAll 等按属性兜底的模板用）。 */
 	prop?: string;
-	/** 可选世界腔覆盖文本（如可达性构件返回的 prose）；缺省用 GameDef.denialTemplates。 */
+	/** 世界腔拒绝文案（法则 text 内联渲染 / 可达性构件 prose / 不变式 message）；缺省回落到 messages.noResponse。 */
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
 	debug?: string;
@@ -158,8 +164,6 @@ export interface GameDef {
 	world: World;
 	/** 时间系统：每 tick 按注册顺序运行的声明式法则（over/when/each/facts）。 */
 	systems?: Law[];
-	/** 结构化拒绝的世界腔渲染：按法则 id 提供模板。缺省返回通用兜底。 */
-	denialTemplates?: Record<string, (d: Denial, world: World) => string>;
 	hint?: string;
 	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 与表达校验读 internal，
 	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
@@ -270,11 +274,9 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-/** 把结构化拒绝渲染为世界腔文本：优先 denial.reason 覆盖，其次按法则模板，缺省兜底。 */
-export function renderDenial(def: GameDef, denial: Denial, world: World): string {
+/** 把结构化拒绝渲染为世界腔文本：优先 denial.reason（法则内联 text 渲染 / 可达性 prose / 不变式 message），缺省兜底 noResponse。 */
+export function renderDenial(def: GameDef, denial: Denial): string {
 	if (denial.reason != null) return denial.reason;
-	const tmpl = def.denialTemplates?.[denial.law];
-	if (tmpl) return tmpl(denial, world);
 	return messagesFor(def).noResponse;
 }
 
@@ -413,7 +415,7 @@ export class Simulation {
 		}
 		const inst = this.probeSkipInstruments ? null : this.instrumentViolation(action, verb);
 		if (inst) {
-			return { ok: false, reason: renderDenial(this.def, inst, this.world), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
+			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}
 		let denial: Denial | null = null;
 		const lctx = this.exprCtx({ ...action.params, actor: this.actor });
@@ -427,7 +429,7 @@ export class Simulation {
 		// 通用兜底：无具体法则拒绝时，由动词末尾的 denyAll.* 兜底法则产出（deniedBy 据此分类）。
 		const deniedBy: "rule" | "denyAll" = denial != null && !denial.law.startsWith("denyAll.") ? "rule" : "denyAll";
 		const reason = denial != null
-			? renderDenial(this.def, denial, this.world)
+			? renderDenial(this.def, denial)
 			: messagesFor(this.def).noResponse;
 		return { ok: false, reason, changes: [], deltas: [], action, deniedBy, denial: denial ?? undefined };
 	}
@@ -474,15 +476,19 @@ export class Simulation {
 	}
 
 	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（grabbable）且可达。
-	 *  只产出结构化拒绝（law + subject），散文由 GameDef.denialTemplates 渲染，core 不撰写理由。 */
+	 *  只产出结构化拒绝（law + subject + reason），世界腔文案由游戏经 messages 注入，core 不撰写理由。 */
 	private instrumentViolation(action: Action, verb: VerbDef): Denial | null {
+		const msgs = messagesFor(this.def);
 		for (const p of verb.instrumentParams ?? []) {
 			const id = action.params[p];
 			if (typeof id !== "string" || !id) continue;
 			if (!entity(this.world, id)) continue;
 			if (!this.wieldable(id)) {
-				if (prop(this.world, id, "grabbable") !== true) return { law: "instrument.unholdable", subject: id };
-				return { law: "instrument.unreachable", subject: id };
+				const name = entity(this.world, id)?.name ?? id;
+				if (prop(this.world, id, "grabbable") !== true) {
+					return { law: "instrument.unholdable", subject: id, reason: msgs.instrumentUnholdable?.(name) };
+				}
+				return { law: "instrument.unreachable", subject: id, reason: msgs.instrumentUnreachable?.(name) };
 			}
 		}
 		return null;
@@ -497,8 +503,9 @@ export class Simulation {
 			// 回滚：先删掉提交期间新建的键（relations/nextId 等快照中不存在的），再整体恢复。
 			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
 			Object.assign(this.world, before);
-			const d: Denial = { law: `invariant.${inv.id}`, debug: inv.message };
-			return { ok: false, changes: [], denial: d, reason: renderDenial(this.def, d, this.world) };
+			const reason = messagesFor(this.def).invariantRejected?.(inv.id, inv.message) ?? messagesFor(this.def).noResponse;
+			const d: Denial = { law: `invariant.${inv.id}`, debug: inv.message, reason };
+			return { ok: false, changes: [], denial: d, reason };
 		}
 		return { ok: true, changes };
 	}

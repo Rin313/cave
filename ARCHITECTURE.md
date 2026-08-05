@@ -38,8 +38,8 @@
 - **开放通道（反向解析，`fallback: "proven"`，已移除）**：非预设动词不接受 AI 手写 deltas——proof 给 `claims`（前置事实，须为真）+ `desired`（期望后果），`resolveUnscripted` 在开放法则（`Law.open` 标记或 `GameDef.openLaws`）中反查：对每条法则用 desired 解出变量绑定（效果模板形状匹配），forward 求值后若其后果覆盖 desired，**经该法则提交**（级联/不变式/痕迹照常）。未命中落 `denyAll.*`。这是"AI 提后果、世界走法则"的重量机制：无开放法则能产出的后果（凭空改材质、传送不可持握物）一律被拒。`openLawsOf(def)` 汇集 `GameDef.openLaws` + 动词 laws 中 `open:true` 者。
 
   **已移除（v2→v3，替换为环境响应声明式动词）**：精确模板匹配把"自由面"绑定到法则枚举——每加一种环境写需一条法则、每加一个属性组合需 2^N 组合法则，交互面随法则量膨胀，即"菜单化"。v2 曾由 `fallback: "soft"` 软通道承担（`Law.open` / `GameDef.openLaws` / `resolveUnscripted` 已删；点燃/采集/移动/开合迁为预设 law 动词）；v3 研究证明软通道与实体不可知法则等价（§5-8），且软通道自身带授予理由退化与静默假授予 bug（§5-9），已一并移除，环境响应改由实体不可知法则承担（见上）。
-- **`denyAll.*` 兜底法则**：每个动词末尾挂一条无条件拒绝的 `denyAll.<verb>` 法则（`reject.when` 为空），某动词所有法则未授予且无具体拒绝时兜底（状态不变）；散文由 `denialTemplates` 渲染，`deniedBy` 据此标记为 `"denyAll"`。
-- **`denialTemplates`**：拒绝理由的世界腔渲染（按 law 模板）；`denyAll` 等终端兜底的理由也经此渲染，不泄漏属性名/实现术语。
+- **`denyAll.*` 兜底法则**：每个动词末尾挂一条无条件拒绝的 `denyAll.<verb>` 法则（`reject.when` 为空），某动词所有法则未授予且无具体拒绝时兜底（状态不变）；散文由法则内联 `text` 渲染，`deniedBy` 据此标记为 `"denyAll"`。
+- **拒绝文案内联（取代 `denialTemplates` 并行映射）**：每条 `DenialDef` 可带 `text(args, ctx)` 闭包，求值时渲染进 `denial.reason`（reason Expr 优先，缺省回落 `messages.noResponse`）。core 产出的拒绝（施动工具前提 `instrument.*`、不变式硬墙 `invariant.*`）由 `Messages` 的 `instrumentUnholdable`/`instrumentUnreachable`/`invariantRejected` 注入语言——并行映射与字符串键耦合消除，"一个行为的文案与其条件同处一处"。
 - **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas（火蔓延、燃尽、日程等）。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交后立即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱等"动作→世界响应"的因果链在当回合成立，不依赖显式 wait。reactive 产出并入动作的 StepResult（facts/involved 合并），不重复入日志。
 - **`grounding`**：可见实体索引钩子，决定哪些实体进 LLM 序列化；缺省全部可见。**`reach`/`reachReason`（GameDef 可选）是可达性空槽**：`P.reach`/施动工具前提共用的谓词，缺省全可达、无理由——core 不内嵌任何空间模型；容器包含树语义是游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`/`reachFor`），需要空间语义的游戏自选接入。
 - **`messages`**（GameDef 必填）：core 产出的用户可见文案（校验层拒绝、时间流逝等）由游戏注入自有语言；core 不内嵌任何语言，缺省为空、倒逼游戏声明。可达性理由文案（`reachMissing` 等）可选，供游戏侧空间构件注入。

@@ -73,13 +73,24 @@ export type Effect =
 	| { op: "destroy"; e: Expr }
 	| { op: "if"; c: Pred[]; then: Effect[] };
 
-/** 结构化拒绝模板：subject/object/prop 求值为实体 id/属性名，散文经 GameDef.denialTemplates 渲染。 */
+/** 世界腔拒绝文案的输入：已解析的实体 id / 属性名。
+ *  不含 reason——text 只在 reason Expr 缺席或为空时被调用，args 里的 reason 恒为 undefined。 */
+export interface DenialArgs {
+	subject?: string;
+	object?: string;
+	prop?: string;
+}
+
+/** 结构化拒绝定义：subject/object/prop 求值为实体 id/属性名，世界腔文案由 text 内联渲染（取代 GameDef.denialTemplates）。 */
 export interface DenialDef {
 	law: string;
 	subject?: Expr;
 	object?: Expr;
 	prop?: Expr;
 	reason?: Expr;
+	/** 世界腔拒绝文案（内联，取代 GameDef.denialTemplates 并行映射）：args 为解析后的 id/属性名，ctx 提供 name/propLabel。
+	 *  与 reason Expr 同时给出时 reason 优先（与旧 renderDenial 的优先级一致）；缺省回落到 GameDef.messages.noResponse。 */
+	text?: (args: DenialArgs, ctx: ExprCtx) => string;
 }
 
 /** 量词：tick 系统按此枚举候选实体（动作法则无需 over，参数即绑定）。 */
@@ -336,13 +347,11 @@ export function evaluateLaw(ctx: ExprCtx, law: Law, collect = false): LawResult 
 			const v = String(evalExpr(c, x) ?? "");
 			return v === "" ? undefined : v;
 		};
-		return {
-			law: d.law,
-			subject: s(d.subject),
-			object: s(d.object),
-			prop: s(d.prop),
-			reason: s(d.reason),
-		};
+		const subject = s(d.subject);
+		const object = s(d.object);
+		const prop = s(d.prop);
+		const reason = s(d.reason);
+		return { law: d.law, subject, object, prop, reason: reason ?? (d.text ? d.text({ subject, object, prop }, c) : undefined) };
 	};
 	if (!collect && law.reject && (law.reject.when ?? []).every((p) => matchPred(ctx, p))) {
 		return { granted: false, denial: mkDenial(law.reject.denial, ctx) };

@@ -38,7 +38,7 @@
 - 接受**结构化动作**（action），返回新状态与结构化结果。
 - 统一模式：**动作动词表 + 声明式法则（Law）裁决**
   - 动作空间由游戏声明：`GameDef.verbs` 是动词表（`{ verb: { schema, entityParams, candidates, laws } }`），引擎据此生成 act 工具的 schema，并在每回合以 `Simulation.affordances()`（枚举 动词×可见实体×候选值 的只读裁决 `check()`，预算按动词均分、实体按相关属性排序）把**当前世界会授予的动作**注入映射 prompt——动作空间接地，映射不再冷猜测参数。不再硬编码 apply/move/set——era 类游戏可声明 `talk/travel/equip`，开放世界可声明 `attack/trade/craft`。当前参考游戏按两极各自声明动词集并内置法则集：era 极 village（`gather/eat/rest/talk/buy/sell/clear/fix/seal/subdue/scout`）、开放世界极 waste（`travel/move/open/use/harvest/mark/examine`）。环境响应（刻痕、勘察等）由实体不可知法则承担，不再需要 core 级"AI 提后果"通道（软通道已移除，研究结论见 ARCHITECTURE §5-8~11）。
-  - 每个动词挂一组**声明式法则**（`Law`：`over` 量词 / `when` 条件 / `each` 后果 / `denies` 拒绝 / `reject` 前置拒绝），解释器 `evaluateLaw` 裁决：`granted` + 世界性理由 + **delta 变更列表**（`set/inc/push/del`，支持点路径；`spawn/destroy` 仅 tick 系统使用）；法则按声明顺序短路。全部否决且无具体理由时，落到动词末尾的 `denyAll.*` 兜底法则（状态不变，数据法则承载，散文由 `denialTemplates` 渲染）。
+  - 每个动词挂一组**声明式法则**（`Law`：`over` 量词 / `when` 条件 / `each` 后果 / `denies` 拒绝 / `reject` 前置拒绝），解释器 `evaluateLaw` 裁决：`granted` + 世界性理由 + **delta 变更列表**（`set/inc/push/del`，支持点路径；`spawn/destroy` 仅 tick 系统使用）；法则按声明顺序短路。全部否决且无具体理由时，落到动词末尾的 `denyAll.*` 兜底法则（状态不变，数据法则承载，散文由法则内联 `text` 渲染）。
   - 每个否决结果标记 `deniedBy: "rule" | "denyAll"`：具体法则给了世界性理由（rule）还是落到通用兜底法则（denyAll.*）。这是"法则无洞"探测与拒绝质量审计的语义基础，不依赖理由字符串匹配。
   - **动作的组合由 LLM 自由提出（提案），世界的回应由法则层确定完成，LLM 不参与任何状态变更，也不提案数值**——数值与后果由法则产出（如 `{ op: "inc", e, p: "will", by: -20 }`）。
   - `采下浆果` → LLM 提案 `harvest(bush)` → 动词 `harvest` 的对应法则裁决返回变更 `[berries+1, ripe→false]`。
@@ -50,7 +50,7 @@
   - **接地钩子**：`grounding` 决定哪些实体进 LLM 序列化；可达性是 core 的**空槽**（`reach`/`reachReason` 谓词，缺省全可达），core 不内嵌任何空间模型——容器包含树语义（`space`/`openable`/`open`/`in`）降为游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`），需要空间语义的游戏自选接入，不强制；关容器对实体的放行（如楔住的门缝）由构件 opts 的 `containerAccess` 谓词在 game 层裁决。**`digest`（GameDef 可选）是序列化投影**：决定状态以什么形态进 prompt（裁剪冗余、格式化关系边、聚焦点置顶），缺省全量 JSON。
   - **施动工具前提**：动词可声明 `instrumentParams`（哪些实体参数是"挥动的工具"，如 use 的 source）。核心在规则前跑共享检查——必须可持握（`grabbable`）且可达；不满足直接拒绝（`instrument.*` 法则），不进入规则。这消除了"用搬不动的重物施力"式的荒谬授予，且让 affordances 枚举自动跳过不可持握工具、`sim probe` 可审计"规则会在不可持握工具上授予"的潜在洞。
   - **关系边与焦点/痕迹**：`world.relations`（`{ from, to, type, value }` 边表）表达社会/叙事状态（信任、记忆、派系），法则以 `relSet/relInc/relDel` 变更。`world.focus`（本回合显著实体，跨回合指代锚点）与 `world.traces`（实体累计被拒次数，拒绝痕迹）由核心确定性维护，二者进序列化。
-  - **法则无洞**：完整性检查工具（`sim probe`）穷举可见实体的动词/参数组合，报告落到 `deniedBy === "denyAll"` 的**有意义**动作（实体确实持有该属性、非空操作、值类型匹配），作为作者预警——世界法则的洞就是模型幻觉的诱因。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测"法则本身是否会在不可持握工具上授予"。`denyAll.*` 是必要的终端兜底（未覆盖的操作用世界性理由回应，理由由 `GameDef.denialTemplates` 渲染，不泄漏实现术语），不追求零洞；对模型**真会试**的操作给高信号理由。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 laws。
+  - **法则无洞**：完整性检查工具（`sim probe`）穷举可见实体的动词/参数组合，报告落到 `deniedBy === "denyAll"` 的**有意义**动作（实体确实持有该属性、非空操作、值类型匹配），作为作者预警——世界法则的洞就是模型幻觉的诱因。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测"法则本身是否会在不可持握工具上授予"。`denyAll.*` 是必要的终端兜底（未覆盖的操作用世界性理由回应，理由由法则内联 `text` 渲染，不泄漏实现术语），不追求零洞；对模型**真会试**的操作给高信号理由。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 laws。
   - 意图表降级为可选"规则捷径"（高频明确操作的确定性直通），不再作为交互的主要出口。
 
 ### 4.2 映射层（LLM，双出口 + 结构化拒绝）
@@ -66,7 +66,7 @@
   - 表达 pass 在状态变更后独立运行（见 §4.3），面向玩家；玩家的唯一信息来源是表达 pass。
   - 这切断两条幻觉路径：模型不调工具却叙述动作、模型叙述未发生的后果。
 - **规则捷径**（未实现，未来可选优化）：`take X` / `open door` 等高频明确动作可用确定性解析直通，不绕 LLM，降成本与延迟。
-- **拒绝契约**：模型不撰写任何拒绝理由。无法解析时返回结构化拒绝（仅 `label`）。设计上模型可把预判被拒的动作填入 `refusal.considered` 交规则层裁决（否认 → 规则 denyReason，授予 → 直接执行，纠正模型误判）——**当前未实现**（act 工具 `refusal` 仅含 `label`）；现有路径是模型直接提交 action，由规则层裁决，状态不变。**施动工具前提是规则层之前的共享拒绝**（`instrument.*` 法则，见 §4.1）：`use` 类动作的施动工具不可持握/不可达时，核心直接拒绝并渲染世界腔理由，规则不参与——这是少数几个"核心产出的法则"，理由模板由游戏 `denialTemplates` 提供。
+- **拒绝契约**：模型不撰写任何拒绝理由。无法解析时返回结构化拒绝（仅 `label`）。设计上模型可把预判被拒的动作填入 `refusal.considered` 交规则层裁决（否认 → 规则 denyReason，授予 → 直接执行，纠正模型误判）——**当前未实现**（act 工具 `refusal` 仅含 `label`）；现有路径是模型直接提交 action，由规则层裁决，状态不变。**施动工具前提是规则层之前的共享拒绝**（`instrument.*` 法则，见 §4.1）：`use` 类动作的施动工具不可持握/不可达时，核心直接拒绝并渲染世界腔理由，规则不参与——这是少数几个"核心产出的法则"，理由经 `messages.instrumentUnholdable`/`instrumentUnreachable` 由游戏注入语言。
 
 ### 4.3 表达层（LLM，可证伪的文本生成）
 
@@ -134,8 +134,7 @@ const game: GameDef = {
     // 每个动词：schema 约束参数（TypeBox）；candidates 给非实体参数候选值（动作空间接地/探测共用）；laws 裁决后果（delta 列表，短路：首个授予即生效；末尾可挂 denyAll.* 兜底法则）
   },
   systems: [Law],                 // 时间系统（可选，声明式法则）
-  messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/可达性兜底），游戏注入自有语言，core 不内嵌任何语言
-  denialTemplates,                // 拒绝理由的世界腔渲染（可选）
+  messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/可达性/施动工具/不变式兜底），游戏注入自有语言，core 不内嵌任何语言
   grounding: (w, a) => [...],     // 可见实体索引（可选）
   hint, summarize, props, // props：属性注册表（type/label/internal/stylistic）；表达一致性由声明契约 + 提交硬墙承担，无词表断言钩子
 };
