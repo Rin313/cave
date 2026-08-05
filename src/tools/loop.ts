@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
@@ -50,6 +50,24 @@ function saveState(dir: string, sim: Simulation): void {
 
 function appendTranscript(dir: string, entry: unknown): void {
 	appendFileSync(transcriptPath(dir), JSON.stringify(entry) + "\n", "utf8");
+}
+
+/** 把 SDK 会话文件逐条（不过滤）转换为可审阅 MD，写到同名 .review.md 旁。 */
+function writeSessionReview(sessionFile: string): void {
+	const lines = readFileSync(sessionFile, "utf8").split(/\r?\n/).filter((l) => l.trim());
+	if (!lines.length) return;
+	const header = JSON.parse(lines[0]!) as { id?: string };
+	const out: string[] = [
+		"# 会话审阅 " + (header.id ?? basename(sessionFile)),
+		"",
+		"> 由 `" + sessionFile + "` 逐条转换，未过滤任何字段。",
+		"",
+	];
+	for (const [i, l] of lines.entries()) {
+		const e = JSON.parse(l) as { type: string; message?: { role?: string } };
+		out.push("### " + (i + 1) + ". " + e.type + (e.message?.role ? "（" + e.message.role + "）" : ""), "", "```json", l, "```", "");
+	}
+	writeFileSync(sessionFile.replace(/\.jsonl$/, ".review.md"), out.join("\n"), "utf8");
 }
 
 function locateRunDir(runId: string, game?: string): string | null {
@@ -145,6 +163,7 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: 1, phase: "start", scene, validations });
+		writeSessionReview(meta.sessionFile!);
 		emit({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, world: sim.snapshot() }, opts);
 	} finally {
 		engine.dispose();
@@ -184,6 +203,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			narration,
 			validations,
 		});
+		writeSessionReview(meta.sessionFile!);
 		emit({
 			run: runId,
 			game: meta.game,
@@ -220,6 +240,7 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 		meta.turn += 1;
 		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations });
+		writeSessionReview(meta.sessionFile!);
 		emit({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations }, opts);
 	} finally {
 		engine.dispose();
@@ -256,6 +277,7 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 			scene,
 			validations,
 		});
+		writeSessionReview(meta.sessionFile!);
 		emit({
 			run: runId,
 			game: meta.game,
