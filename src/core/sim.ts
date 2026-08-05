@@ -144,7 +144,7 @@ export interface VerbDef {
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
 	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
-	 *  核心在规则前跑共享前提检查：必须可持握（grabbable）且在可达范围；不满足直接拒绝，不进入规则。
+	 *  核心在规则前跑共享前提检查：必须可持握（holdable 槽位）且在可达范围；不满足直接拒绝，不进入规则。
 	 *  affordances 枚举自动跳过不可持握工具；probe 依此审计「规则授予但前提不满足」的潜在洞。 */
 	instrumentParams?: string[];
 	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
@@ -174,8 +174,8 @@ export interface GameDef {
 	reach?: (world: World, actor: string, id: string) => boolean;
 	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
 	reachReason?: (world: World, actor: string, id: string) => string | null;
-	/** 可持握槽位（游戏声明）：实体能否被拿起/当施动工具。core 不内嵌任何属性名——缺省 =
-	 *  实体持有 `grabbable: true` 属性；游戏可自定语义（体力门槛、材质、锋利等）。
+	/** 可持握槽位（游戏必须声明）：实体能否被拿起/当施动工具。core 不内嵌任何属性名、不提供缺省——
+	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
 	 *  wieldable（= holdable + reach）与施动工具前提共用。 */
 	holdable?: (world: World, actor: string, id: string) => boolean;
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
@@ -468,7 +468,7 @@ export class Simulation {
 		};
 	}
 
-	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（grabbable）且可达。
+	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（holdable 槽位）且可达。
 	 *  只产出结构化拒绝（law + subject + reason），世界腔文案由游戏经 messages 注入，core 不撰写理由。 */
 	private instrumentViolation(action: Action, verb: VerbDef): Denial | null {
 		const msgs = messagesFor(this.def);
@@ -581,11 +581,10 @@ export class Simulation {
 		return this.world.focus ?? null;
 	}
 
-	/** 实体是否可持握（游戏声明的 GameDef.holdable 槽位，缺省 = `grabbable` 属性）。core 不内嵌属性名。 */
+	/** 实体是否可持握（游戏声明的 GameDef.holdable 槽位，core 不内嵌任何属性名）。
+	 *  未声明的游戏一律不可持握（无缺省属性假设）。 */
 	holdable(id: string): boolean {
-		if (this.def.holdable) return this.def.holdable(this.world, this.actor, id);
-		const e = entity(this.world, id);
-		return e?.props.grabbable === true;
+		return this.def.holdable ? this.def.holdable(this.world, this.actor, id) : false;
 	}
 
 	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。
