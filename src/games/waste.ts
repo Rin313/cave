@@ -442,6 +442,8 @@ export const waste: GameDef = {
 	props: WASTE_PROPS,
 	grounding: (world, actor) => [...inTreeVisible(world, actor, REACH_OPTS)],
 	...reachFor(REACH_OPTS),
+	// 可持握语义由游戏声明（core 不假定属性名）：荒原上只有明确可持握（grabbable）的东西能当工具/被拿起。
+	holdable: (world, _actor, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeWaste,
 	digest: digestWaste,
 	hint: `世界法则（模拟层强制执行）：

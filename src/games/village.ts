@@ -245,6 +245,8 @@ export const village: GameDef = {
 	],
 	grounding: (world, actor) => [...inTreeVisible(world, actor, REACH_OPTS)],
 	...reachFor(REACH_OPTS),
+	// 可持握语义由游戏声明（core 不假定属性名）：河畔村同样只有 grabbable 的东西可被拿起。
+	holdable: (world, _actor, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeVillage,
 	digest: digestVillage,
 	hint: `世界法则（模拟层强制执行）：

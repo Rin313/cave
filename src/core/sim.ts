@@ -177,6 +177,10 @@ export interface GameDef {
 	reach?: (world: World, actor: string, id: string) => boolean;
 	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
 	reachReason?: (world: World, actor: string, id: string) => string | null;
+	/** 可持握槽位（游戏声明）：实体能否被拿起/当施动工具。core 不内嵌任何属性名——缺省 =
+	 *  实体持有 `grabbable: true` 属性；游戏可自定语义（体力门槛、材质、锋利等）。
+	 *  wieldable（= holdable + reach）与施动工具前提共用。 */
+	holdable?: (world: World, actor: string, id: string) => boolean;
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
 	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
 	probeScope?: (world: World, actor: string) => string[];
@@ -315,11 +319,6 @@ export function propSet(e: Entity, path: string, value: PropValue): void {
 	}
 	if (Array.isArray(cur)) cur[Number(last)] = value;
 	else (cur as Record<string, PropValue>)[last] = value;
-}
-
-export function prop(world: World, id: string, path: string): PropValue {
-	const e = entity(world, id);
-	return e ? propGet(e, path) : null;
 }
 
 /** 关系查询：from→to 的指定 type 的值（无则 null）。 */
@@ -485,7 +484,7 @@ export class Simulation {
 			if (!entity(this.world, id)) continue;
 			if (!this.wieldable(id)) {
 				const name = entity(this.world, id)?.name ?? id;
-				if (prop(this.world, id, "grabbable") !== true) {
+				if (!this.holdable(id)) {
 					return { law: "instrument.unholdable", subject: id, reason: msgs.instrumentUnholdable?.(name) };
 				}
 				return { law: "instrument.unreachable", subject: id, reason: msgs.instrumentUnreachable?.(name) };
@@ -588,10 +587,17 @@ export class Simulation {
 		return this.world.focus ?? null;
 	}
 
+	/** 实体是否可持握（游戏声明的 GameDef.holdable 槽位，缺省 = `grabbable` 属性）。core 不内嵌属性名。 */
+	holdable(id: string): boolean {
+		if (this.def.holdable) return this.def.holdable(this.world, this.actor, id);
+		const e = entity(this.world, id);
+		return e?.props.grabbable === true;
+	}
+
 	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。
-	 *  可达性走游戏声明的 GameDef.reach 槽位（core 不内嵌空间模型）。 */
+	 *  可持握走 holdable 槽位，可达性走 GameDef.reach 槽位（core 不内嵌空间模型）。 */
 	wieldable(id: string): boolean {
-		if (prop(this.world, id, "grabbable") !== true) return false;
+		if (!this.holdable(id)) return false;
 		return this.def.reach ? this.def.reach(this.world, this.actor, id) : true;
 	}
 
