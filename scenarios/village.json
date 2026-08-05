@@ -78,6 +78,50 @@
 				{ "name": "自由动作动词不存在：do 被拒为未知动词，铜币不被改变", "action": { "verb": "do", "params": {} }, "expect": { "ok": false, "reason": "不认识", "state": { "player.coins": 40 } } },
 				{ "name": "正常行动后守恒不变式仍成立", "action": { "verb": "gather", "params": { "entity": "flour" } }, "expect": { "ok": true, "state": { "player.coins": 40 } } }
 			]
+		},
+		{
+			"name": "时间门控：入夜歇业、白天恢复",
+			"steps": [
+				{ "name": "入夜（时刻 3）", "tick": 3, "expect": { "ok": true } },
+				{ "name": "入夜买米被拒（打烊）", "action": { "verb": "buy", "params": {} }, "expect": { "ok": false, "reason": "打烊" } },
+				{ "name": "入夜买谷物被拒（睡了）", "action": { "verb": "buyGrain", "params": {} }, "expect": { "ok": false, "reason": "睡" } },
+				{ "name": "入夜卖米被拒（歇下）", "action": { "verb": "sell", "params": {} }, "expect": { "ok": false, "reason": "歇" } },
+				{ "name": "天亮（时刻 4）", "tick": 1, "expect": { "ok": true } },
+				{ "name": "白天恢复买卖", "action": { "verb": "buy", "params": {} }, "expect": { "ok": true, "state": { "player.coins": 30, "merchant.coins": 90 } } }
+			]
+		},
+		{
+			"name": "谷物经济：动态价格、守恒、兑换体力",
+			"steps": [
+				{ "name": "买谷物（存粮 10，价 3）", "action": { "verb": "buyGrain", "params": {} }, "expect": { "ok": true, "state": { "player.coins": 37, "farmer.coins": 63, "wheatfield.grain": 9, "player.grain": 1 } } },
+				{ "name": "买谷物（存粮 9，价 4）", "action": { "verb": "buyGrain", "params": {} }, "expect": { "ok": true, "state": { "player.coins": 33, "wheatfield.grain": 8 } } },
+				{ "name": "买谷物（存粮 8，价 5）", "action": { "verb": "buyGrain", "params": {} }, "expect": { "ok": true, "state": { "player.coins": 28, "farmer.coins": 72, "wheatfield.grain": 7, "player.grain": 3 } } },
+				{ "name": "吃谷物：饱腹 +30、体力 +6", "action": { "verb": "eatGrain", "params": {} }, "expect": { "ok": true, "state": { "player.grain": 2, "player.satiety": 90, "player.hp": 56 } } },
+				{ "name": "吃光剩余谷物", "action": { "verb": "eatGrain", "params": {} }, "expect": { "ok": true, "state": { "player.grain": 1 } } },
+				{ "name": "吃最后一份", "action": { "verb": "eatGrain", "params": {} }, "expect": { "ok": true, "state": { "player.grain": 0 } } },
+				{ "name": "没有谷物可吃", "action": { "verb": "eatGrain", "params": {} }, "expect": { "ok": false, "reason": "谷物", "state": { "player.grain": 0 } } }
+			]
+		},
+		{
+			"name": "井水资源：枯井不可汲、封底后汲水饮水",
+			"steps": [
+				{ "name": "枯井打不出水", "action": { "verb": "draw", "params": {} }, "expect": { "ok": false, "reason": "枯" } },
+				{ "name": "清理枯井", "action": { "verb": "clear", "params": {} }, "expect": { "ok": true } },
+				{ "name": "拾取木料", "action": { "verb": "gather", "params": { "entity": "timber" } }, "expect": { "ok": true } },
+				{ "name": "修葺枯井", "action": { "verb": "fix", "params": {} }, "expect": { "ok": true } },
+				{ "name": "封底，清泉涌出（10 桶水）", "action": { "verb": "seal", "params": {} }, "expect": { "ok": true, "state": { "well.supply": true, "well.water": 10 } } },
+				{ "name": "汲水：井水 10 → 9，随身 1", "action": { "verb": "draw", "params": {} }, "expect": { "ok": true, "state": { "well.water": 9, "player.water": 1 } } },
+				{ "name": "饮水：消耗 1 份水，疲劳 -20、体力 +3", "action": { "verb": "drink", "params": {} }, "expect": { "ok": true, "state": { "player.water": 0, "player.fatigue": -20, "player.hp": 53 } } }
+			]
+		},
+		{
+			"name": "关系网络：talk 泛化到任意 NPC + 老农信任折扣",
+			"steps": [
+				{ "name": "与老农交谈（信任 1）", "action": { "verb": "talk", "params": { "target": "farmer" } }, "expect": { "ok": true, "reason": "亲近" } },
+				{ "name": "信任不足：原价买谷物（价 3）", "action": { "verb": "buyGrain", "params": {} }, "expect": { "ok": true, "state": { "player.coins": 37, "farmer.coins": 63 } } },
+				{ "name": "与老农再交谈（信任 2）", "action": { "verb": "talk", "params": { "target": "farmer" } }, "expect": { "ok": true } },
+				{ "name": "信任折扣：价 2（存粮 9）", "action": { "verb": "buyGrain", "params": {} }, "expect": { "ok": true, "state": { "player.coins": 35, "farmer.coins": 65 } } }
+			]
 		}
 	]
 }

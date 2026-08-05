@@ -61,6 +61,49 @@
 				{ "name": "tick 3：朽木与枯树烧成灰烬", "tick": 3, "expect": { "ok": true, "reason": "灰烬", "state": { "drytree.material": "ash", "drytree.burning": false, "drywood.material": "ash" } } },
 				{ "name": "tick 5：浆果丛再生", "tick": 5, "expect": { "ok": true, "state": { "bush.ripe": true } } }
 			]
+		},
+		{
+			"name": "渴感生存：干渴累积伤身、泉水缓解",
+			"steps": [
+				{ "name": "34 个时段后渴感 102，体力 -5", "tick": 34, "expect": { "ok": true, "state": { "player.thirst": 102, "player.hp": 95 } } },
+				{ "name": "去河床", "action": { "verb": "travel", "params": { "dest": "riverbed" } }, "expect": { "ok": true } },
+				{ "name": "在泉眼喝水，渴感归零", "action": { "verb": "drink", "params": {} }, "expect": { "ok": true, "state": { "player.thirst": 0 } } }
+			]
+		},
+		{
+			"name": "舀水与携带：水囊容量、异地解渴",
+			"steps": [
+				{ "name": "没有泉水与存水时喝水被拒", "action": { "verb": "drink", "params": {} }, "expect": { "ok": false, "reason": "水" } },
+				{ "name": "去河床", "action": { "verb": "travel", "params": { "dest": "riverbed" } }, "expect": { "ok": true } },
+				{ "name": "舀水（1/2）", "action": { "verb": "fill", "params": {} }, "expect": { "ok": true, "state": { "player.water": 1 } } },
+				{ "name": "舀水（2/2）", "action": { "verb": "fill", "params": {} }, "expect": { "ok": true, "state": { "player.water": 2 } } },
+				{ "name": "水囊满了被拒", "action": { "verb": "fill", "params": {} }, "expect": { "ok": false, "reason": "满" } },
+				{ "name": "回营地", "action": { "verb": "travel", "params": { "dest": "camp" } }, "expect": { "ok": true } },
+				{ "name": "喝随身水（1/2）", "action": { "verb": "drink", "params": {} }, "expect": { "ok": true, "state": { "player.water": 1, "player.thirst": 0 } } },
+				{ "name": "喝随身水（2/2）", "action": { "verb": "drink", "params": {} }, "expect": { "ok": true, "state": { "player.water": 0 } } }
+			]
+		},
+		{
+			"name": "夜袭：同地野兽入夜伤人（实体不可知法则）",
+			"steps": [
+				{ "name": "去河床", "action": { "verb": "travel", "params": { "dest": "riverbed" } }, "expect": { "ok": true } },
+				{ "name": "去土丘", "action": { "verb": "travel", "params": { "dest": "mound" } }, "expect": { "ok": true } },
+				{ "name": "去沙海", "action": { "verb": "travel", "params": { "dest": "dune" } }, "expect": { "ok": true } },
+				{ "name": "入夜：沙虫与沙狐各咬一口（-4）", "tick": 3, "expect": { "ok": true, "state": { "player.hp": 96 } } },
+				{ "name": "天亮不再被袭", "tick": 1, "expect": { "ok": true, "state": { "player.hp": 96 } } }
+			]
+		},
+		{
+			"name": "新实体环境响应：实体不可知法则自动覆盖",
+			"steps": [
+				{ "name": "去河床", "action": { "verb": "travel", "params": { "dest": "riverbed" } }, "expect": { "ok": true } },
+				{ "name": "勘察沙鼠", "action": { "verb": "examine", "params": { "entity": "sage" } }, "expect": { "ok": true, "reason": "勘察" } },
+				{ "name": "去土丘", "action": { "verb": "travel", "params": { "dest": "mound" } }, "expect": { "ok": true } },
+				{ "name": "勘察石台", "action": { "verb": "examine", "params": { "entity": "altar" } }, "expect": { "ok": true } },
+				{ "name": "在石台上刻记号", "action": { "verb": "mark", "params": { "entity": "altar" } }, "expect": { "ok": true, "state": { "altar.marked": true } } },
+				{ "name": "去沙海", "action": { "verb": "travel", "params": { "dest": "dune" } }, "expect": { "ok": true } },
+				{ "name": "拿起颅骨", "action": { "verb": "move", "params": { "entity": "skull", "dest": "player" } }, "expect": { "ok": true, "state": { "skull.in": "player" } } }
+			]
 		}
 	]
 }

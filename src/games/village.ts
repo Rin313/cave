@@ -1,7 +1,7 @@
 import type { GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
 import { entity, internalPropsOf } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
-import { E, P, type DenialDef, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
+import { E, P, type DenialDef, type Expr, type ExprCtx, type Law, type Pred } from "../core/expr.ts";
 import { reachFor, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
@@ -29,6 +29,9 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	phase: { type: "number", label: "阶段" },
 	supply: { type: "boolean", label: "出水量" },
 	aggressive: { type: "boolean", label: "攻击性" },
+	grain: { type: "number", label: "谷物" },
+	water: { type: "number", label: "清水" },
+	wheat: { type: "boolean", internal: true },
 };
 
 const PROP_LABELS: Record<string, string> = Object.fromEntries(
@@ -45,6 +48,8 @@ function summarizeVillage(input: { world: World; changes: import("../core/sim.ts
 	const bits: string[] = [];
 	if (player) {
 		bits.push(`体力 ${player.props.hp ?? 0}，疲劳 ${player.props.fatigue ?? 0}，饱腹 ${player.props.satiety ?? 0}，铜币 ${player.props.coins ?? 0}，浆果 ${player.props.berries ?? 0}`);
+		if (Number(player.props.grain ?? 0) > 0) bits.push(`谷物 ${player.props.grain}`);
+		if (Number(player.props.water ?? 0) > 0) bits.push(`清水 ${player.props.water}`);
 		if (player.props.down === true) bits.push("你昏迷着。");
 	}
 	return ["你站在河畔村。"].concat(bits, changes.filter((c) => !c.prop.startsWith("#")).map((c) => `变更：${name(world, c.entity)}的${PROP_LABELS[c.prop] ?? c.prop} ${String(c.from)} → ${String(c.to)}`)).join("\n");
@@ -99,21 +104,37 @@ const restLaws: Law[] = [
 	{ id: "denyAll.rest", reject: { when: [], denial: { law: "denyAll.rest", text: () => "你无法在这里歇息。" } } },
 ];
 
+/** 交谈（实体不可知：对任意 npc 提升其对自己的信任）。 */
 const talkLaws: Law[] = [
-	{ id: "talk.nice", when: [P.reach(E.v("target"))], each: [{ op: "relInc", from: E.lit("merchant"), to: E.lit("player"), type: "信任", by: E.lit(1) }], reason: (ctx) => `你和${ctx.name(String(ctx.env.target))}攀谈了一阵，关系亲近了些。` },
-	{ id: "talk.bored", reject: { when: [P.reach(E.v("target")), { ...trustPred, op: "gte", b: E.lit(5) }], denial: { law: "talk.bored", subject: E.v("target"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}已经没什么新鲜话可说了。` } } },
+	{ id: "talk.nice", when: [P.reach(E.v("target"))], each: [{ op: "relInc", from: E.v("target"), to: E.lit("player"), type: "信任", by: E.lit(1) }], reason: (ctx) => `你和${ctx.name(String(ctx.env.target))}攀谈了一阵，关系亲近了些。` },
+	{ id: "talk.bored", reject: { when: [P.reach(E.v("target")), { k: "rel", from: E.v("target"), to: E.lit("player"), type: "信任", op: "gte", b: E.lit(5) }], denial: { law: "talk.bored", subject: E.v("target"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}已经没什么新鲜话可说了。` } } },
 	{ id: "denyAll.talk", reject: { when: [], denial: { law: "denyAll.talk", subject: E.v("target"), text: (d, ctx) => `你试着和${ctx.name(d.subject ?? "")}搭话，但对方没有回应。` } } },
 ];
 
+/** 入夜（time%4==3）歇业：era 时间门控的强制调度。 */
+const isNight = (): Pred => P.eq(E.mod(E.time(), E.lit(4)), E.lit(3));
+
 const buyLaws: Law[] = [
-	{ id: "buy.flour", when: [P.reach(E.lit("flour")), P.eq(E.p("flour", "in"), E.lit("village")), P.gte(E.p("actor", "coins"), priceExpr(1))], each: [{ op: "set", e: E.lit("flour"), p: "in", v: E.lit("player") }, { op: "inc", e: E.lit("merchant"), p: "coins", by: priceExpr(1) }, { op: "inc", e: E.v("actor"), p: "coins", by: priceExpr(-1) }], reason: () => "你用铜币买了一袋米。" },
+	{
+		id: "buy.flour",
+		reject: { when: [isNight()], denial: { law: "buy.night", text: () => "夜色已深，老店主已经打烊歇息了。" } },
+		when: [P.reach(E.lit("flour")), P.eq(E.p("flour", "in"), E.lit("village")), P.gte(E.p("actor", "coins"), priceExpr(1))],
+		each: [{ op: "set", e: E.lit("flour"), p: "in", v: E.lit("player") }, { op: "inc", e: E.lit("merchant"), p: "coins", by: priceExpr(1) }, { op: "inc", e: E.v("actor"), p: "coins", by: priceExpr(-1) }],
+		reason: () => "你用铜币买了一袋米。",
+	},
 	{ id: "buy.held", reject: { when: [P.eq(E.p("flour", "in"), E.v("actor"))], denial: { law: "buy.held", text: () => "你手里已经有一袋米了。" } } },
 	{ id: "buy.broke", reject: { when: [P.lt(E.p("actor", "coins"), priceExpr(1))], denial: { law: "buy.broke", text: () => "你的钱不够买这袋米。" } } },
 	{ id: "denyAll.buy", reject: { when: [], denial: { law: "denyAll.buy", text: () => "货摊上暂时没有可买的。" } } },
 ];
 
 const sellLaws: Law[] = [
-	{ id: "sell.flour", when: [P.eq(E.p("flour", "in"), E.v("actor"))], each: [{ op: "set", e: E.lit("flour"), p: "in", v: E.lit("village") }, { op: "inc", e: E.v("actor"), p: "coins", by: E.lit(5) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-5) }], reason: () => "你把一袋米卖回给了老店主。" },
+	{
+		id: "sell.flour",
+		reject: { when: [isNight()], denial: { law: "sell.night", text: () => "夜色已深，老店主已经歇下了。" } },
+		when: [P.eq(E.p("flour", "in"), E.v("actor"))],
+		each: [{ op: "set", e: E.lit("flour"), p: "in", v: E.lit("village") }, { op: "inc", e: E.v("actor"), p: "coins", by: E.lit(5) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-5) }],
+		reason: () => "你把一袋米卖回给了老店主。",
+	},
 	{ id: "sell.notheld", reject: { when: [P.neq(E.p("flour", "in"), E.v("actor"))], denial: { law: "sell.notheld", text: () => "你手里没有米可卖。" } } },
 	{ id: "denyAll.sell", reject: { when: [], denial: { law: "denyAll.sell", text: () => "你没有可卖的东西。" } } },
 ];
@@ -140,7 +161,7 @@ const wellFixLaws: Law[] = [
 ];
 
 const wellSealLaws: Law[] = [
-	{ id: "well.seal", when: [P.reach(E.lit("well")), P.eq(E.p("well", "phase"), E.lit(2))], each: [{ op: "inc", e: E.lit("well"), p: "phase", by: E.lit(1) }, { op: "set", e: E.lit("well"), p: "supply", v: E.lit(true) }, { op: "inc", e: E.v("actor"), p: "coins", by: E.lit(10) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-10) }], reason: () => "你为枯井封好了底，清泉涌出！老店主赏了你十枚铜币。" },
+	{ id: "well.seal", when: [P.reach(E.lit("well")), P.eq(E.p("well", "phase"), E.lit(2))], each: [{ op: "inc", e: E.lit("well"), p: "phase", by: E.lit(1) }, { op: "set", e: E.lit("well"), p: "supply", v: E.lit(true) }, { op: "set", e: E.lit("well"), p: "water", v: E.lit(10) }, { op: "inc", e: E.v("actor"), p: "coins", by: E.lit(10) }, { op: "inc", e: E.lit("merchant"), p: "coins", by: E.lit(-10) }], reason: () => "你为枯井封好了底，清泉涌出！老店主赏了你十枚铜币。" },
 	{ id: "well.order", reject: { when: [P.neq(E.p("well", "phase"), E.lit(2))], denial: { law: "well.order", subject: E.lit("well"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}当前不需要这一步，顺序不对。` } } },
 	{ id: "denyAll.seal", reject: { when: [], denial: { law: "denyAll.seal", subject: E.lit("well"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}封不了底。` } } },
 ];
@@ -162,6 +183,55 @@ const scoutLaws: Law[] = [
 	{ id: "denyAll.scout", reject: { when: [], denial: { law: "denyAll.scout", text: () => "这里没什么可找的。" } } },
 ];
 
+/** 老农对玩家的信任：>=2 时谷物减价。 */
+const farmerTrustPred: { k: "rel"; from: Expr; to: Expr; type: string; op: "gte"; b: Expr } = {
+	k: "rel", from: E.lit("farmer"), to: E.lit("player"), type: "信任", op: "gte", b: E.lit(2),
+};
+
+/** 谷物动态价格：13 - 麦田存粮（存粮越少越贵）；老农信任 >= 2 时再减 2 铜币。 */
+const grainDiscount: Expr = { k: "if", c: farmerTrustPred, t: E.lit(2), f: E.lit(0) };
+const grainPrice = (): Expr => E.sub(E.sub(E.lit(13), E.p("wheatfield", "grain")), grainDiscount);
+
+const buyGrainLaws: Law[] = [
+	{
+		id: "buygrain.take",
+		reject: { when: [isNight()], denial: { law: "buygrain.night", text: () => "夜色已深，老农已经回屋睡了。" } },
+		when: [P.reach(E.lit("wheatfield")), P.gte(E.p("wheatfield", "grain"), E.lit(1)), P.gte(E.p("actor", "coins"), grainPrice())],
+		each: [
+			{ op: "inc", e: E.lit("wheatfield"), p: "grain", by: E.lit(-1) },
+			{ op: "inc", e: E.v("actor"), p: "grain", by: E.lit(1) },
+			{ op: "inc", e: E.v("actor"), p: "coins", by: E.mul(E.lit(-1), grainPrice()) },
+			{ op: "inc", e: E.lit("farmer"), p: "coins", by: grainPrice() },
+		],
+		reason: (ctx) => {
+			const price = 13 - Number(ctx.prop("wheatfield", "grain") ?? 0) - (Number(ctx.rel("farmer", "player", "信任") ?? 0) >= 2 ? 2 : 0);
+			return `你花${price}铜币从老农手里买了一捧谷物。`;
+		},
+	},
+	{ id: "buygrain.empty", reject: { when: [P.reach(E.lit("wheatfield")), P.lt(E.p("wheatfield", "grain"), E.lit(1))], denial: { law: "buygrain.empty", subject: E.lit("wheatfield"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}已经空了，没有谷物可卖。` } } },
+	{ id: "buygrain.broke", reject: { when: [P.reach(E.lit("wheatfield")), P.lt(E.p("actor", "coins"), grainPrice())], denial: { law: "buygrain.broke", text: () => "你的钱不够买这捧谷物。" } } },
+	{ id: "denyAll.buygrain", reject: { when: [], denial: { law: "denyAll.buygrain", subject: E.lit("wheatfield"), text: (d, ctx) => `你没能从${ctx.name(d.subject ?? "")}买到谷物。` } } },
+];
+
+const eatGrainLaws: Law[] = [
+	{ id: "eatgrain.eat", when: [P.gte(E.p("actor", "grain"), E.lit(1))], each: [{ op: "inc", e: E.v("actor"), p: "grain", by: E.lit(-1) }, { op: "inc", e: E.v("actor"), p: "satiety", by: E.lit(30) }, { op: "inc", e: E.v("actor"), p: "hp", by: E.lit(6) }], reason: () => "你嚼了一把谷物，腹中稍安。" },
+	{ id: "eatgrain.none", reject: { when: [P.lt(E.p("actor", "grain"), E.lit(1))], denial: { law: "eatgrain.none", text: () => "你翻遍口袋，没有谷物可吃。" } } },
+	{ id: "denyAll.eatgrain", reject: { when: [], denial: { law: "denyAll.eatgrain", text: () => "你现在吃不下谷物。" } } },
+];
+
+const drawLaws: Law[] = [
+	{ id: "draw.water", when: [P.reach(E.lit("well")), P.eq(E.p("well", "supply"), E.lit(true)), P.gte(E.p("well", "water"), E.lit(1))], each: [{ op: "inc", e: E.lit("well"), p: "water", by: E.lit(-1) }, { op: "inc", e: E.v("actor"), p: "water", by: E.lit(1) }], reason: () => "你从井口提上一桶清水。" },
+	{ id: "draw.dry", reject: { when: [P.reach(E.lit("well")), P.neq(E.p("well", "supply"), E.lit(true))], denial: { law: "draw.dry", subject: E.lit("well"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}还是枯的，打不出水。` } } },
+	{ id: "draw.empty", reject: { when: [P.reach(E.lit("well")), P.eq(E.p("well", "supply"), E.lit(true)), P.lt(E.p("well", "water"), E.lit(1))], denial: { law: "draw.empty", subject: E.lit("well"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}的井水已经见底了。` } } },
+	{ id: "denyAll.draw", reject: { when: [], denial: { law: "denyAll.draw", subject: E.lit("well"), text: (d, ctx) => `你没能从${ctx.name(d.subject ?? "")}里打出水。` } } },
+];
+
+const drinkLaws: Law[] = [
+	{ id: "drink.sip", when: [P.gte(E.p("actor", "water"), E.lit(1))], each: [{ op: "inc", e: E.v("actor"), p: "water", by: E.lit(-1) }, { op: "inc", e: E.v("actor"), p: "fatigue", by: E.lit(-20) }, { op: "inc", e: E.v("actor"), p: "hp", by: E.lit(3) }], reason: () => "你喝了几口清水，精神一振。" },
+	{ id: "drink.none", reject: { when: [P.lt(E.p("actor", "water"), E.lit(1))], denial: { law: "drink.none", text: () => "你没有水可喝。" } } },
+	{ id: "denyAll.drink", reject: { when: [], denial: { law: "denyAll.drink", text: () => "你喝不到水。" } } },
+];
+
 /** 时间调度 + 随机判定：入夜（time%4==3）时野狗有 1/4 概率偷袭玩家。roll 是 World 纯函数，确定性可验证。 */
 const dogNightSys: Law = {
 	id: "dog.night",
@@ -177,6 +247,9 @@ const bodyHunger: Law = { id: "body.hunger", over: [{ var: "p", source: "entitie
 const bodyStarve: Law = { id: "body.starve", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.lte(E.p("p", "satiety"), E.lit(0))] }], each: [{ op: "set", e: E.v("p"), p: "satiety", v: E.lit(0) }, { op: "inc", e: E.v("p"), p: "hp", by: E.lit(-4) }] };
 const bodyExhaust: Law = { id: "body.exhaust", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.gte(E.p("p", "fatigue"), E.lit(100))] }], each: [{ op: "set", e: E.v("p"), p: "down", v: E.lit(true) }, { op: "set", e: E.v("p"), p: "fatigue", v: E.lit(0) }] };
 const bodyCollapse: Law = { id: "body.collapse", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.lte(E.p("p", "hp"), E.lit(0))] }], each: [{ op: "set", e: E.v("p"), p: "down", v: E.lit(true) }, { op: "set", e: E.v("p"), p: "hp", v: E.lit(0) }] };
+
+/** 麦田再生长：每 4 个时段补 1 单位存粮（上限 10），供给端驱动米/谷价格波动。 */
+const fieldGrow: Law = { id: "field.grow", over: [{ var: "w", source: "entities", where: [P.eq(E.p("w", "wheat"), E.lit(true)), P.lt(E.p("w", "grain"), E.lit(10))] }], when: [P.eq(E.mod(E.time(), E.lit(4)), E.lit(0))], each: [{ op: "inc", e: E.v("w"), p: "grain", by: E.lit(1) }] };
 
 /** 容器包含树可达性的理由文案与接线（游戏侧构件接入 core 的 reach/reachReason 槽位）。 */
 const REACH_MSGS = { reachMissing: "这里没有这个东西。", reachCycle: "位置存在循环引用。", reachNotHere: "它不在这里。", reachClosed: (n: string) => `${n}是关着的。` };
@@ -204,9 +277,13 @@ export const village: GameDef = {
 		},
 		eat: { label: "进食", description: "吃一颗浆果：饱腹 +25、体力 +5，消耗 1 颗浆果。", schema: Type.Object({}), laws: eatLaws },
 		rest: { label: "歇息", description: "休息：疲劳归零、体力 +8、饱腹 -5；昏迷时休息可醒来恢复。", schema: Type.Object({}), laws: restLaws },
-		talk: { label: "交谈", description: "与老店主攀谈：信任 +1；信任 >= 2 后米价打八折。", schema: Type.Object({ target: Type.String({ description: "交谈对象 id" }) }), entityParams: ["target"], candidates: (sim) => ({ target: sim.world.entities.filter((e) => e.kind === "npc").map((e) => e.id) }), laws: talkLaws },
-		buy: { label: "购买", description: "从老店主处买一袋米（10 铜币，信任 >= 2 后 8 铜币），钱不够被拒。", schema: Type.Object({}), laws: buyLaws },
-		sell: { label: "出售", description: "把手里的米以 5 铜币卖回给老店主。", schema: Type.Object({}), laws: sellLaws },
+		talk: { label: "交谈", description: "与村民攀谈（老店主/老农）：对方对自己的信任 +1；信任 >= 2 后其物价有折扣。", schema: Type.Object({ target: Type.String({ description: "交谈对象 id" }) }), entityParams: ["target"], candidates: (sim) => ({ target: sim.world.entities.filter((e) => e.kind === "npc").map((e) => e.id) }), laws: talkLaws },
+		buy: { label: "购买", description: "从老店主处买一袋米（10 铜币，信任 >= 2 后 8 铜币），钱不够被拒；入夜歇业。", schema: Type.Object({}), laws: buyLaws },
+		sell: { label: "出售", description: "把手里的米以 5 铜币卖回给老店主；入夜歇业。", schema: Type.Object({}), laws: sellLaws },
+		buyGrain: { label: "买谷物", description: "从老农处买一捧谷物（价格随麦田存粮波动：存粮越少越贵；老农信任 >= 2 减价），入夜歇业。", schema: Type.Object({}), laws: buyGrainLaws },
+		eatGrain: { label: "吃谷物", description: "吃一捧谷物：饱腹 +30、体力 +6，消耗 1 份谷物。", schema: Type.Object({}), laws: eatGrainLaws },
+		draw: { label: "汲水", description: "从封好底的井里打上一桶清水（井水有限，约 10 桶）。", schema: Type.Object({}), laws: drawLaws },
+		drink: { label: "饮水", description: "喝一口随身带的清水：疲劳 -20、体力 +3，消耗 1 份水。", schema: Type.Object({}), laws: drinkLaws },
 		harvest: { label: "采集", description: "从成熟的浆果丛采下一颗浆果。", schema: Type.Object({ bush: Type.String({ description: "浆果丛 id" }) }), entityParams: ["bush"], candidates: (sim) => ({ bush: sim.world.entities.filter((e) => e.props.ripe === true).map((e) => e.id) }), laws: harvestLaws },
 		clear: { label: "清理枯井", description: "清理枯井里的淤泥（阶段 0 → 1）。", schema: Type.Object({}), laws: wellClearLaws },
 		fix: { label: "修葺枯井", description: "手持木料时加固井壁（阶段 1 → 2）。", schema: Type.Object({}), laws: wellFixLaws },
@@ -218,19 +295,22 @@ export const village: GameDef = {
 		time: 0,
 		entities: [
 			{ id: "village", name: "河畔村", kind: "space", tags: ["room"], props: { space: true } },
-			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "village", hp: 50, fatigue: 0, satiety: 60, coins: 40, berries: 2, down: false } },
+			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "village", hp: 50, fatigue: 0, satiety: 60, coins: 40, berries: 2, grain: 0, water: 0, down: false } },
 			{ id: "merchant", name: "老店主", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 80 } },
+			{ id: "farmer", name: "老农", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 60 } },
 			{ id: "flour", name: "一袋米", kind: "item", tags: ["goods"], props: { in: "village", grabbable: true, price: 10 } },
 			{ id: "timber", name: "木料", kind: "item", tags: ["wood"], props: { in: "village", grabbable: true } },
 			{ id: "bush", name: "浆果丛", kind: "plant", tags: [], props: { in: "village", ripe: true } },
-			{ id: "well", name: "枯井", kind: "structure", tags: ["quest"], props: { in: "village", phase: 0, supply: false } },
+			{ id: "well", name: "枯井", kind: "structure", tags: ["quest"], props: { in: "village", phase: 0, supply: false, water: 0 } },
+			{ id: "wheatfield", name: "麦田", kind: "plant", tags: ["farm"], props: { in: "village", wheat: true, grain: 10 } },
 			{ id: "dog", name: "野狗", kind: "creature", tags: ["beast"], props: { in: "village", alive: true, aggressive: true, hp: 10 } },
 		],
 		relations: [
 			{ from: "merchant", to: "player", type: "信任", value: 0 },
+			{ from: "farmer", to: "player", type: "信任", value: 0 },
 		],
 	},
-	systems: [dogNightSys, bodyFatigue, bodyHunger, bodyStarve, bodyExhaust, bodyCollapse],
+	systems: [dogNightSys, bodyFatigue, bodyHunger, bodyStarve, bodyExhaust, bodyCollapse, fieldGrow],
 	props: VILLAGE_PROPS,
 	invariants: [
 		{
@@ -251,9 +331,10 @@ export const village: GameDef = {
 	digest: digestVillage,
 	hint: `世界法则（模拟层强制执行）：
 1. 每个时刻（tick）：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来。
-2. 入夜（时刻 % 4 == 3）时，野狗有 1/4 概率偷袭（骰子判定，确定性）。
-3. 浆果可采集（成熟时）可进食；米可买卖：买入 10 铜币（信任 >= 2 后 8 铜币）、卖出 5 铜币；侦察掷骰子运气 >= 3 可得 2 铜币。
-4. 与老店主交谈提升信任（关系边），影响米价。
-5. 枯井修缮是顺序过程：清理 →（手持木料）修葺 → 封底，不得跳步。
-6. 铜币总量守恒；结构性属性（体力/钱币/位置等）只能由世界法则变更。`,
+2. 入夜（时刻 % 4 == 3）时：老店主与老农歇业，买卖谷米一律被拒；野狗有 1/4 概率偷袭（骰子判定，确定性）。
+3. 浆果可采集（成熟时）可进食；米可买卖：买入 10 铜币（店主信任 >= 2 后 8 铜币）、卖出 5 铜币；侦察掷骰子运气 >= 3 可得 2 铜币。
+4. 与村民交谈提升对方对你的信任（关系边），各自物价有折扣。
+5. 谷物经济：从老农处买谷物（价格 = 13 - 麦田存粮，存粮越少越贵，每 4 个时段麦田补 1 单位）；吃谷物补饱腹与体力。
+6. 枯井修缮是顺序过程：清理 →（手持木料）修葺 → 封底，不得跳步；封底后井里有约 10 桶清水，可汲水（draw）再饮用（drink）恢复疲劳。
+7. 铜币总量守恒；结构性属性（体力/钱币/位置等）只能由世界法则变更。`,
 };

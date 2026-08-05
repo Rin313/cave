@@ -38,7 +38,7 @@
 - 接受**结构化动作**（action），返回新状态与结构化结果。
 - 统一模式：**动作动词表 + 声明式法则（Law）裁决**
   - 动作空间由游戏声明：`GameDef.verbs` 是动词表（`{ verb: { schema, entityParams, candidates, laws } }`），引擎据此生成 act 工具的 schema，并在每回合以 `Simulation.affordances()`（枚举 动词×可见实体×候选值 的只读裁决 `check()`，预算按动词均分）把**当前世界会授予的动作**注入映射 prompt——动作空间接地，映射不再冷猜测参数。不再硬编码 apply/move/set——era 类游戏可声明 `talk/travel/equip`，开放世界可声明 `attack/trade/craft`。当前参考游戏按两极各自声明动词集并内置法则集：era 极 village（`gather/eat/rest/talk/buy/sell/clear/fix/seal/subdue/scout`）、开放世界极 waste（`travel/move/open/use/harvest/mark/examine`）。环境响应（刻痕、勘察等）由实体不可知法则承担，不再需要 core 级"AI 提后果"通道（软通道已移除，研究结论见 ARCHITECTURE §5-8~11）。
-  - 每个动词挂一组**声明式法则**（`Law`：`over` 量词 / `when` 条件 / `each` 后果 / `denies` 拒绝 / `reject` 前置拒绝），解释器 `evaluateLaw` 裁决：`granted` + 世界性理由 + **delta 变更列表**（`set/inc/push/del`，支持点路径；`spawn/destroy` 仅 tick 系统使用）；法则按声明顺序短路。全部否决且无具体理由时，落到动词末尾的 `denyAll.*` 兜底法则（状态不变，数据法则承载，散文由法则内联 `text` 渲染）。
+  - 每个动词挂一组**声明式法则**（`Law`：`over` 量词 / `when` 条件 / `each` 后果 / `denies` 拒绝 / `reject` 前置拒绝），解释器 `evaluateLaw` 裁决：`granted` + 世界性理由 + **delta 变更列表**（`set/inc/push/del`，支持点路径；`spawn/destroy` 仅 tick 系统使用）；法则按声明顺序短路。全部否决且无具体理由时，落到动词末尾的 `denyAll.*` 兜底法则（状态不变，数据法则承载，散文由法则内联 `text` 渲染）。**`reject` 是本法则内的前置门**（先于本法则 `when` 裁决）：对授予法则的正交门控（如"入夜打烊"）必须放进授予法则自身的 `reject`，单独成一条、排在授予法则前面的拒绝法则会被授予法则的短路返回吞掉（其 denial 已记录但被覆盖）。独立成条的 `reject` 法则只在与授予法则的 `when` 互斥时才可靠（如 `gather.reach` 对 `gather.take` 的 `reach` 前提）。
   - 每个否决结果标记 `deniedBy: "rule" | "denyAll"`：具体法则给了世界性理由（rule）还是落到通用兜底法则（denyAll.*）。这是"法则无洞"探测与拒绝质量审计的语义基础，不依赖理由字符串匹配。
   - **动作的组合由 LLM 自由提出（提案），世界的回应由法则层确定完成，LLM 不参与任何状态变更，也不提案数值**——数值与后果由法则产出（如 `{ op: "inc", e, p: "will", by: -20 }`）。
   - `采下浆果` → LLM 提案 `harvest(bush)` → 动词 `harvest` 的对应法则裁决返回变更 `[berries+1, ripe→false]`。
