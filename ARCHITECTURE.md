@@ -19,13 +19,13 @@
 
    | DESIGN.md 层 | pi SDK 落点 |
    |---|---|
-   | 映射层 §4.2 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成），且为 session 里唯一启用的 tool；映射 pass 只产结构化结果 |
-   | 表达层 §4.3 | session 的普通文本输出（`text_delta` 流式），在状态变更后的独立 prompt（双 pass），输入 = 当前状态 + changes + 法则 facts |
+   | 映射层 §4.2 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；映射 pass 只产结构化结果 |
+   | 表达层 §4.3 | 第二个自定义 tool `declare`（新事实声明，取代 `[facts:]` 首行格式约定）+ session 的普通文本输出（`text_delta` 流式）；在状态变更后的独立 prompt（双 pass），输入 = 当前状态 + changes + 法则 facts |
    | 模拟层 §4.1 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 §9 | AgentSession 自带：messages + compact() + SessionManager；叙述不回流（幻觉不固化） |
    | 拒绝 §4.2 | 结构化拒绝（仅 label）+ `considered` 交规则裁决：理由由规则/denyAll 给出，映射 pass 不产散文 |
 
-3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给一个 tool，模型要么 `act`（提案 actions），要么写文字；`execute()` 内部就是规则裁决边界。
+3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给 act + declare 两个 tool：映射阶段模型 `act`（提案 actions）或写文字；表达阶段模型先用 `declare` 声明本回合新事实（可选，可多次调用、回合内逐条校验反馈）、随后输出散文正文；`execute()` 内部就是规则裁决/校验边界。
 4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给 Vue。
 5. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的（不再硬编码 apply/move/set）。
 
@@ -44,10 +44,10 @@
 - **`grounding`**：可见实体索引钩子，决定哪些实体进 LLM 序列化；缺省全部可见。**`reach`/`reachReason`（GameDef 可选）是可达性空槽**：`P.reach`/施动工具前提共用的谓词，缺省全可达、无理由——core 不内嵌任何空间模型；容器包含树语义是游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`/`reachFor`），需要空间语义的游戏自选接入。**`holdable`（GameDef 可选）是可持握空槽**：施动工具前提/`wieldable` 共用的谓词（`wieldable = holdable + reach`），core 不提供缺省——未声明的游戏一律不可持握；可持握语义（grabbable 属性、体力门槛、材质、锋利等）由游戏声明，与 `reach` 同一模式。
 - **`messages`**（GameDef 必填）：core 产出的用户可见文案（校验层拒绝、时间流逝等）由游戏注入自有语言；core 不内嵌任何语言，缺省为空、倒逼游戏声明。可达性理由文案（`reachMissing` 等）可选，供游戏侧空间构件注入。
 - **`probeScope`**（GameDef 可选）：法则探测域钩子，决定 `sim probe` 枚举动作参数候选时使用的实体集；缺省 = 可见实体 - 玩家 - `space` 标记的场景实体。大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。
-- **泄漏检查（`leakageCheck` 已移除）**：散文正文曾有一道"只禁实现工件"的通用泄漏检查（JSON 键值对形态、声明头 `[facts:` 复现、「实现形状」的 id/属性名词边界匹配）。研究与 `forbiddenTerms` 同源：标识符分支是词表式匹配，纯小写豁免规则（`!/^[a-z]+$/`）本身是语言假设、与"引擎不感知语言"的立场矛盾，且与系统提示"不得写出 id/属性名"重复——豁免规则把纯小写世界整体排除在守卫面外，其实际守卫面仅剩非纯小写标识符这一自设窄面。任何校验误触发都会走重试/摘要回退路径。整机制随 `forbiddenTerms` 一并移除——正文不再有机械检查，忠实性只由声明契约（新事实 ⊆ 状态可推导集）+ 提交硬墙承担；JSON dump 等格式崩坏由 `parseDeclaration` 首行契约天然拦截。语言相关的词汇约束**不设硬拦截**（`forbiddenTerms` 已移除）：语言是 LLM 的原生能力，交给 prompt 设计与模型合规，词表式硬约束不提高游戏上限、只引入维护负担。
+- **泄漏检查（`leakageCheck` 已移除）**：散文正文曾有一道"只禁实现工件"的通用泄漏检查（JSON 键值对形态、声明头 `[facts:` 复现、「实现形状」的 id/属性名词边界匹配）。研究与 `forbiddenTerms` 同源：标识符分支是词表式匹配，纯小写豁免规则（`!/^[a-z]+$/`）本身是语言假设、与"引擎不感知语言"的立场矛盾，且与系统提示"不得写出 id/属性名"重复——豁免规则把纯小写世界整体排除在守卫面外，其实际守卫面仅剩非纯小写标识符这一自设窄面。任何校验误触发都会走重试/摘要回退路径。 整机制随 `forbiddenTerms` 一并移除——正文不再有机械检查，忠实性只由声明契约（新事实 ⊆ 状态可推导集）+ 提交硬墙承担；JSON dump 等格式崩坏由 declare 工具的参数 schema 天然拦截。语言相关的词汇约束**不设硬拦截**（`forbiddenTerms` 已移除）：语言是 LLM 的原生能力，交给 prompt 设计与模型合规，词表式硬约束不提高游戏上限、只引入维护负担。
 - **`props`（属性注册表）**：`{ prop: { type, label?, internal?, stylistic? } }`。`internal: true` 的属性（如 `burnTicks`、`actor` 标记）不进 LLM 序列化 / changes / 表达校验，从源头杜绝泄漏；`label` 是属性世界化说法（拒绝/变更文本用）；`stylistic: true` 标记润饰属性（表达层可文学润饰，如「刻痕斑驳」）。`internalPropsOf(def)` / `stylisticPropsOf(def)` 派生内部/润饰属性集。
 - **词表断言扫描器（已移除）**：`GameDef.assertionRules`（弱/强断言词 + 矛盾目标 + `impossibleOnly`）+ `negationWords` / `sentencePunct` / `assertionPunct` 与 core 的 `checkAssertions`/`scanClaims`（词表 + 近邻窗口的子串启发式）全删——研究结论见 §5-10/§5-11：词表 + 近邻窗口对"持有"类语义结构性失效（假阳性重试/回退 + 假阴性漏网），其唯一实证真阳性（被拒动作后声称对象状态改变）已被声明契约的"状态可推导集"收紧结构性覆盖。**一致性由声明契约 + 提交硬墙（法则/不变式）承担，core 不再假设语言、不再假设"词"这一概念。**
-- **表达层声明契约（唯一契约 structured，`GameDef.declarationContract` 字段已移除）**：`[facts: ...]` 的拆分与涉及集推导集中在 `core/declare.ts`（单一来源：`parseDeclaration`/`parseFactIds`/`validateDecl`）。事实必须带实体 id 前缀（`id: 陈述` / `id1,id2: 陈述` / `[id1,id2]: 陈述`），按实体 id 精确集合校验、无名字回退；id 须可见且属本回合**状态可推导集**。接受裸逗号多实体形态（模型自然输出，归一化而非强推括号格式）。prose 契约（`validateDeclAInv`/`matchLongest` 名字子串）已移除（§5-10/§5-11）。
+- **表达层声明契约（唯一契约 structured，工具化）**：新事实经第二个自定义工具 `declare` 以结构化参数提交（每条 `{ entities: string[], statement }`），涉及集推导与校验集中在 `core/declare.ts`（单一来源：`validateFactIds`）。校验为集合成员判断——实体须可见且属本回合**状态可推导集**（touched：actor + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数；被拒动作参数不在内——被拒动作未改变任何状态），无名字回退。逐条错误即时返回，模型在同一 turn 内自我纠正（无需重试 prompt）。**`[facts:]` 首行格式约定 + 正则解析已移除**（`parseDeclaration`/`parseFactIds`/`validateDecl`/`Decl` 全删，实证见 §5-12）：散文正文即纯文本输出，不再剥首行。
 - **`summarize`**：确定性回退摘要钩子（游戏腔调、可读），缺省用引擎的通用 JSON 序列化。
 - **`digest`**：序列化投影钩子（GameDef 可选），决定状态以什么形态进映射/表达 prompt；缺省 = `serialize()` 全量 JSON。游戏可裁剪冗余字段、格式化关系边、聚焦点置顶，以控制 prompt 体积。
 - **`deniedBy: "rule" | "denyAll"`**：否决来源语义标记；`sim probe` 依此报告规则缺口，不依赖理由字符串匹配。
@@ -76,7 +76,7 @@
 2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
 3. **模拟层（已定）**：动作空间为游戏声明动词表（`verbs`），不再硬编码 apply/move/set；era 类社会性动作可声明为新动词。数据结构 `Law → LawResult → Delta`、只读裁决 `check()`（`apply` 的裁决/提交拆分，动作空间接地与探测共用）、法则完整性检查工具 `sim probe`（按 `deniedBy === "denyAll"` 报法则缺口）均已落地（§2.5）。probe 的缺口分组按 `def.verbs` 动态生成（不再硬编码 use/move/set），组合预算由 `--max` 控制（缺省 10000，按动词均分，超出报 truncated）或经 `probeScope` 收窄候选域。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测「法则本身是否会在不可持握工具上授予」，报告作者漏声明前提的潜在洞（如"用搬不动的重物施力仍被法则授予"即由此发现）。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 laws。
 4. **解析与忠实性**：
-   - **已落地**：双 pass 分离；表达层后置校验器（仅 `props` 注册表的 internal 标记隔离 + 结构化声明契约——正文不再有词表/形状匹配，`leakageCheck` 已移除；语言相关的词汇约束不设硬拦截，交给 prompt 设计与 LLM）；结构化声明契约（唯一契约）——输出首行 `[facts: ...]`，校验"声明 id ⊆ 本回合状态可推导集（actor + 法则 facts + 本回合新见 + 变更(from/to)/即将发生 + 授予动作参数；被拒动作参数不在内——被拒动作未改变任何状态）"；`Simulation.dryTick()`（克隆世界）把「即将发生」作为合法预言注入 prompt——**引擎无状态化随机**：随机由 games 层以 World 状态自持（纯函数派生，如 `hashStr(world 计数器)`），世界即完整真相源，dryTick 克隆世界即完整预言，与真实 tick 天然一致，无需序列快照机制。声明校验是集合成员判断（可靠）；散文正文无词表扫描器（§5-11），只受泄漏检查约束、自由表达。
+   - **已落地**：双 pass 分离；表达层后置校验器（仅 `props` 注册表的 internal 标记隔离 + 结构化声明契约——正文不再有词表/形状匹配，`leakageCheck` 已移除；语言相关的词汇约束不设硬拦截，交给 prompt 设计与 LLM）；结构化声明契约（唯一契约，工具化）——经 `declare` 工具结构化提交，校验"声明 id ⊆ 本回合状态可推导集（actor + 法则 facts + 本回合新见 + 变更(from/to)/即将发生 + 授予动作参数；被拒动作参数不在内——被拒动作未改变任何状态）"；`Simulation.dryTick()`（克隆世界）把「即将发生」作为合法预言注入 prompt——**引擎无状态化随机**：随机由 games 层以 World 状态自持（纯函数派生，如 `hashStr(world 计数器)`），世界即完整真相源，dryTick 克隆世界即完整预言，与真实 tick 天然一致，无需序列快照机制。声明校验是集合成员判断（可靠）；散文正文无词表扫描器（§5-11），只受泄漏检查约束、自由表达。
    - **预言/已发生区分（已落地）**：`pending`（即将发生的变更）进声明校验的 touched 集与表达 prompt 的「即将发生」区——预言实体（如「将燃」的容器）可被合法声明，叙述为征兆不算幻觉。原 `checkAssertions` 的 pending 豁免逻辑（weak/strong 断言词区分）随扫描器一并移除（§5-11）。
    - **未实现**：散文正文与声明的一致性（声明外暗含新事实无法机器拦截，属 NLP 难题）；规则 `facts` 的自动校验。
 5. **跨回合指代（已落地）**：`world.focus` 确定性维护（动作/新见/被拒实体），映射 prompt 注入 `[焦点]`。实测：无回流上下文下，「打开容器 → 把里面的东西拿起来」正确解析到新见物品；「把它关上」被动词约束（物品不可 open）正确回落容器。**但 focus 只是优先候选而非硬绑定**，多实体歧义场景仍可能失败；上下文可裁剪仍未落地（session 依赖回流与 focus 共同工作）。
@@ -102,3 +102,4 @@
     - **结论**：**"散文正文的一致性"由声明契约（新事实 ⊆ 状态可推导集）+ 提交硬墙（法则/不变式原子回滚）承担；词表 + 近邻窗口的子串启发式整体移除。** core 不再感知语言、不再假设"词"这一概念。`assertionRules`/`negationWords`/`sentencePunct`/`assertionPunct`/`declarationContract` 五个 GameDef 钩子删除，`util.ts` 只剩纯函数原语（`hashStr`/`sumProp`/`roll`）。
     - **一致性责任的正确归属**：era/DoL 极的"强一致"来自法则 + 不变式 + 原子回滚（模拟侧），不来自叙述校验器；叙述侧只需"新事实 ⊆ 状态可推导集"这一条语言无关边界。扫描器的实证价值是 1/200+ act，代价是语言词表维护、假阳性重试与干瘪摘要——**删除冗余守卫是可测量的优化**。
     - **"正文暗含新事实"的机器拦截仍是未解 NLP 难题**（§4-4 未实现项），但实证表明：声明契约 + 提示约束下模型正样本不越界；比维护一个必然漏检又误报的词表更划算。
+12. **`[facts:]` 格式约定 + 正则 → declare 工具——工具化取代文本格式约定，回合内自我纠正取代重试 prompt。** §5-11 的 structured 契约以"输出首行 `[facts: ...]` + 正则拆分 + 失败重试"落地，但格式约定是脆弱的文本契约：e2e 复现两类坍缩——(a) 模型自然措辞 `[facts: 无新事实]`（而非空头）直接撞正则判"缺少实体 id 声明"；(b) 模型试图声明存在但不可见的实体（如远处泉眼 spring）被正确拦截，但拦截后无反馈渠道，重试仍撞同一条 → 干瘪摘要回退。研究 pi SDK（`agent-loop.js`）确认：单次 `prompt()` 是一个完整工具循环（assistant 响应 → 执行工具 → 结果回灌 context → 继续，直到模型产出无工具调用的文本），自定义工具不终止回合——**工具化可在零新增 LLM 调用次数的前提下，把校验从"回合后正则 + 重试 prompt"前移到"回合内工具调用 + 逐条反馈"**。落地：第二个自定义工具 `declare({ facts: [{ entities, statement }] })`，表达 pass 内可用；`execute()` 复用 `core/declare.ts` 的 touched 集校验（`validateFactIds`），逐条错误即时返回，模型同 turn 内修正重交；散文正文即 `text_delta` 纯文本，不再剥首行；映射阶段工具被 gate 拦截（`仅用于描写阶段`）。`parseDeclaration`/`parseFactIds`/`validateDecl`/`Decl` 与首行正则全删，`declare.ts` 只剩 touched 推导 + 校验核心。

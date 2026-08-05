@@ -11,7 +11,7 @@ import {
 import { Compile } from "typebox/compile";
 import { Type } from "typebox";
 import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
-import { parseDeclaration, validateDecl, type DeclCtx } from "./declare.ts";
+import { validateFactIds, type DeclCtx, type StructuredFact } from "./declare.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -91,6 +91,12 @@ interface ActGate {
 	active: boolean;
 }
 
+/** declare 工具共享状态：表达 pass 期间注入校验上下文，工具执行时回写最后一次校验结果（undefined = 未调用）。 */
+interface DeclToolState {
+	ctx: DeclCtx | null;
+	last: { ok: boolean; error?: string } | undefined;
+}
+
 export class Engine {
 	readonly sim: Simulation;
 	private readonly def: GameDef;
@@ -100,7 +106,8 @@ export class Engine {
 	private readonly thinkingLevel: string;
 	private readonly settingsManager: SettingsManager;
 	private readonly gate: ActGate;
-	private buf: string[] = [];
+	private readonly declState: DeclToolState;
+	private readonly textBuf: { arr: string[] };
 	private outcome: ActOutcome = { kind: "refused", results: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
@@ -113,6 +120,8 @@ export class Engine {
 		thinkingLevel: string,
 		settingsManager: SettingsManager,
 		gate: ActGate,
+		declState: DeclToolState,
+		textBuf: { arr: string[] },
 	) {
 		this.def = def;
 		this.sim = sim;
@@ -122,11 +131,13 @@ export class Engine {
 		this.thinkingLevel = thinkingLevel;
 		this.settingsManager = settingsManager;
 		this.gate = gate;
+		this.declState = declState;
+		this.textBuf = textBuf;
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
 					if (event.assistantMessageEvent.type === "text_delta") {
-						if (!this.gate.active) this.buf.push(event.assistantMessageEvent.delta);
+						if (!this.gate.active) this.textBuf.arr.push(event.assistantMessageEvent.delta);
 					}
 					break;
 				case "tool_execution_start":
@@ -186,6 +197,8 @@ export class Engine {
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
 		const gate: ActGate = { active: false };
+		const textBuf: { arr: string[] } = { arr: [] };
+		const declState: DeclToolState = { ctx: null, last: undefined };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			retry: { enabled: false },
@@ -204,6 +217,8 @@ export class Engine {
 			reload: async () => {},
 		};
 
+		const customTools = [buildActTool(def, sim, gate), buildDeclareTool(declState, gate, textBuf)];
+
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
 			modelRuntime,
@@ -211,12 +226,12 @@ export class Engine {
 			resourceLoader: loader,
 			settingsManager,
 			sessionManager: options.sessionManager ?? SessionManager.inMemory(),
-			tools: [ACT_TOOL],
-			customTools: [buildActTool(def, sim, gate)],
+			tools: [ACT_TOOL, "declare"],
+			customTools,
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(def, sim, session, modelRuntime, modelDef, thinkingLevel, settingsManager, gate);
+		return new Engine(def, sim, session, modelRuntime, modelDef, thinkingLevel, settingsManager, gate, declState, textBuf);
 	}
 
 	get sessionFile(): string | undefined {
@@ -295,12 +310,6 @@ export class Engine {
 		return involved;
 	}
 
-	/** 声明校验（structured 契约，core 唯一契约）：事实必须带实体 id 前缀（id: / id1,id2: / [id1,id2]:），
-	 *  按实体 id 精确集合校验（id 须可见且本回合涉及），无名字回退。核心算法在 core/declare.ts。 */
-	private validateDeclaration(decl: { facts: string[]; body: string }, changes: Change[], pending: Change[], involved: Set<string>): string | null {
-		return validateDecl(decl, this.declCtx(changes, pending, involved));
-	}
-
 	/** 装配声明校验上下文（core/declare.ts 的 DeclCtx）：把 sim 状态与游戏视角收窄。 */
 	private declCtx(changes: Change[], pending: Change[], involved: Set<string>): DeclCtx {
 		return {
@@ -318,41 +327,45 @@ export class Engine {
 		// 声明校验的涉及集保留 #spawn/#destroy 变更（本回合新生的实体须可被 facts 提及），仅剔除内部属性变更。
 		const touchedChanges = changes.filter((c) => !internal.has(c.prop));
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
-		const run = async (p: string, round: number): Promise<{ text: string; err: string | null }> => {
-			this.buf = [];
-			try {
-				await this.session.prompt(p);
-			} catch (err) {
-				return { text: "", err: String(err) };
-			}
-			const text = this.buf.join("");
-			const decl = parseDeclaration(text);
-			let outText = text;
-			let err: string | null = null;
-			if (!decl) {
-				err = "缺少首行 [facts: ...] 结构化声明。";
-			} else {
-				const declErr = this.validateDeclaration(decl, touchedChanges, pending, involved);
-				if (declErr) {
-					err = declErr;
-				} else {
-					outText = decl.body;
-				}
-			}
-			this.emit({ type: "raw_attempt", round, text, error: err });
-			return { text: outText, err };
-		};
+		const ctx = this.declCtx(touchedChanges, pending, involved);
+		return this.expressionPassRun(prompt, ctx, visible);
+	}
 
-		const first = await run(prompt, 1);
-		if (!first.err) return first.text;
-		this.emit({ type: "validation", round: 1, error: first.err, attempt: first.text });
-		const retry = await run(
-			`刚才的描述未通过校验：${first.err}。请重写。必须遵守：首行输出 [facts: 实体id: 新事实；实体id2: 新事实...]（每条事实必须以其涉及的实体 id 开头，多实体写作 id1,id2: 陈述，也可写作 [id1,id2]: 陈述；id 只能来自本回合变更、法则事实、即将发生或本回合新见涉及的实体，无则留空 [facts:]）；只描述状态中真实存在的事物；不要发明不存在的现象或后果。`,
-			2,
-		);
-		if (!retry.err) return retry.text;
-		this.emit({ type: "validation", round: 2, error: retry.err, attempt: retry.text });
-		return this.summarize(visible);
+	/** 表达层（declare 工具模式）：新事实经 declare 工具结构化提交并逐条校验，模型回合内自我纠正；散文为纯文本，无首行格式。 */
+	private async expressionPassRun(prompt: string, ctx: DeclCtx, visible: Change[]): Promise<string> {
+		this.declState.ctx = ctx;
+		this.declState.last = undefined;
+		try {
+			const first = await this.runToolAttempt(prompt, 1);
+			if (!first.err) return first.text;
+			this.emit({ type: "validation", round: 1, error: first.err, attempt: first.text });
+			this.declState.last = undefined;
+			const retry = await this.runToolAttempt(
+				`刚才的描述未通过校验：${first.err}。请重写。若有新事实，必须先用 declare 工具提交并通过校验（按返回的错误修正实体 id）；然后输出散文正文。无新事实则直接写散文，无需任何首行标记。只描述状态中真实存在的事物，不要发明不存在的现象或后果。`,
+				2,
+			);
+			if (!retry.err) return retry.text;
+			this.emit({ type: "validation", round: 2, error: retry.err, attempt: retry.text });
+			return this.summarize(visible);
+		} finally {
+			this.declState.ctx = null;
+		}
+	}
+
+	private async runToolAttempt(p: string, round: number): Promise<{ text: string; err: string | null }> {
+		this.textBuf.arr.length = 0;
+		try {
+			await this.session.prompt(p);
+		} catch (err) {
+			return { text: "", err: String(err) };
+		}
+		const text = this.textBuf.arr.join("");
+		const last = this.declState.last;
+		let err: string | null = null;
+		if (text.trim() === "") err = "散文为空。";
+		else if (last && !last.ok) err = last.error ?? "事实声明未通过校验。";
+		this.emit({ type: "raw_attempt", round, text, error: err });
+		return { text, err };
 	}
 
 	private summarize(changes: Change[]): string {
@@ -387,7 +400,7 @@ function buildSystemPrompt(def: GameDef): string {
 
 阶段一（解析，调用 act 工具）：把玩家的操作意图解析为动作提案并调用 act 工具。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空的 actions 与结构化 refusal（仅 label，不写理由）。此阶段禁止输出散文。
 
-阶段二（描写）：基于世界给出的当前状态与本回合变更，把场景写成面向玩家的文学散文。此阶段禁止调用工具。
+阶段二（描写）：基于世界给出的当前状态与本回合变更，把场景写成面向玩家的文学散文。此阶段禁止调用 act 工具；若有本回合的新事实需声明，先用 declare 工具提交（可选，可多次调用，无新事实则直接写散文），然后输出散文正文。
 
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名；实体属性由当前游戏的法则网络定义，见下方提示。
 
@@ -476,12 +489,51 @@ function buildExpressionPrompt(
 	lines.push(
 		"",
 		`${directive} 格式：`,
-		"1. 首行声明：[facts: 实体id: 陈述；…]——id 只取「本回合尝试/法则事实/即将发生/本回合新见」涉及的实体；无新事实写 [facts:]。",
-		"2. 空行后只写面向玩家的散文正文；正文中不得再出现任何「id: 」或「id1,id2: 」形式的行。",
+		"1. 若本回合有新事实需声明：先调用 declare 工具提交（每条事实给出涉及的可见实体 id 与陈述；id 只能取「本回合尝试/法则事实/即将发生/本回合新见」涉及的实体）。无新事实则无需声明。",
+		"2. 声明通过后，直接输出面向玩家的散文正文（纯文本，无需任何首行标记）。",
 		"3. 用实体名称叙述，不出现 id、属性名、工具调用或实现术语；只叙述状态中真实存在的事物与变更。",
 		"4. 被拒绝的尝试只写尝试本身；「即将发生」区只写征兆（用「将」「就要」），不得写成已发生。",
 	);
 	return lines.join("\n");
+}
+
+/** declare 工具：表达层新事实的结构化声明通道。取代 [facts:] 首行格式约定 + 正则解析——
+ *  事实以结构化参数提交，逐条校验并即时反馈（模型回合内自我纠正），散文正文即纯文本，无需剥首行。
+ *  校验核心复用 core/declare.ts 的 touched 集推导。散文缓冲在每次调用时清空：正文 = 最后一次 declare 之后输出的文本。 */
+function buildDeclareTool(state: DeclToolState, gate: ActGate, textBuf: { arr: string[] }) {
+	return defineTool({
+		name: "declare",
+		label: "声明事实",
+		description: "在描写前声明本回合的新事实（可选，可多次调用，以最后一次为准）。无新事实则无需调用。参数错误会返回逐条修正意见。",
+		parameters: Type.Object({
+			facts: Type.Array(
+				Type.Object({
+					entities: Type.Array(Type.String({ description: "涉及的实体 id（必须可见且本回合涉及）" })),
+					statement: Type.String({ description: "世界腔陈述" }),
+				}),
+				{ description: "新事实列表" },
+			),
+		}),
+		execute: async (_toolCallId, params: { facts?: unknown[] }) => {
+			if (gate.active) {
+				return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "declare 仅用于描写阶段。" }) }], details: {} };
+			}
+			if (!state.ctx) {
+				return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "当前不在描写阶段。" }) }], details: {} };
+			}
+			textBuf.arr.length = 0;
+			const facts: StructuredFact[] = [];
+			for (const raw of Array.isArray(params?.facts) ? params.facts : []) {
+				const f = (raw ?? {}) as Record<string, unknown>;
+				const entities = Array.isArray(f.entities) ? f.entities.map(String).filter(Boolean) : [];
+				const statement = typeof f.statement === "string" ? f.statement : String(f.statement ?? "");
+				facts.push({ entities, statement });
+			}
+			const errors = validateFactIds(facts, state.ctx);
+			state.last = errors === null ? { ok: true } : { ok: false, error: errors.join("；") };
+			return { content: [{ type: "text", text: JSON.stringify(errors === null ? { ok: true } : { ok: false, errors }) }], details: {} };
+		},
+	});
 }
 
 function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
