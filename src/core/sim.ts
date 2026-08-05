@@ -615,7 +615,18 @@ export class Simulation {
 			}
 			for (const [p, vals] of Object.entries(candidates)) paramLists[p] = vals;
 			const keys = Object.keys(paramLists);
-			if (!keys.length) continue;
+			if (!keys.length) {
+				// 无参动词（era 触发器，如 eat/rest/buy）也进动作空间：单点 check，授予即入菜单，
+				// 否则「动作空间接地」对无参动词为主的游戏空转，映射层只能冷猜系统提示里的动词描述。
+				if (checks >= maxChecks || out.length >= maxOut) continue;
+				checks++;
+				const r = this.check({ verb: verbName, params: {} });
+				if (r.ok && r.reason !== defaultReason && !seen.has(r.reason)) {
+					seen.add(r.reason);
+					out.push(r.reason);
+				}
+				continue;
+			}
 			let verbChecks = 0;
 			const gen = (idx: number, acc: Record<string, PropValue>) => {
 				if (checks >= maxChecks || verbChecks >= perVerbBudget || out.length >= maxOut) return;

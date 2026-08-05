@@ -244,12 +244,9 @@ export class Engine {
 		const state = this.sim.digest();
 		const affordances = this.sim.affordances();
 		const visibleBefore = this.sim.visible();
-		const selectionLine = action.selection
-			? `玩家选中了文本片段：「${action.selection}」`
-			: `玩家未选中任何文本`;
 		const focusName = this.sim.focus ? (this.sim.world.entities.find((e) => e.id === this.sim.focus)?.name ?? null) : null;
 		try {
-			await this.session.prompt(buildMappingPrompt(state, selectionLine, action.intent, affordances, focusName));
+			await this.session.prompt(buildMappingPrompt(state, action.intent, action.selection, affordances, focusName));
 		} finally {
 			this.gate.active = false;
 		}
@@ -378,17 +375,21 @@ export class Engine {
 	}
 }
 
-function buildMappingPrompt(state: string, selectionLine: string, intent: string, affordances: string[] = [], focusName: string | null = null): string {
+function buildMappingPrompt(state: string, intent: string, selection: string | undefined, affordances: string[] = [], focusName: string | null = null): string {
 	const aff = affordances.length
 		? `[动作空间] 世界法则当前会授予这些动作（也可提出动作空间之外的动作，世界将逐一裁决，可能被拒绝）：\n${affordances.map((a) => `- ${a}`).join("\n")}\n\n`
 		: "";
 	const focusLine = focusName
 		? `[焦点] ${focusName} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。若玩家未指定实体，指代「它/那个」优先考虑它；但以玩家显式提到的实体为准。\n\n`
 		: "";
-	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${aff}${focusLine}${selectionLine}\n玩家意图：「${intent}」\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
+	const intentLine = selection
+		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
+		: `玩家意图：「${intent}」`;
+	return `[当前状态]（JSON，唯一真相源）：\n${state}\n\n${aff}${focusLine}${intentLine}\n\n你的任务：把玩家的操作意图解析为动作提案，并调用 act 工具。规则：
 1. 能解析出合理动作 → 调用 act，提交 actions 列表。每个动作是 { verb, params }，动词与参数定义见系统提示中的动词表；实体参数只能取自已可见实体的 id。
 2. 无法解析、实体不存在、或语境荒谬 → 调用 act，提交空的 actions，并用 refusal 字段给出 { label }。
-3. 禁止在本阶段输出任何散文或解释文字。`;
+3. 禁止在本阶段输出任何散文或解释文字。
+4. 调用 act 提交后本阶段立即结束：不要继续调用 declare 工具，也不要输出任何文字；描写阶段由引擎在动作裁决后另行发起，届时才可用 declare。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
