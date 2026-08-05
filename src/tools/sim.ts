@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
-import type { Action, GameDef, PropValue, StepResult, VerbDef } from "../core/sim.ts";
+import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 
@@ -251,30 +251,10 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	const seen = new Set<string>();
 	let truncated = false;
 
-	/** 有意义的缺口：声明了 propParams（set 类）的动词，只报告实体确实拥有该属性、非空操作、值类型匹配；
-	 *  其余动词（use/move 等无 propParams）一律视为有意义。参数由动词元数据推导，不硬编码参数名。 */
-	const isMeaningfulGap = (verb: VerbDef, action: Action): boolean => {
-		const propParams = verb.propParams ?? [];
-		if (!propParams.length) return true;
-		const entityParam = (verb.entityParams ?? []).find((p) => p in action.params);
-		const propParam = propParams.find((p) => p in action.params);
-		if (!entityParam || !propParam) return true;
-		const e = sim.world.entities.find((x) => x.id === action.params[entityParam]);
-		const prop = String(action.params[propParam] ?? "");
-		if (!e || !(prop in e.props)) return false;
-		const cur = e.props[prop];
-		const valueParam = Object.keys(action.params).find((k) => k !== entityParam && !propParams.includes(k));
-		const val = valueParam ? action.params[valueParam] : undefined;
-		if (cur === val) return false;
-		if (typeof cur === "boolean" && (val !== true && val !== false)) return false;
-		if (typeof cur === "string" && (val === true || val === false || val === null)) return false;
-		return true;
-	};
-
-	const probeAction = (verb: VerbDef, action: Action) => {
+	const probeAction = (action: Action) => {
 		const fresh = new Simulation(def);
 		const r = fresh.apply(action);
-		if (!r.ok && r.deniedBy === "denyAll" && isMeaningfulGap(verb, action)) {
+		if (!r.ok && r.deniedBy === "denyAll") {
 			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
 		}
 		if (!r.ok && r.denial?.law?.startsWith("instrument.")) {
@@ -314,7 +294,7 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 				if (seen.has(key)) return;
 				seen.add(key);
 				verbChecks++;
-				probeAction(verb, action);
+				probeAction(action);
 				return;
 			}
 			const p = keys[idx]!;

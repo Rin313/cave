@@ -147,9 +147,6 @@ export interface VerbDef {
 	 *  核心在规则前跑共享前提检查：必须可持握（grabbable）且在可达范围；不满足直接拒绝，不进入规则。
 	 *  affordances 枚举自动跳过不可持握工具；probe 依此审计「规则授予但前提不满足」的潜在洞。 */
 	instrumentParams?: string[];
-	/** 属性选择参数：这些非实体参数的取值是实体属性名。core 据此做 propLabels 标签替换、
-	 *  affordances 按属性相关性排序、probe 的有意义缺口过滤——不再硬编码参数名 "prop"。 */
-	propParams?: string[];
 	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	/** 声明式法则（数据行，解释器裁决，短路语义：首个授予即裁决）。 */
@@ -599,8 +596,7 @@ export class Simulation {
 	}
 
 	/** 动作空间接地：枚举 动词 × 可见实体 × 候选值，返回当前世界会授予的动作（世界腔理由，去重）。
-	 *  预算按动词均分（每个动词最多 maxChecks/动词数 次 check），避免组合量大的动词饿死后续动词；
-	 *  实体参数按「是否持有该动词的候选属性」排序，让可能授予的组合先被枚举，截断只损失低价值组合。 */
+	 *  预算按动词均分（每个动词最多 maxChecks/动词数 次 check），避免组合量大的动词饿死后续动词。 */
 	affordances(maxChecks = 400, maxOut = 30): string[] {
 		const out: string[] = [];
 		let checks = 0;
@@ -611,26 +607,10 @@ export class Simulation {
 		for (const [verbName, verb] of verbEntries) {
 			const entityParams = verb.entityParams ?? [];
 			const candidates = verb.candidates?.(this) ?? {};
-			const propParams = verb.propParams ?? [];
-			const propDomain = new Set<string>();
-			for (const [p, vals] of Object.entries(candidates)) {
-				if (!propParams.includes(p)) continue;
-				for (const v of vals) if (typeof v === "string") propDomain.add(v);
-			}
-			const rank = (id: string): number => {
-				const e = entity(this.world, id);
-				if (!e) return 0;
-				let n = 0;
-				for (const p of propDomain) if (p in e.props) n++;
-				return n;
-			};
-			const visibleIds = [...this.visible()];
 			const paramLists: Record<string, PropValue[]> = {};
 			const instruments = new Set(verb.instrumentParams ?? []);
 			for (const p of entityParams) {
-				let ids = propDomain.size
-					? visibleIds.slice().sort((a, b) => rank(b) - rank(a))
-					: visibleIds;
+				let ids = [...this.visible()];
 				if (instruments.has(p)) ids = ids.filter((id) => this.wieldable(id));
 				paramLists[p] = ids;
 			}
@@ -671,9 +651,7 @@ export class Simulation {
 		if (action.verb === TICK_VERB) return messagesFor(this.def).timePassed;
 		if (!verb) return `「${action.verb}」`;
 		const entityParams = new Set(verb.entityParams ?? []);
-		const propParams = verb.propParams ?? [];
 		const parts = Object.entries(action.params).map(([k, v]) => {
-			if (propParams.includes(k)) return propLabelOf(this.def, String(v)) ?? String(v);
 			if (entityParams.has(k)) return name(v);
 			if (typeof v === "string") return name(v);
 			return String(v);
