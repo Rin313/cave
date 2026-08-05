@@ -341,7 +341,7 @@ export function serialize(world: World, visible: Iterable<string>, internalProps
 			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 		}));
 	const rels = (world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
-	return JSON.stringify({ time: world.time, focus, traces: world.traces ?? {}, relations: rels, entities: items }, null, 2);
+	return JSON.stringify({ time: world.time, focus, traces: world.traces ?? {}, relations: rels, entities: items });
 }
 
 /** 裁决结果 + 未提交的 deltas（apply 用）；check 丢弃 deltas 作为只读裁决。 */

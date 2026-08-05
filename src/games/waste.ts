@@ -115,7 +115,7 @@ function digestWaste(sim: Simulation): string {
 		to: entity(sim.world, r.to)?.name ?? r.to,
 		type: r.type,
 	}));
-	return JSON.stringify({ time: sim.world.time, relations: rels, entities: items }, null, 2);
+	return JSON.stringify({ time: sim.world.time, relations: rels, entities: items });
 }
 
 /** 移动授予理由：拿起 / 放到（当前场景）/ 放进（打开的容器）。 */

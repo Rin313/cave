@@ -67,7 +67,7 @@ function digestVillage(sim: Simulation): string {
 			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 		}));
 	const rels = (sim.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
-	return JSON.stringify({ time: sim.world.time, relations: rels, entities: items }, null, 2);
+	return JSON.stringify({ time: sim.world.time, relations: rels, entities: items });
 }
 
 /** 老店主对玩家的信任：>=2 时米价 8 折（关系边 → 经济耦合，算术表达式：10 - 折扣）。 */
