@@ -1,4 +1,4 @@
-import type { AssertionRule, Change, Entity, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
+import type { Change, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
 import { entity, internalPropsOf } from "../core/sim.ts";
 import { E, P, type ExprCtx, type Law } from "../core/expr.ts";
 import { reachFor, inTreeVisible } from "./space.ts";
@@ -262,33 +262,6 @@ const growRipeSys: Law = {
 	],
 };
 
-const WASTE_ASSERTION_RULES: AssertionRule[] = [
-	{
-		prop: "burning",
-		strong: ["焦烟", "冒烟", "烧成灰烬"],
-		weak: ["燃烧", "点燃", "燃起", "烧起来"],
-		targets: (world, actor) =>
-			world.entities.filter((e) => e.id !== actor && e.props.space !== true && !(e.props.lit === true || e.props.burning === true || e.props.material === "ash")),
-		error: (e) => `描述虚构了「${e.name}」的燃烧/点燃，但当前状态并非如此。`,
-	},
-	{
-		prop: "in",
-		weak: ["手中", "手里", "握着", "拿着"],
-		exemptPending: false,
-		// 不可能持有才拦（impossibleOnly）：可达可持握物品的"随手拿起/放下"是动作叙述（如点燃时"握着火把"），
-		// 不算持有断言。targets 给全域（非场景、非玩家、不在手的实体），core 以 wieldable（grabbable+reach）
-		// 收窄为「不可能持有」——含无 grabbable 属性的实体（陶罐/石碑等未声明可持握即不可持握）与不可达的可持握物。
-		impossibleOnly: true,
-		targets: (world, actor) =>
-			world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props["in"] !== actor),
-		error: (e) => `描述虚构了「${e.name}」被握住，但它沉重或够不着，不可能拿在手中。`,
-	},
-];
-
-const WASTE_NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾", "不曾"];
-const WASTE_SENTENCE_PUNCT = /[。！？!?；;]/;
-const WASTE_ASSERTION_PUNCT = /[，。；！？、—]/;
-
 const travelVerb: VerbDef = {
 	label: "跋涉",
 	description: "沿荒原小径前往相邻的地点（dest 是当前所在地的相邻场景 id）。",
@@ -490,10 +463,6 @@ export const waste: GameDef = {
 	...reachFor(REACH_OPTS),
 	summarize: summarizeWaste,
 	digest: digestWaste,
-	assertionRules: WASTE_ASSERTION_RULES,
-	negationWords: WASTE_NEGATIONS,
-	sentencePunct: WASTE_SENTENCE_PUNCT,
-	assertionPunct: WASTE_ASSERTION_PUNCT,
 	hint: `世界法则（模拟层强制执行）：
 1. 荒原有五处地点，经路径（relations type "path"）连通；travel 只能沿路径前往相邻地点，凭空换地点被拒。
 2. 可持握（grabbable）物品可用 move 拿起（放到你手中）、放下（放到当前地点）、放入打开的容器；搬不动、够不着、目标不存在一律被拒。

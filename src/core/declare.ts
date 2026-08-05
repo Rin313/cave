@@ -1,7 +1,6 @@
-// 表达层声明契约（core 单一来源）：把模型首行 [facts: ...] 的声明与散文体拆分、并按契约校验。
-// 两种契约：
-//   - prose（缺省）：事实为自然语言，名字子串 + 最长命中归属（validateDeclA）。
-//   - structured：事实写作 [id1,id2]: 陈述，按实体 id 精确集合校验（validateDeclB strict），无名字回退。
+// 表达层声明契约（core 单一来源）：把模型首行 [facts: ...] 的声明与散文体拆分，并按结构化契约校验。
+// 唯一契约 structured：事实必须带实体 id 前缀（id: / id1,id2: / [id1,id2]:），按实体 id 精确集合校验，
+// 无名字回退（prose 契约的名字子串匹配已移除，实证见 ARCHITECTURE §5-10 与实验记录）。
 // 泄漏检查与涉及集（touched）推导在此共享，engine 不重复实现。
 import type { Change, PropDef, World } from "./sim.ts";
 
@@ -63,75 +62,38 @@ function touchedFrom(ctx: DeclCtx): Set<string> {
 	return touched;
 }
 
-/** 名字子串最长命中归属：对一条事实找出最长的命中实体名（防止「伯爵」⊂「伯爵夫人」误判）。 */
-export function matchLongest(fact: string, world: World, visible: Set<string>): { id: string; name: string } | null {
-	let matched: { id: string; name: string } | null = null;
-	for (const e of world.entities) {
-		if (!visible.has(e.id)) continue;
-		if (fact.includes(e.id) || fact.includes(e.name)) {
-			if (!matched || e.name.length > matched.name.length) matched = { id: e.id, name: e.name };
-		}
-	}
-	return matched;
-}
-
-/** prose 契约：名字子串校验（引擎默认路径）。 */
-export function validateDeclA(decl: Decl, ctx: DeclCtx): string | null {
-	if (!decl.body.trim()) return "散文为空。";
-	if (!decl.facts.length) return null;
-	const touched = touchedFrom(ctx);
-	for (const f of decl.facts) {
-		const matched = matchLongest(f, ctx.world, ctx.visible);
-		if (matched && !touched.has(matched.id)) {
-			return `声明「${f}」提及了实体「${matched.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
-		}
-		const leaked = leakageCheck(f, ctx.world, ctx.def);
-		if (leaked) return `声明「${f}」中：${leaked}`;
-	}
-	return null;
-}
-
-/** prose 契约 + 不可见实体检查：在 A 之上对全部实体做最长命中，命中不可见实体即拒（堵静默放行洞）。 */
-export function validateDeclAInv(decl: Decl, ctx: DeclCtx): string | null {
-	if (!decl.body.trim()) return "散文为空。";
-	if (!decl.facts.length) return null;
-	const touched = touchedFrom(ctx);
-	const allIds = new Set(ctx.world.entities.map((e) => e.id));
-	for (const f of decl.facts) {
-		const matched = matchLongest(f, ctx.world, allIds);
-		if (matched) {
-			if (!ctx.visible.has(matched.id)) return `声明「${f}」提及了不可见实体「${matched.name}」。`;
-			if (!touched.has(matched.id)) {
-				return `声明「${f}」提及了实体「${matched.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
-			}
-		}
-		const leaked = leakageCheck(f, ctx.world, ctx.def);
-		if (leaked) return `声明「${f}」中：${leaked}`;
-	}
-	return null;
-}
+/** 名字子串最长命中归属与 prose 契约（validateDeclA / validateDeclAInv）已移除：
+ *  名字子串 + 近邻窗口对"新事实归属"结构性失效（ARCHITECTURE §5-10），structured 契约以显式 id 集合校验取代。 */
 
 export interface FactIds {
 	ids: string[];
 	rest: string;
 }
 
-/** 解析结构化事实前缀：`id: 陈述` 或 `[id1,id2]: 陈述`。id 假定为 ASCII 实体 id。 */
+/** 解析结构化事实前缀：`id: 陈述`、`id1,id2: 陈述` 或带括号 `[id1,id2]: 陈述`。id 假定为 ASCII 实体 id。
+ *  接受裸逗号分隔（模型自然输出的 `merchant,player:` 形态）与括号形态，二者等价——归一化而非强推括号格式；
+ *  仍拒绝无 id 前缀的事实（strict 语义不变：无 id 即拒，无名字回退）。 */
 export function parseFactIds(fact: string): FactIds | null {
+	const idsOf = (s: string): string[] | null => {
+		const ids = s.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean);
+		return ids.length ? ids : null;
+	};
 	const multi = /^\[([^\]]+)\]\s*[:：]\s*(.+)$/.exec(fact);
 	if (multi) {
-		const ids = multi[1]!.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
-		if (ids.length) return { ids, rest: multi[2]!.trim() };
+		const ids = idsOf(multi[1]!);
+		if (ids) return { ids, rest: multi[2]!.trim() };
 	}
-	const single = /^([A-Za-z_][A-Za-z0-9_-]*)\s*[:：]\s*(.+)$/.exec(fact);
-	if (single) return { ids: [single[1]!], rest: single[2]!.trim() };
+	const bare = /^([A-Za-z_][A-Za-z0-9_,，\s-]*)\s*[:：]\s*(.+)$/.exec(fact);
+	if (bare) {
+		const ids = idsOf(bare[1]!);
+		if (ids) return { ids, rest: bare[2]!.trim() };
+	}
 	return null;
 }
 
-export type BMode = "strict" | "hybrid";
-
-/** structured 契约：按实体 id 精确集合校验。strict=未带 id 前缀即拒；hybrid=回退名字匹配（研究用，未接线）。 */
-export function validateDeclB(decl: Decl, ctx: DeclCtx, mode: BMode): string | null {
+/** 结构化契约（唯一契约）：按实体 id 精确集合校验——每条事实必须带实体 id 前缀（`id: 陈述` / `id1,id2: 陈述` / `[id1,id2]: 陈述`），
+ *  id 必须可见且属本回合涉及集（touched：actor + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数，被拒动作参数排除）；无名字回退。 */
+export function validateDecl(decl: Decl, ctx: DeclCtx): string | null {
 	if (!decl.body.trim()) return "散文为空。";
 	if (!decl.facts.length) return null;
 	const touched = touchedFrom(ctx);
@@ -147,13 +109,7 @@ export function validateDeclB(decl: Decl, ctx: DeclCtx, mode: BMode): string | n
 			if (leaked) return `声明「${f}」中：${leaked}`;
 			continue;
 		}
-		if (mode === "strict") return `声明「${f}」缺少实体 id 声明（应写作 实体id: 陈述 或 [id1,id2]: 陈述）。`;
-		const matched = matchLongest(f, ctx.world, ctx.visible);
-		if (matched && !touched.has(matched.id)) {
-			return `声明「${f}」提及了实体「${matched.name}」，但本回合并未涉及该实体——新事实只能来自本回合变更/法则事实/即将发生/本回合涉及实体。`;
-		}
-		const leaked = leakageCheck(f, ctx.world, ctx.def);
-		if (leaked) return `声明「${f}」中：${leaked}`;
+		return `声明「${f}」缺少实体 id 声明（应写作 实体id: 陈述 或 id1,id2: 陈述 或 [id1,id2]: 陈述）。`;
 	}
 	return null;
 }

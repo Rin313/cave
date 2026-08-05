@@ -73,10 +73,10 @@
 AI 读结构化状态 + 本回合变更（changes）+ 涉及集，输出该状态的文字化表达。
 
 - **忠实性约束（强制，非提示词）**：
-  - 输出 schema：首行 `[facts: 新事实...]` 结构化声明 + `text`（散文）。**声明契约经 `GameDef.declarationContract` 选择**（缺省 `"prose"`）：prose 契约的事实为自然语言，按名字子串 + 最长命中归属校验；structured 契约的事实写作 `[id1,id2]: 陈述`，按实体 id 精确集合校验（无名字回退，模型须自列提及的实体）。两种契约的拆分/泄漏检查/涉及集推导集中在 `core/declare.ts`（单一来源），engine 不重复实现。选型与实证见 ARCHITECTURE §2.5。
-  - **后置校验器**：声明实体必须 ⊆ 可见实体，且命中**本回合涉及集**——动作主体（玩家）、动作实体参数、拒绝理由涉及的实体、本回合新可见实体（如打开容器后露出的物品）、变更（from/to）、法则 facts、「即将发生」。`text` 中出现的实体名必须 ⊆ 可见实体名；`text` 不得断言状态中不存在的实体/属性、不得与状态矛盾。状态蕴含的旧事实（陈设、属性、位置）允许描述；**新事实只能来自本回合涉及集**（幻觉无处藏身）。通用校验器由引擎内置（只禁止与语言无关的实现工件：JSON 键值对形态、声明头复现、「实现形状」的实体 id/属性名——非纯小写单词者，如 `wooden_box`/`hasItem`；引擎不感知语言，语言相关词汇约束由游戏经 `forbiddenTerms`/`assertionRules` 声明）。
-  - **通用断言校验（P3）**：物理属性与状态须严格一致——游戏声明 `assertionRules`（`prop` + 弱/强断言词 + 矛盾目标 + 错误文案）与词表/标点，core 以 `checkAssertions`（scanClaims 算法）自动执行：散文断言了与状态相反的事实即报错。**`impossibleOnly`（可选）**是持有类断言的文学宽松开关：只对"不可能持有"（不可握或不可达）的实体触发，可达可持握物品的"随手拿起/放下"视为动作叙述不算断言（waste 的 `in` 规则已启用；village 保持严格口径）。**弱断言词豁免"即将发生"（pending）的预言**（如「将燃」合法），**强断言词不豁免**（如「已成灰烬」不能因下一 tick 就通过），`exemptPending: false` 的规则（「持有」类）不接受预言豁免。**润饰属性**（`props` 注册表 `stylistic: true`，如 `marked` 刻痕）允许文学润饰（「刻痕斑驳」），不参与断言校验、系统提示注入 `[可润饰属性]` 提示。词表/标点由各游戏按语言与风格声明（`assertionRules`/`negationWords`/`sentencePunct`/`assertionPunct`），era 类游戏声明自己的风格词表即可。
-  - **合法预言**：`Simulation.dryTick()` 克隆世界模拟下一 tick，把「即将发生」的变更作为合法新事实注入表达 prompt——把火源放入易燃容器后「它将燃」是合法预言而非幻觉，不再误伤。**引擎无状态化随机**：随机是 games 层的世界状态（纯函数派生，如 `hashStr(world 计数器)`），世界即完整真相源——dryTick 克隆世界即完整预言，与真实 tick 天然一致；check/apply/存档/恢复也因随机是 World 的纯函数而一致（见 ARCHITECTURE §4-4）。**`checkAssertions` 同样收到 `pending`**，据此豁免"即将发生"实体上的弱断言（如「将燃」），强断言（如「已成灰烬」）仍严格——预言级叙述与已发生事实在声明式规则侧可区分，实测零误伤。
+  - 输出 schema：首行 `[facts: ...]` 结构化声明 + `text`（散文）。**唯一契约 structured**（prose 契约已移除，实证见 ARCHITECTURE §5-10/§5-11）：每条事实必须带实体 id 前缀（`id: 陈述` / `id1,id2: 陈述` / `[id1,id2]: 陈述`），按实体 id 精确集合校验（无名字回退，模型须自列提及的实体）。拆分/泄漏检查/涉及集推导集中在 `core/declare.ts`（单一来源），engine 不重复实现。选型与实证见 ARCHITECTURE §2.5/§5-11。
+  - **后置校验器**：声明实体必须 ⊆ 可见实体，且命中**本回合状态可推导集**——动作主体（玩家）、本回合新可见实体（如打开容器后露出的物品）、变更（from/to）、法则 facts、「即将发生」、**授予动作的实体参数**（被拒动作参数不在内——被拒动作未改变任何状态）。散文正文只受通用泄漏检查约束（禁止与语言无关的实现工件：JSON 键值对形态、声明头复现、「实现形状」的实体 id/属性名——非纯小写单词者，如 `wooden_box`/`hasItem`；语言相关词汇约束由游戏经 `forbiddenTerms` 声明）；**新事实一律走声明头**，`text` 不得断言状态中不存在的实体/属性、不得与状态矛盾——状态蕴含的旧事实（陈设、属性、位置）允许描述。
+  - **一致性归属（已修订，取代词表断言扫描器）**：散文正文不再有词表扫描器（`assertionRules`/`negationWords`/`sentencePunct`/`assertionPunct` 与 `scanClaims`/`checkAssertions` 已移除，实证见 ARCHITECTURE §5-10/§5-11）——物理属性与状态的一致性由两条边界承担：**声明契约**（新事实 ⊆ 状态可推导集，语言无关的集合成员判断）与**提交硬墙**（法则 + 不变式原子回滚）。正文可自由文学表达，仅受泄漏检查约束。**润饰属性**（`props` 注册表 `stylistic: true`，如 `marked` 刻痕）允许文学润饰（「刻痕斑驳」），系统提示注入 `[可润饰属性]` 提示。
+  - **合法预言**：`Simulation.dryTick()` 克隆世界模拟下一 tick，把「即将发生」的变更作为合法新事实注入表达 prompt——把火源放入易燃容器后「它将燃」是合法预言而非幻觉，不再误伤。**引擎无状态化随机**：随机是 games 层的世界状态（纯函数派生，如 `hashStr(world 计数器)`），世界即完整真相源——dryTick 克隆世界即完整预言，与真实 tick 天然一致；check/apply/存档/恢复也因随机是 World 的纯函数而一致（见 ARCHITECTURE §4-4）。**`pending` 同时进声明校验的 touched 集**——「即将发生」实体可被合法声明（如「将燃」），预言级叙述与已发生事实在声明侧可区分。原 `checkAssertions` 的 pending 豁免逻辑（weak/strong 断言词区分）随扫描器一并移除。
   - **内部属性隔离**：模拟层内部属性（如 `burnTicks`、`actor` 标记）通过属性注册表 `GameDef.props` 的 `internal: true` 标记声明，不进 LLM 序列化、不进 changes、不进表达校验——模型根本看不到，杜绝泄漏。
   - 校验失败 → 带错误反馈重生成一次；仍失败 → 回退为结构化摘要（强制可证伪）。摘要可由 GameDef 的 `summarize` 钩子提供（游戏腔调、可读），缺省用引擎的通用 JSON 序列化。
 - **叙述不回流**：表达 pass 的输入只有当前状态 + changes，无旧叙述全文（幻觉不固化）；长期记忆用结构化摘要（落地 §9 上下文可裁剪）。
@@ -137,9 +137,7 @@ const game: GameDef = {
   messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/可达性兜底），游戏注入自有语言，core 不内嵌任何语言
   denialTemplates,                // 拒绝理由的世界腔渲染（可选）
   grounding: (w, a) => [...],     // 可见实体索引（可选）
-  assertionRules, negationWords, sentencePunct, assertionPunct, // 通用断言校验（物理属性 vs 状态，词表/标点由游戏注入；impossibleOnly 持有类断言只拦"不可能持有"）
-  declarationContract, // 表达层声明契约（可选；"prose" 缺省 / "structured" 按实体 id 精确校验）
-  hint, summarize, props, // props：属性注册表（type/label/internal/stylistic）
+  hint, summarize, props, // props：属性注册表（type/label/internal/stylistic）；表达一致性由声明契约 + 提交硬墙承担，无词表断言钩子
 };
 ```
 
@@ -172,7 +170,6 @@ const game: GameDef = {
 - 拒绝痕迹已落地（`world.traces`：实体累计被拒次数，进序列化）：表达层可引述"反复试过"的累积感。**但"痕迹具象化"未实现**——"反复撬过的门缝留下磨损"需要规则在 traces 达阈值时产出痕迹实体/变更，属后续玩法扩展。
 - 交互 UX：终端/前端任意文本选段 + 快捷键焦点如何落地（原型期实测）。
 - 忠实性约束的松紧参数：接地字段粒度 vs 自由字段宽度（§4.3）。预言/已发生已在钩子侧可区分（pending 传入），但"预言深度"（如「再过不久它会怎么样」这类对后续进程的预测）的边界仍靠词表启发式。
-- "新游戏类型"的最终定义由第一个伟大的游戏作品给出，而非引擎本身。
 
 ## 12. 参考与灵感来源
 

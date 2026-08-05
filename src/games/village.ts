@@ -1,4 +1,4 @@
-import type { AssertionRule, Entity, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
+import type { GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
 import { entity, internalPropsOf } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
 import { E, P, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
@@ -170,20 +170,6 @@ const bodyStarve: Law = { id: "body.starve", over: [{ var: "p", source: "entitie
 const bodyExhaust: Law = { id: "body.exhaust", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.gte(E.p("p", "fatigue"), E.lit(100))] }], each: [{ op: "set", e: E.v("p"), p: "down", v: E.lit(true) }, { op: "set", e: E.v("p"), p: "fatigue", v: E.lit(0) }] };
 const bodyCollapse: Law = { id: "body.collapse", over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.neq(E.p("p", "down"), E.lit(true)), P.lte(E.p("p", "hp"), E.lit(0))] }], each: [{ op: "set", e: E.v("p"), p: "down", v: E.lit(true) }, { op: "set", e: E.v("p"), p: "hp", v: E.lit(0) }] };
 
-const VILLAGE_ASSERTION_RULES: AssertionRule[] = [
-	{
-		prop: "in",
-		weak: ["手里", "手上", "握着", "拿着"],
-		exemptPending: false,
-		targets: (world, actor) => world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props.grabbable === true && e.props["in"] !== actor),
-		error: (e) => `描述虚构了「${e.name}」在你手中，但当前它不在你这里。`,
-	},
-];
-
-const VILLAGE_NEGATIONS = ["未", "没", "无", "不", "别", "休", "尚未", "未曾", "不曾"];
-const VILLAGE_SENTENCE_PUNCT = /[。！？!?；;]/;
-const VILLAGE_ASSERTION_PUNCT = /[，。；！？、—]/;
-
 /** 容器包含树可达性的理由文案与接线（游戏侧构件接入 core 的 reach/reachReason 槽位）。 */
 const REACH_MSGS = { reachMissing: "这里没有这个东西。", reachCycle: "位置存在循环引用。", reachNotHere: "它不在这里。", reachClosed: (n: string) => `${n}是关着的。` };
 const REACH_OPTS = { msgs: REACH_MSGS };
@@ -281,10 +267,6 @@ export const village: GameDef = {
 	...reachFor(REACH_OPTS),
 	summarize: summarizeVillage,
 	digest: digestVillage,
-	assertionRules: VILLAGE_ASSERTION_RULES,
-	negationWords: VILLAGE_NEGATIONS,
-	sentencePunct: VILLAGE_SENTENCE_PUNCT,
-	assertionPunct: VILLAGE_ASSERTION_PUNCT,
 	hint: `世界法则（模拟层强制执行）：
 1. 每个时刻（tick）：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来。
 2. 入夜（时刻 % 4 == 3）时，野狗有 1/4 概率偷袭（骰子判定，确定性）。

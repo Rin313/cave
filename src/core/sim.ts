@@ -94,39 +94,6 @@ export interface Fact {
 	entities: string[];
 }
 
-/** 通用断言校验规则的输入（表达层调用）。 */
-export interface AssertionInput {
-	text: string;
-	world: World;
-	actor: string;
-	/** 即将发生（下一 tick）的变更，供弱断言豁免"预言"。 */
-	pending: Change[];
-	/** 物理可持握判定（impossibleOnly 规则用）：实体当前是否可持握（可握且可达）。缺省 undefined=不做收窄。 */
-	wieldable?: (id: string) => boolean;
-}
-
-/** 通用断言校验规则（声明式）：游戏声明物理属性的断言词与"矛盾目标"，
- *  core 用 scanClaims 执行——散文断言了与状态相反的事实即报错。引擎不感知语言，词表由游戏注入。 */
-export interface AssertionRule {
-	/** 被断言的物理属性（注册表中非 stylistic 的属性）。 */
-	prop: string;
-	/** 弱断言词：当前状态不成立、但"即将发生"（pending 中该实体该属性将成立）时豁免（合法预言）。 */
-	weak: string[];
-	/** 强断言词：必须当前成立，不豁免 pending。 */
-	strong?: string[];
-	/** 目标实体：当前状态与该断言"成立"相矛盾的实体（命中即幻觉）。 */
-	targets: (world: World, actor: string) => Entity[];
-	/** 弱断言词是否接受 pending 豁免（覆盖"即将成立"的预言实体）。缺省 true；
-	 *  如「持有」类断言（握着/手里）不接受预言豁免——当前不在手就是幻觉。 */
-	exemptPending?: boolean;
-	/** 只对"不可能持有"触发：目标实体当前不可持握（不可握或不可达）时才算矛盾。
-	 *  对"随手拿起/放下"可达可持握物品的散文视为动作叙述，不做持有断言——文学宽松策略的机制实现。
-	 *  实现：core 在扫描前用 input.wieldable 收窄 targets（仅当 wieldable 可用时生效）。 */
-	impossibleOnly?: boolean;
-	/** 命中时返回的错误文案。 */
-	error: (e: Entity) => string;
-}
-
 /** 属性类型。 */
 export type PropType = "string" | "number" | "boolean" | "id" | "any";
 
@@ -138,8 +105,8 @@ export interface PropDef {
 	label?: string;
 	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验（从源头杜绝泄漏）。 */
 	internal?: boolean;
-	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性，如「刻痕斑驳」），
-	 *  不参与断言校验规则（assertionRules）；非润饰的物理属性须与状态严格一致。 */
+	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性，如「刻痕斑驳」）。
+	 *  非润饰的物理属性须与状态严格一致——一致性由声明契约（structured）与不变式硬墙承担，不再有词表断言扫描器。 */
 	stylistic?: boolean;
 }
 
@@ -197,16 +164,6 @@ export interface GameDef {
 	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 与表达校验读 internal，
 	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
 	props?: Record<string, PropDef>;
-	/** 通用断言校验规则（声明式，取代 per-game 硬编码校验词表）。
-	 *  engine 在泄漏检查后自动执行：散文断言了与物理状态相反的事实即报错；stylistic 属性不入规则。
-	 *  weak 断言词按 pending（即将发生）豁免预言，strong 不豁免；exemptPending:false 的规则完全不豁免。 */
-	assertionRules?: AssertionRule[];
-	/** 否定词表（断言校验用）：断言词前近旁出现任一即跳过该断言。引擎不感知语言，由游戏注入。 */
-	negationWords?: string[];
-	/** 句子边界标点（断言校验用）：按此切分断言作用域。缺省按换行切分。 */
-	sentencePunct?: RegExp;
-	/** 词-实体相邻判定标点（断言校验用）：名称与断言词之间出现这些才算"不相邻"（跨主语误报拦截）。缺省同 sentencePunct。 */
-	assertionPunct?: RegExp;
 	/** 确定性回退摘要钩子。 */
 	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
@@ -229,9 +186,6 @@ export interface GameDef {
 	forbiddenTerms?: string[];
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
-	/** 表达层声明契约（可选，缺省 "prose"）：新事实声明 `[facts: ...]` 的校验方式。
-	 *  "prose"（名字子串 + 最长命中归属）与 "structured"（事实写作 [id1,id2]: 陈述，id 精确集合校验，无名字回退）由 core 的 declare.ts 提供。 */
-	declarationContract?: "prose" | "structured";
 	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
 	messages: Messages;
 }
