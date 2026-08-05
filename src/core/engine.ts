@@ -416,7 +416,7 @@ ${hint}
 }
 
 function fmtValue(sim: Simulation, v: PropValue): string {
-	if (v === null) return "无";
+	if (v === null) return "null";
 	if (typeof v === "string") {
 		const hit = sim.world.entities.find((e) => e.id === v);
 		if (hit) return hit.name;
@@ -424,17 +424,22 @@ function fmtValue(sim: Simulation, v: PropValue): string {
 	return String(v);
 }
 
-/** 变更的世界腔描述：rel 变更（prop 编码 `rel:<type>@<to>`）格式化为「from 对 to 的 type」，其余保持 entity.prop。 */
-function fmtChange(sim: Simulation, c: Change): string {
+/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接）：
+ *  普通变更 `<name>.<label>: <from> → <to>`；rel 变更 `<from>.<type>.<to>: <from值> → <to值>`。
+ *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
+export function fmtChange(sim: Simulation, c: Change): string {
 	const m = /^rel:([^@]+)@(.+)$/.exec(c.prop);
 	if (m) {
 		const [type, to] = [m[1]!, m[2]!];
-		return `${fmtValue(sim, c.entity)} 对 ${fmtValue(sim, to)} 的${type} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
+		return `${fmtValue(sim, c.entity)}.${type}.${fmtValue(sim, to)}: ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
 	}
-	return `${c.entity}.${c.prop} ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
+	const e = sim.world.entities.find((x) => x.id === c.entity);
+	const name = e?.name ?? c.entity;
+	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
+	return `${name}.${label}: ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
 }
 
-function buildExpressionPrompt(
+export function buildExpressionPrompt(
 	sim: Simulation,
 	state: string,
 	results: StepResult[],
