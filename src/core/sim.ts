@@ -189,9 +189,6 @@ export interface GameDef {
 	/** 序列化投影：决定状态以什么形态进映射/表达 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;
-	/** 额外禁止词：游戏自定义的实现术语（内部概念名等），表达校验按词边界匹配，不进散文。
-	 *  语言相关的词汇约束由游戏声明（引擎不感知语言）。 */
-	forbiddenTerms?: string[];
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
 	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */

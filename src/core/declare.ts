@@ -2,7 +2,7 @@
 // 唯一契约 structured：事实必须带实体 id 前缀（id: / id1,id2: / [id1,id2]:），按实体 id 精确集合校验，
 // 无名字回退（prose 契约的名字子串匹配已移除，实证见 ARCHITECTURE §5-10 与实验记录）。
 // 泄漏检查与涉及集（touched）推导在此共享，engine 不重复实现。
-import type { Change, PropDef, World } from "./sim.ts";
+import type { Change, World } from "./sim.ts";
 
 export interface Decl {
 	facts: string[];
@@ -18,11 +18,9 @@ export function parseDeclaration(text: string): Decl | null {
 	return { facts, body: text.slice(m[0].length).trim() };
 }
 
-/** 泄漏检查依赖的窄化 def 视角（仅读 forbiddenTerms 与 props 注册表）。 */
-export type NarrowDef = { forbiddenTerms?: string[]; props?: Record<string, PropDef> };
-
-/** 通用泄漏检查：只禁止与语言无关的实现工件（JSON 形态 / 声明头复现 / 实现形状标识符）。 */
-export function leakageCheck(text: string, world: World, def: NarrowDef): string | null {
+/** 通用泄漏检查：只禁止与语言无关的实现工件（JSON 形态 / 声明头复现 / 实现形状标识符）。
+ *  语言相关的词汇约束不设硬拦截——交给 prompt 设计与 LLM 能力，不给引擎引入词表。 */
+export function leakageCheck(text: string, world: World): string | null {
 	if (/"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*(?=["{[]|true|false|null|-?\d)/.test(text)) return "出现了工具调用或状态格式（JSON 键）。";
 	if (text.includes("[facts:")) return "正文中出现了声明头 [facts: ...]。";
 	const isImplShape = (s: string) => !/^[a-z]+$/.test(s);
@@ -31,7 +29,6 @@ export function leakageCheck(text: string, world: World, def: NarrowDef): string
 		if (isImplShape(e.id) && !e.name.toLowerCase().includes(e.id.toLowerCase())) forbidden.add(e.id);
 		for (const k of Object.keys(e.props)) if (isImplShape(k)) forbidden.add(k);
 	}
-	for (const t of def.forbiddenTerms ?? []) forbidden.add(t);
 	for (const t of forbidden) {
 		const hit = /[^\x00-\x7F]/.test(t) ? text.includes(t) : new RegExp(`\\b${t}\\b`).test(text);
 		if (hit) return `出现了实体 id 或实现术语：「${t}」。`;
@@ -41,7 +38,6 @@ export function leakageCheck(text: string, world: World, def: NarrowDef): string
 
 export interface DeclCtx {
 	world: World;
-	def: NarrowDef;
 	visible: Set<string>;
 	involved: Set<string>;
 	changes: Change[];
@@ -105,7 +101,7 @@ export function validateDecl(decl: Decl, ctx: DeclCtx): string | null {
 				if (!e || !ctx.visible.has(id)) return `声明「${f}」提及了不存在的实体「${id}」。`;
 				if (!touched.has(id)) return `声明「${f}」提及了未涉及的实体「${e.name}」。`;
 			}
-			const leaked = leakageCheck(parsed.rest, ctx.world, ctx.def);
+			const leaked = leakageCheck(parsed.rest, ctx.world);
 			if (leaked) return `声明「${f}」中：${leaked}`;
 			continue;
 		}

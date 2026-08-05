@@ -305,7 +305,6 @@ export class Engine {
 	private declCtx(changes: Change[], pending: Change[], involved: Set<string>): DeclCtx {
 		return {
 			world: this.sim.world,
-			def: { forbiddenTerms: this.def.forbiddenTerms, props: this.def.props },
 			visible: this.sim.visible(),
 			involved,
 			changes,
@@ -369,7 +368,7 @@ export class Engine {
 
 	private validateNarration(text: string): string | null {
 		if (!text.trim()) return "叙述为空。";
-		return leakageCheck(text, this.sim.world, { forbiddenTerms: this.def.forbiddenTerms, props: this.def.props });
+		return leakageCheck(text, this.sim.world);
 	}
 
 	dispose(): void {
