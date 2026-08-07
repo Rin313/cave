@@ -7,7 +7,7 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 桌面壳 | **Electron** | 非 Tauri |
-| 前端框架 | **Vue 3** + Vite | 渲染进程 |
+| 前端框架 | Vite | 渲染进程 |
 | LLM 编排 | **pi coding-agent SDK**（进程内） | `@earendil-works/pi-coding-agent`，非 RPC mode，进程内集成；已发布 npm 包，直接依赖 registry 版本；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/`（SDK API 见 `sdk.md`） |
 | 持久化 | **SQLite** | 存档 + 回合审计，存什么见 §3 |
 | Node 运行时 | **Node 26** | 开发环境工具链；主进程实际运行在 Electron 内嵌 Node 上（Electron 43 内嵌 Node 24.18 ≥ pi SDK 的 `engines.node >= 22.19`；系统 Node 与内嵌 Node 相互独立，不冲突） |
@@ -29,7 +29,7 @@
 4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给 Vue。
 5. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的（不再硬编码 apply/move/set）。
 
-## 2.5 已落地的 GameDef 表面契约
+## 2.5 GameDef 表面契约
 
 - **`verbs`**：游戏声明的动词表，每个动词含 `schema`（TypeBox，生成 act 工具参数校验）、`entityParams`（哪些参数是实体 id，供可见性校验）、`candidates`（非实体参数的候选值，动作空间接地与探测共用）、`laws`（该动词的声明式法则，按声明顺序短路，首条 granted 生效；末尾可挂 `denyAll.*` 兜底法则）。动词集由各游戏声明：era/DoL 类可声明 `talk/travel/equip` 等，开放世界可声明 `attack/trade/craft` 等。`set` 通用动词及其"属性选择器"参数（`propParams`）是错误设计，已移除——"改属性"的语义应由游戏自定的领域动词 + 法则承担。
 - **环境响应（声明式动词，v3 取代软通道）**：非预设的自由动作由游戏声明动词 + 实体不可知法则承担——如 waste 的 `mark`/`examine`，`when` 按 `reach` 键控，一条法则覆盖全部可达实体（无 2^N 组合面）。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底（如「湿柴不得燃烧」一条声明式取代逐条守卫）。**软通道已移除（v3）**：`fallback:"soft"`/`access:"soft"`/`Proof`/`proofSchema`/`softAdjudicate`/`normalizeProof` 全删（研究结论见 §5-8~11）——AI 提后果与实体不可知法则在 e2e 上等价且可写面相同，却带授予理由退化与静默假授予 bug；移除后 DESIGN §1「AI 不产生系统后果」重新成立。
