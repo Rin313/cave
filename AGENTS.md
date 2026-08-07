@@ -1,3 +1,3 @@
-- `npx tsc --noEmit` — typecheck
+- 类型检查：`npx tsc --noEmit`
 
-- 非必要时不要使用：`git log`
+- 禁止使用：`git log`
