@@ -307,7 +307,7 @@ function evalMatch(ctx: ExprCtx, law: Law): { deltas: Delta[]; facts: Fact[]; re
 }
 
 /** 量词枚举：按 over 顺序绑定变量，对每个绑定调用 cb（返回 true 停止）。
- *  over 变量若已在 env 中绑定（软通道反查给出的目标），直接用既有绑定并过 where 过滤，
+ *  over 变量若已在 env 中绑定（动作参数与量词变量同名时），直接用既有绑定并过 where 过滤，
  *  不满足则该绑定作废——否则第一匹配者会抢走期望目标。 */
 function forEachBinding(ctx: ExprCtx, over: Over[], cb: (env: Record<string, PropValue>) => boolean): boolean {
 	const gen = (idx: number, env: Record<string, PropValue>): boolean => {

@@ -116,7 +116,7 @@ export interface PropDef {
 	stylistic?: boolean;
 }
 
-	/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
+/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
 export interface Denial {
 	/** 法则标识，如 "move.reach"（审计与探测依据）。 */
 	law: string;

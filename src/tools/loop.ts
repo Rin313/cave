@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
-import type { Change, StepResult, World } from "../core/sim.ts";
+import type { Change, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 

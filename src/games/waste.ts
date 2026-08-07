@@ -180,7 +180,7 @@ const moveLaws: Law[] = [
 	{ id: "denyAll.move", reject: { when: [], denial: { law: "denyAll.move", subject: E.v("entity"), object: E.v("dest"), text: (d, ctx) => `你无法把${ctx.name(d.subject ?? "")}放到${ctx.name(d.object ?? "")}。` } } },
 ];
 
-/** 容器开合（原 openLaws.container.open/close 迁为预设动词法则）。 */
+/** 容器开合：openable 实体的 open 开关（true 开 / false 关）。 */
 const openVerbLaws: Law[] = [
 	{
 		id: "open.open",
@@ -199,7 +199,7 @@ const openVerbLaws: Law[] = [
 	{ id: "denyAll.open", reject: { when: [], denial: { law: "denyAll.open", subject: E.v("entity"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}没有变化。` } } },
 ];
 
-/** 点燃（原 openLaws.fire 迁为预设动词法则：source 有明火 → target 可燃）。 */
+/** 点燃：source 有明火（lit）→ target 可燃（flammable）则燃烧。 */
 const useLaws: Law[] = [
 	{
 		id: "use.ignite",
@@ -224,7 +224,7 @@ const useLaws: Law[] = [
 	{ id: "denyAll.use", reject: { when: [], denial: { law: "denyAll.use", subject: E.v("source"), object: E.v("target"), text: (d, ctx) => `你用${ctx.name(d.subject ?? "")}碰了碰${ctx.name(d.object ?? "")}，什么也没有发生。` } } },
 ];
 
-/** 采集浆果（原 openLaws.gather 迁为预设动词法则：成熟可达的浆果丛 → 得 1 颗浆果）。 */
+/** 采集浆果：成熟（ripe）且可达的浆果丛 → 得 1 颗浆果。 */
 const harvestLaws: Law[] = [
 	{
 		id: "harvest.berries",
