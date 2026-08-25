@@ -1,5 +1,4 @@
-import type { TObject } from "typebox";
-import { evaluateLaw, type ExprCtx, type Law } from "./expr.ts";
+import { type Static, type TObject } from "typebox";
 import { roll as rollDice } from "./util.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
@@ -29,22 +28,15 @@ export interface World {
 	traces?: Record<string, number>;
 	/** 关系边表：from→to 的 type 关系（信任/记忆/派系等）。游戏声明，规则以 deltas 变更。 */
 	relations?: Rel[];
-	/** 确定性实体 id 计数器：spawn 未显式指定 id 时派生（e0/e1/...）。 */
-	nextId?: number;
 }
 
-/** 结构化变更原语：法则产出 deltas，模拟层裁定提交。prop 支持点路径（如 relations.guard.trust）。
+/** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
  *  关系变更 prop 编码为 `rel:<type>@<to>`（entity 为 from 端点），表达层据此格式化。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "inc"; entity: string; prop: string; by: number }
-	| { op: "push"; entity: string; prop: string; value: PropValue }
-	| { op: "del"; entity: string; prop: string }
 	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean }
-	| { op: "relInc"; from: string; to: string; type: string; by: number }
-	| { op: "relDel"; from: string; to: string; type: string }
-	| { op: "spawn"; id?: string; kind: string; name: string; tags?: string[]; props?: Record<string, PropValue> }
-	| { op: "destroy"; entity: string };
+	| { op: "relInc"; from: string; to: string; type: string; by: number };
 
 export interface Change {
 	entity: string;
@@ -125,11 +117,108 @@ export interface Denial {
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
 	debug?: string;
+	/** 终局兜底标记：probe 据此报告法则缺口（取代 denyAll. 前缀字符串分类）。 */
+	fallback?: boolean;
 }
 
 /** 引擎保留伪动词：时间系统（tick）产出 StepResult 时的动作标识。
  *  不是游戏声明的动词，游戏不应声明同名动词；describeAction 据此渲染「时间流逝」。 */
 export const TICK_VERB = "tick";
+
+// ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
+
+/** 规则判定上下文：只读世界视图 + 引擎隐式语义的唯一入口（可达性/关系/骰子/时间）。
+ *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
+export interface Q {
+	readonly world: World;
+	readonly actor: string;
+	readonly time: number;
+	readonly params: Record<string, PropValue>;
+	entity(id: string): Entity | undefined;
+	name(id: string): string;
+	/** 关系值（无边为 null）。 */
+	rel(from: string, to: string, type: string): number | string | boolean | null;
+	/** 关系数值比较：缺边/非数按 dflt 参与——缺省语义显式命名在调用点。 */
+	relNum(from: string, to: string, type: string, dflt: number): number;
+	/** 确定性骰子（World 纯函数，check/apply/dryTick 一致）。 */
+	roll(key: string, sides: number): number;
+	canReach(id: string): boolean;
+	reachWhy(id: string): string | null;
+	visible(): Set<string>;
+}
+
+/** 裁决：授予（未提交 deltas + 世界腔理由 + facts）或结构化拒绝；规则返回 null = 不表态。 */
+export type Verdict =
+	| { ok: true; deltas: Delta[]; reason?: string; facts?: Fact[] }
+	| { ok: false; denial: Denial };
+
+/** 动作规则：卫语句式总函数，拒绝/授予优先序即书写顺序。 */
+export interface Rule {
+	id: string;
+	judge: (q: Q) => Verdict | null;
+}
+
+/** 系统规则：每 tick 一次，聚合产出（空产出 = 本 tick 无事）。 */
+export interface SystemRule {
+	id: string;
+	run: (q: Q) => { deltas: Delta[]; facts?: Fact[]; reason?: string } | null;
+}
+
+export function grant(deltas: Delta[], reason?: string, facts?: Fact[]): Verdict {
+	return { ok: true, deltas, reason, facts };
+}
+
+export function deny(law: string, o: { subject?: string; object?: string; prop?: string; reason?: string; fallback?: boolean } = {}): Verdict {
+	return { ok: false, denial: { law, ...o } };
+}
+
+/** 终局兜底规则：无条件拒绝并带 fallback 标记（probe 据此报告法则缺口）。 */
+export function fallback(id: string, text: (q: Q) => string): Rule {
+	return { id, judge: (q) => deny(id, { reason: text(q), fallback: true }) };
+}
+
+/** Delta 构造糖。 */
+export const D = {
+	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
+	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
+	relSet: (from: string, to: string, type: string, value: number | string | boolean): Delta => ({ op: "relSet", from, to, type, value }),
+	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
+};
+
+/** 动词定义助手：规则参数 p 由 TypeBox schema 推导为编译期类型（边界处已完成 schema 校验）。 */
+export function defineVerb<S extends TObject>(spec: {
+	label: string;
+	description: string;
+	schema: S;
+	entityParams?: string[];
+	instrumentParams?: string[];
+	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
+	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
+}): VerbDef {
+	return {
+		label: spec.label,
+		description: spec.description,
+		schema: spec.schema,
+		entityParams: spec.entityParams,
+		instrumentParams: spec.instrumentParams,
+		candidates: spec.candidates,
+		rules: spec.rules.map((r) => ({ id: r.id, judge: (q) => r.judge(q, q.params as Static<S>) })),
+	};
+}
+
+/** 从 deltas + facts 收集涉及实体（表达层声明校验与审计用）。 */
+function collectInvolved(deltas: Delta[], facts: Fact[] = []): string[] {
+	const s = new Set<string>();
+	for (const d of deltas) {
+		if (d.op === "set" || d.op === "inc") s.add(d.entity);
+		else {
+			s.add(d.from);
+			s.add(d.to);
+		}
+	}
+	for (const f of facts) for (const e of f.entities) s.add(e);
+	return [...s];
+}
 
 export interface VerbDef {
 	label: string;
@@ -144,8 +233,8 @@ export interface VerbDef {
 	instrumentParams?: string[];
 	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
-	/** 声明式法则（数据行，解释器裁决，短路语义：首个授予即裁决）。 */
-	laws?: Law[];
+	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为 fallback 兜底。 */
+	rules: Rule[];
 }
 
 export interface GameDef {
@@ -154,8 +243,8 @@ export interface GameDef {
 	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
-	/** 时间系统：每 tick 按注册顺序运行的声明式法则（over/when/each/facts）。 */
-	systems?: Law[];
+	/** 时间系统：每 tick 按注册顺序运行的系统规则（world→deltas 的纯函数）。 */
+	systems?: SystemRule[];
 	hint?: string;
 	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 与表达校验读 internal，
 	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
@@ -273,59 +362,9 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return messagesFor(def).noResponse;
 }
 
-function splitPath(path: string): string[] {
-	return path.split(".");
-}
-
-export function propGet(e: Entity, path: string): PropValue {
-	let cur: PropValue = e.props;
-	for (const p of splitPath(path)) {
-		if (cur === null || typeof cur !== "object") return null;
-		if (Array.isArray(cur)) cur = cur[Number(p)] ?? null;
-		else cur = (cur as Record<string, PropValue>)[p] ?? null;
-	}
-	return cur;
-}
-
-/** 属性存在判定（点路径逐级键存在，值可为 null；与 propGet 同一语义的第二出口，供 has 谓词用）。 */
-export function propHas(e: Entity, path: string): boolean {
-	let cur: PropValue = e.props;
-	for (const p of splitPath(path)) {
-		if (cur === null || typeof cur !== "object") return false;
-		if (Array.isArray(cur)) {
-			const i = Number(p);
-			if (Number.isNaN(i) || !(i in cur)) return false;
-			cur = cur[i]!;
-		} else {
-			const o = cur as Record<string, PropValue>;
-			if (!(p in o)) return false;
-			cur = o[p]!;
-		}
-	}
-	return true;
-}
-
-export function propSet(e: Entity, path: string, value: PropValue): void {
-	const parts = splitPath(path);
-	const last = parts.pop()!;
-	let cur: Record<string, PropValue> | PropValue[] = e.props;
-	for (let i = 0; i < parts.length; i++) {
-		const p = parts[i]!;
-		const idx = Number(p);
-		const next = parts[i + 1];
-		const nextIsNum = next !== undefined && !Number.isNaN(Number(next));
-		const target: PropValue | undefined = Array.isArray(cur) ? cur[idx] : (cur as Record<string, PropValue>)[p];
-		if (target === null || target === undefined || typeof target !== "object") {
-			const fresh: PropValue = nextIsNum ? [] : {};
-			if (Array.isArray(cur)) cur[idx] = fresh;
-			else (cur as Record<string, PropValue>)[p] = fresh;
-			cur = fresh as never;
-		} else {
-			cur = target as never;
-		}
-	}
-	if (Array.isArray(cur)) cur[Number(last)] = value;
-	else (cur as Record<string, PropValue>)[last] = value;
+/** 属性读取（平铺键；点路径机制随 Expr 解释器一并移除）。 */
+export function propGet(e: Entity, prop: string): PropValue {
+	return e.props[prop] ?? null;
 }
 
 /** 关系查询：from→to 的指定 type 的值（无则 null）。 */
@@ -373,7 +412,6 @@ export class Simulation {
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
-		this.world.nextId ??= 0;
 	}
 
 	get actor(): string {
@@ -414,47 +452,40 @@ export class Simulation {
 		if (inst) {
 			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}
-		let denial: Denial | null = null;
-		const lctx = this.exprCtx({ ...action.params, actor: this.actor });
-		for (const law of verb.laws ?? []) {
-			const res = evaluateLaw(lctx, law);
-			if (res.granted) {
-				return { ok: true, reason: res.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: res.deltas ?? [], action, facts: res.facts, involved: res.involved, src: `law:${law.id}` };
+		const q = this.query(action.params);
+		for (const r of verb.rules) {
+			const v = r.judge(q);
+			if (!v) continue;
+			if (v.ok) {
+				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}` };
 			}
-			if (res.denial != null && denial == null) denial = res.denial;
+			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: v.denial.fallback ? "denyAll" : "rule", denial: v.denial };
 		}
-		// 通用兜底：无具体法则拒绝时，由动词末尾的 denyAll.* 兜底法则产出（deniedBy 据此分类）。
-		const deniedBy: "rule" | "denyAll" = denial != null && !denial.law.startsWith("denyAll.") ? "rule" : "denyAll";
-		const reason = denial != null
-			? renderDenial(this.def, denial)
-			: messagesFor(this.def).noResponse;
-		return { ok: false, reason, changes: [], deltas: [], action, deniedBy, denial: denial ?? undefined };
+		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "denyAll" };
 	}
 
-	/** 构造表达式求值上下文：世界访问经闭包注入（expr 层零运行时依赖）。 */
-	private exprCtx(env: Record<string, PropValue>): ExprCtx {
+	/** 构造规则判定上下文：引擎隐式语义在此唯一收口。 */
+	private query(params: Record<string, PropValue>): Q {
 		const world = this.world;
 		const actor = this.actor;
 		return {
+			world,
 			actor,
-			env,
-			prop: (id, path) => {
-				const e = entity(world, id);
-				return e ? propGet(e, path) : null;
-			},
-			hasProp: (id, path) => {
-				const e = entity(world, id);
-				return e ? propHas(e, path) : false;
-			},
-			reach: (id) => (this.def.reach ? this.def.reach(world, actor, id) : true),
-			rel: (from, to, type) => relVal(world, from, to, type),
-			reachReason: (id) => (this.def.reachReason ? this.def.reachReason(world, actor, id) : null),
-			name: (id) => entity(world, id)?.name ?? id,
-			propLabel: (prop) => propLabelOf(this.def, prop),
-			entityIds: world.entities.map((e) => e.id),
-			visibleIds: [...this.visible()],
-			roll: (key, sides) => rollDice(world, key, sides),
 			time: world.time,
+			params,
+			entity: (id) => entity(world, id),
+			name: (id) => entity(world, id)?.name ?? id,
+			rel: (from, to, type) => relVal(world, from, to, type),
+			relNum: (from, to, type, dflt) => {
+				const v = relVal(world, from, to, type);
+				if (v === null) return dflt;
+				const n = Number(v);
+				return Number.isFinite(n) ? n : dflt;
+			},
+			roll: (key, sides) => rollDice(world, key, sides),
+			canReach: (id) => (this.def.reach ? this.def.reach(world, actor, id) : true),
+			reachWhy: (id) => (this.def.reachReason ? this.def.reachReason(world, actor, id) : null),
+			visible: () => this.visible(),
 		};
 	}
 
@@ -678,11 +709,9 @@ export class Simulation {
 		};
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
-			// 与动作裁决一致注入 actor 伪参数：系统法则的 when/each 可用 E.v("actor") 引用玩家。
-			const res = evaluateLaw(this.exprCtx({ actor: this.actor }), sys, true);
-			const deltas = res.deltas ?? [];
-			if (!res.granted || deltas.length === 0) continue;
-			const cc = this.commitChecked(deltas, src);
+			const res = sys.run(this.query({}));
+			if (!res || res.deltas.length === 0) continue;
+			const cc = this.commitChecked(res.deltas, src);
 			if (!cc.ok) {
 				emit({
 					ok: false,
@@ -697,12 +726,11 @@ export class Simulation {
 			}
 			emit({
 				ok: true,
-				reason: res.reason ?? messagesFor(this.def).defaultReason,
+				reason: res.facts?.length ? res.facts.map((f) => f.text).join(" ") : (res.reason ?? messagesFor(this.def).defaultReason),
 				changes: cc.changes,
 				action: { verb: TICK_VERB, params: { n: this.world.time } },
 				facts: res.facts,
-				// 自动派生 id 的 spawn 无法在 deltas 阶段预知实体 id，须并入提交后的 #spawn 变更实体。
-				involved: [...new Set([...(res.involved ?? []), ...cc.changes.filter((c) => c.prop === "#spawn").map((c) => String(c.to))])],
+				involved: collectInvolved(res.deltas, res.facts),
 				src,
 			});
 		}
@@ -739,40 +767,6 @@ export class Simulation {
 			else rels.push({ from, to, type, value });
 		};
 		for (const d of deltas) {
-			if (d.op === "spawn") {
-				const id = d.id ?? `e${this.world.nextId ?? 0}`;
-				if (!this.world.entities.some((x) => x.id === id)) {
-					this.world.entities.push({
-						id,
-						kind: d.kind,
-						name: d.name,
-						tags: d.tags ?? [],
-						props: d.props ?? {},
-					});
-					changes.push({ entity: id, prop: "#spawn", from: null, to: id, src });
-				}
-				if (!d.id) this.world.nextId = (this.world.nextId ?? 0) + 1;
-				continue;
-			}
-			if (d.op === "destroy") {
-				if (!entity(this.world, d.entity)) continue;
-				this.world.entities = this.world.entities.filter((x) => x.id !== d.entity);
-				if (rels.length) {
-					const filtered = rels.filter((r) => r.from !== d.entity && r.to !== d.entity);
-					rels.length = 0;
-					rels.push(...filtered);
-				}
-				if (this.world.focus === d.entity) this.world.focus = null;
-				if (this.world.traces) delete this.world.traces[d.entity];
-				const refProps = Object.entries(this.def.props ?? {}).filter(([, p]) => p.type === "id").map(([k]) => k);
-				for (const x of this.world.entities) {
-					for (const p of refProps) {
-						if (x.props[p] === d.entity) x.props[p] = null;
-					}
-				}
-				changes.push({ entity: d.entity, prop: "#destroy", from: d.entity, to: null, src });
-				continue;
-			}
 			if (d.op === "relSet") {
 				const from = relVal(this.world, d.from, d.to, d.type);
 				if (from === d.value) continue;
@@ -788,38 +782,19 @@ export class Simulation {
 				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from: prev, to, src });
 				continue;
 			}
-			if (d.op === "relDel") {
-				const from = relVal(this.world, d.from, d.to, d.type);
-				if (from === null) continue;
-				const idx = rels.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
-				if (idx >= 0) rels.splice(idx, 1);
-				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: null, src });
-				continue;
-			}
 			const e = entity(this.world, d.entity);
 			if (!e) continue;
 			if (d.op === "set") {
-				const from = propGet(e, d.prop);
+				const from = e.props[d.prop] ?? null;
 				if (from === d.value) continue;
-				propSet(e, d.prop, d.value);
+				e.props[d.prop] = d.value;
 				changes.push({ entity: d.entity, prop: d.prop, from, to: d.value, src });
-			} else if (d.op === "inc") {
-				const from = Number(propGet(e, d.prop) ?? 0);
+			} else {
+				const from = Number(e.props[d.prop] ?? 0);
 				if (!Number.isFinite(from)) continue;
 				const to = from + d.by;
-				propSet(e, d.prop, to);
+				e.props[d.prop] = to;
 				changes.push({ entity: d.entity, prop: d.prop, from, to, src });
-			} else if (d.op === "push") {
-				const prev = propGet(e, d.prop);
-				const arr = Array.isArray(prev) ? [...(prev as PropValue[])] : [];
-				arr.push(d.value);
-				propSet(e, d.prop, arr);
-				changes.push({ entity: d.entity, prop: d.prop, from: prev, to: arr, src });
-			} else if (d.op === "del") {
-				const from = propGet(e, d.prop);
-				if (from === null) continue;
-				propSet(e, d.prop, null);
-				changes.push({ entity: d.entity, prop: d.prop, from, to: null, src });
 			}
 		}
 		return changes;

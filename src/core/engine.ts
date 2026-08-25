@@ -454,8 +454,7 @@ export function buildExpressionPrompt(
 	return lines.join("\n");
 }
 
-/** declare 工具：表达层新事实的结构化声明通道。取代 [facts:] 首行格式约定 + 正则解析——
- *  事实以结构化参数提交，逐条校验并即时反馈（模型回合内自我纠正），散文正文即纯文本，无需剥首行。
+/** declare 工具：表达层新事实的结构化声明通道——事实以结构化参数提交，逐条校验并即时反馈（模型回合内自我纠正），散文正文即纯文本。
  *  校验核心复用 core/declare.ts 的 touched 集推导。散文缓冲在每次调用时清空：正文 = 最后一次 declare 之后输出的文本。 */
 function buildDeclareTool(state: DeclToolState, gate: ActGate, textBuf: string[]) {
 	return defineTool({

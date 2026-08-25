@@ -36,21 +36,21 @@
 
 - NetHack / DoL / C:DDA 级别的法则网络：实体、属性、关系、法则组成的约束网络。
 - 接受**结构化动作**（action），返回新状态与结构化结果。
-- 统一模式：**动作动词表 + 声明式法则（Law）裁决**
-  - 动作空间由游戏声明：`GameDef.verbs` 是动词表（`{ verb: { schema, entityParams, candidates, laws } }`），引擎据此生成 act 工具的 schema，并在每回合以 `Simulation.affordances()`（枚举 动词×可见实体×候选值 的只读裁决 `check()`，预算按动词均分）把**当前世界会授予的动作**注入映射 prompt——动作空间接地，映射不再冷猜测参数。不再硬编码 apply/move/set——era 类游戏可声明 `talk/travel/equip`，开放世界可声明 `attack/trade/craft`。当前参考游戏按两极各自声明动词集并内置法则集：era 极 village（`gather/eat/rest/talk/buy/sell/clear/fix/seal/subdue/scout`）、开放世界极 waste（`travel/move/open/use/harvest/mark/examine`）。环境响应（刻痕、勘察等）由实体不可知法则承担，不再需要 core 级"AI 提后果"通道（软通道已移除，研究结论见 ARCHITECTURE §5-8~11）。
-  - 每个动词挂一组**声明式法则**（`Law`：`over` 量词 / `when` 条件 / `each` 后果 / `denies` 拒绝 / `reject` 前置拒绝），解释器 `evaluateLaw` 裁决：`granted` + 世界性理由 + **delta 变更列表**（`set/inc/push/del`，支持点路径；`spawn/destroy` 仅 tick 系统使用）；法则按声明顺序短路。全部否决且无具体理由时，落到动词末尾的 `denyAll.*` 兜底法则（状态不变，数据法则承载，散文由法则内联 `text` 渲染）。**`reject` 是本法则内的前置门**（先于本法则 `when` 裁决）：对授予法则的正交门控（如"入夜打烊"）必须放进授予法则自身的 `reject`，单独成一条、排在授予法则前面的拒绝法则会被授予法则的短路返回吞掉（其 denial 已记录但被覆盖）。独立成条的 `reject` 法则只在与授予法则的 `when` 互斥时才可靠（如 `gather.reach` 对 `gather.take` 的 `reach` 前提）。
-  - 每个否决结果标记 `deniedBy: "rule" | "denyAll"`：具体法则给了世界性理由（rule）还是落到通用兜底法则（denyAll.*）。这是"法则无洞"探测与拒绝质量审计的语义基础，不依赖理由字符串匹配。
-  - **动作的组合由 LLM 自由提出（提案），世界的回应由法则层确定完成，LLM 不参与任何状态变更，也不提案数值**——数值与后果由法则产出（如 `{ op: "inc", e, p: "will", by: -20 }`）。
-  - `采下浆果` → LLM 提案 `harvest(bush)` → 动词 `harvest` 的对应法则裁决返回变更 `[berries+1, ripe→false]`。
-  - 代价：创作者负担从"写交互"转为"声明动词表 + 法则网络"；未覆盖的动作用世界性 `denyAll.*` 回应。
-  - **环境响应（声明式，取代"AI 提后果"通道）**：非预设的"自由动作"由游戏声明动词 + 实体不可知法则承担（如 waste 的 `mark`/`examine`：`when` 按 `reach` 键控，一条法则覆盖全部可达实体）。结构性属性（位置/材质/明火/燃烧/钱币…）仍只能由法则/系统变更；语义一致性由领域不变式兜底（如「湿柴不得燃烧」一条声明式取代逐条守卫）。**研究结论**：软通道（`fallback:"soft"` + `access:"soft"`，AI 直接写期望后果）与实体不可知法则在 e2e 上等价、可写面相同，且带授予理由退化与静默假授予 bug，已移除（ARCHITECTURE §5-8~11）。「AI 不产生系统后果」（§1）因此重新成立——后果只能由法则/系统产出，经提交硬墙（引用完整性 + 领域不变式）原子裁决。
+- 统一模式：**动作动词表 + 卫语句式规则裁决**
+  - 动作空间由游戏声明：`GameDef.verbs` 是动词表（`{ verb: { schema, entityParams, candidates, rules } }`），引擎据此生成 act 工具的 schema，并在每回合以 `Simulation.affordances()`（枚举 动词×可见实体×候选值 的只读裁决 `check()`，预算按动词均分）把**当前世界会授予的动作**注入映射 prompt——动作空间接地，映射不再冷猜测参数。不再硬编码 apply/move/set——era 类游戏可声明 `talk/travel/equip`，开放世界可声明 `attack/trade/craft`。当前参考游戏按两极各自声明动词集并内置法则集：era 极 village（`gather/eat/rest/talk/buy/sell/clear/fix/seal/subdue/scout`）、开放世界极 waste（`travel/move/open/use/harvest/mark/examine`）。环境响应（刻痕、勘察等）由实体不可知法则承担，不再需要 core 级"AI 提后果"通道（软通道已移除，研究结论见 ARCHITECTURE §5-8~11）。
+  - 每个动词挂一组**卫语句式规则**（v4 取代 Expr/Law 数据法则 + 解释器，依据见 ARCHITECTURE §5-13）：普通函数接收只读上下文 `Q`（world/actor/time/params + rel/roll/reach/name 等引擎语义入口），返回授予（delta 变更列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态；按序裁决，首个表态即判决——拒绝/授予优先序就是书写顺序，不存在跨法则的隐式吞没。数值与后果由规则产出，LLM 不提案数值。
+  - 每个否决结果标记 `deniedBy: "rule" | "denyAll"`：具体规则给了世界性理由（rule）还是落到通用兜底（Denial 的 fallback 标记 / runner 兜底）。这是"法则无洞"探测与拒绝质量审计的语义基础，不依赖理由字符串匹配。
+  - **动作的组合由 LLM 自由提出（提案），世界的回应由规则层确定完成，LLM 不参与任何状态变更，也不提案数值**——数值与后果由规则产出。
+  - `采下浆果` → LLM 提案 `harvest(bush)` → 动词 `harvest` 的卫语句规则裁决返回变更 `[berries+1, ripe→false]`。
+  - 代价：创作者负担从"写交互"转为"声明动词表 + 规则网络"；未覆盖的动作由世界性兜底回应。
+  - **环境响应（声明式，取代"AI 提后果"通道）**：非预设的"自由动作"由游戏声明动词 + 实体不可知法则承担（如 waste 的 `mark`/`examine`：规则按 `canReach` 键控，一条规则覆盖全部可达实体）。结构性属性（位置/材质/明火/燃烧/钱币…）仍只能由法则/系统变更；语义一致性由领域不变式兜底（如「湿柴不得燃烧」一条声明式取代逐条守卫）。**研究结论**：软通道（`fallback:"soft"` + `access:"soft"`，AI 直接写期望后果）与实体不可知法则在 e2e 上等价、可写面相同，且带授予理由退化与静默假授予 bug，已移除（ARCHITECTURE §5-8~11）。「AI 不产生系统后果」（§1）因此重新成立——后果只能由法则/系统产出，经提交硬墙（引用完整性 + 领域不变式）原子裁决。
   - **规则必须按属性组合键控，不能按实体键控**（承重墙）：规则只读实体的属性/关系来裁决，禁止特判实体 id。这让规则随新实体加入自动泛化（检查双方的 `material` 硬度来裁决，不关心具体是哪个实体），也是组合爆炸的唯一可行出路。属性组合系统（DF material system 风格：实体属性集 + 动作作为属性解析器）是天然实现手段。
-  - **时间系统**：`GameDef.systems` 是按序执行的系统注册表（每 tick 运行，产出 deltas），取代单链 tickLaws，承载火蔓延、燃尽、日程等时间驱动逻辑。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱，"动作→世界响应"的因果链当回合成立，不依赖显式 wait。reactive 产出并入动作 StepResult，不重复入日志。
-  - **守恒与数值（era/DoL 强一致系统）**：提交后不变式硬墙（core 默认引用完整性 + 游戏声明）违反即**原子回滚整个提交并拒绝**——法则、系统 bug 都无法凭空铸币/灭币。era 类游戏以聚合助手 `sumProp`（core 通用原语）声明守恒不变式（如「铜币总量 == 种子值」），数值经 `inc/relInc` + `cmp/gte/lte` + `binop(+,-,*,/,%)`/`sum/max/min` 表达；随机是 World 的纯函数——`roll` 现为 Expr 节点（`{k:"roll",key,sides}`），法则 `when/each` 可直接引用（key 需同 tick 唯一，可含实体 id），check/apply/dryTick/存档天然一致；多时间尺度（回合/日/月）由游戏自持计数器 + systems `when`，core 不内置历法。实体生灭经 `spawn/destroy`（仅 tick 系统可用）。
+  - **时间系统**：`GameDef.systems` 是按序执行的系统注册表（每 tick 运行的纯函数规则，产出 deltas），承载火蔓延、燃尽、日程等时间驱动逻辑。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱，"动作→世界响应"的因果链当回合成立，不依赖显式 wait。reactive 产出并入动作 StepResult，不重复入日志。
+  - **守恒与数值（era/DoL 强一致系统）**：提交后不变式硬墙（core 默认引用完整性 + 游戏声明）违反即**原子回滚整个提交并拒绝**——法则、系统 bug 都无法凭空铸币/灭币。era 类游戏以聚合助手 `sumProp`（core 通用原语）声明守恒不变式（如「铜币总量 == 种子值」），数值由规则产出的 Delta（`inc/relInc`）表达，条件比较在规则代码里直书；随机是 World 的纯函数——`roll` 是 `Q.roll(key, sides)`（key 需同 tick 唯一，可含实体 id），check/apply/dryTick/存档天然一致；多时间尺度（回合/日/月）由游戏自持计数器 + systems 内按 `q.time` 判定，core 不内置历法。
   - **接地钩子**：`grounding` 决定哪些实体进 LLM 序列化；可达性是 core 的**空槽**（`reach`/`reachReason` 谓词，缺省全可达），core 不内嵌任何空间模型——容器包含树语义（`space`/`openable`/`open`/`in`）降为游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`），需要空间语义的游戏自选接入，不强制；关容器对实体的放行（如楔住的门缝）由构件 opts 的 `containerAccess` 谓词在 game 层裁决。**`digest`（GameDef 可选）是序列化投影**：决定状态以什么形态进 prompt（裁剪冗余、格式化关系边、聚焦点置顶），缺省全量 JSON。
   - **施动工具前提**：动词可声明 `instrumentParams`（哪些实体参数是"挥动的工具"，如 use 的 source）。核心在规则前跑共享检查——必须可持握（`holdable` 空槽，游戏必须声明，core 不提供缺省属性）且可达（`reach` 空槽，与 core 空槽同一模式）；不满足直接拒绝（`instrument.*` 法则），不进入规则。这消除了"用搬不动的重物施力"式的荒谬授予，且让 affordances 枚举自动跳过不可持握工具、`sim probe` 可审计"规则会在不可持握工具上授予"的潜在洞。
-  - **关系边与焦点/痕迹**：`world.relations`（`{ from, to, type, value }` 边表）表达社会/叙事状态（信任、记忆、派系），法则以 `relSet/relInc/relDel` 变更。`world.focus`（本回合显著实体，跨回合指代锚点）与 `world.traces`（实体累计被拒次数，拒绝痕迹）由核心确定性维护，二者进序列化。
-  - **法则无洞**：完整性检查工具（`sim probe`）穷举可见实体的动词/参数组合，报告落到 `deniedBy === "denyAll"` 的法则缺口，作为作者预警——世界法则的洞就是模型幻觉的诱因。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测"法则本身是否会在不可持握工具上授予"。`denyAll.*` 是必要的终端兜底（未覆盖的操作用世界性理由回应，理由由法则内联 `text` 渲染，不泄漏实现术语），不追求零洞；对模型**真会试**的操作给高信号理由。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 laws。
+  - **关系边与焦点/痕迹**：`world.relations`（`{ from, to, type, value }` 边表）表达社会/叙事状态（信任、记忆、派系），规则以 `relSet/relInc` 变更。`world.focus`（本回合显著实体，跨回合指代锚点）与 `world.traces`（实体累计被拒次数，拒绝痕迹）由核心确定性维护，二者进序列化。
+  - **法则无洞**：完整性检查工具（`sim probe`）穷举可见实体的动词/参数组合，报告落到 `deniedBy === "denyAll"` 的法则缺口，作为作者预警——世界法则的洞就是模型幻觉的诱因。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测"法则本身是否会在不可持握工具上授予"。fallback 兜底是必要的终端兜底（未覆盖的操作用世界性理由回应，理由内联在规则文本里，不泄漏实现术语），不追求零洞；对模型**真会试**的操作给高信号理由。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 rules。
   - 意图表降级为可选"规则捷径"（高频明确操作的确定性直通），不再作为交互的主要出口。
 
 ### 4.2 映射层（LLM，双出口 + 结构化拒绝）
@@ -130,10 +130,10 @@ AI 读结构化状态 + 本回合变更（changes）+ 涉及集，输出该状�
 ```ts
 const game: GameDef = {
   verbs: {
-    move: { label, description, schema, entityParams, candidates, laws: [moveLaw, wedge] },
-    // 每个动词：schema 约束参数（TypeBox）；candidates 给非实体参数候选值（动作空间接地/探测共用）；laws 裁决后果（delta 列表，短路：首个授予即生效；末尾可挂 denyAll.* 兜底法则）
+    move: { label, description, schema, entityParams, candidates, rules },
+    // 每个动词：schema 约束参数（TypeBox）；candidates 给非实体参数候选值（动作空间接地/探测共用）；rules 为卫语句式规则（按序裁决首个表态即判决，末尾可挂 fallback 兜底）
   },
-  systems: [Law],                 // 时间系统（可选，声明式法则）
+  systems: [SystemRule],           // 时间系统（可选，world→deltas 的纯函数规则）
   messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/施动工具/不变式兜底），游戏注入自有语言，core 不内嵌任何语言
   grounding: (w, a) => [...],     // 可见实体索引（可选）
   hint, summarize, props, // props：属性注册表（type/label/internal/stylistic）；表达一致性由声明契约 + 提交硬墙承担，无词表断言钩子

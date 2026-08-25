@@ -1,6 +1,5 @@
-import type { Entity, World } from "../core/sim.ts";
+import type { Entity, Q, Verdict, World } from "../core/sim.ts";
 import { entity } from "../core/sim.ts";
-import type { DenialDef, Expr } from "../core/expr.ts";
 
 /** 容器包含树可达性的游戏侧构件：core 不内嵌任何空间模型，需要空间语义的游戏自选接入。
  *  语义与理由文案内置于本构件（games 层可含语言），SpaceOpts.msgs 可逐项覆盖；
@@ -72,7 +71,7 @@ export function reachFor(opts: SpaceOpts = {}): {
 	};
 }
 
-/** 不可达拒绝的共享 DenialDef：reason（构件 prose）优先，缺省回落「它不在这里。」。 */
-export function unreachable(e: Expr): DenialDef {
-	return { law: "reach", subject: e, reason: { k: "reachReason", e }, text: () => REACH_MSGS.reachNotHere };
+/** 不可达拒绝（卫语句用）：law "reach"，理由为空间构件的世界腔文案，缺省回落构件缺省语。 */
+export function denyUnreachable(q: Q, id: string): Verdict {
+	return { ok: false, denial: { law: "reach", subject: id, reason: q.reachWhy(id) || REACH_MSGS.reachNotHere } };
 }

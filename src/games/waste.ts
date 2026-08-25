@@ -1,16 +1,15 @@
-import type { Change, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
-import { entity, internalPropsOf } from "../core/sim.ts";
-import { E, P, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
-import { reachFor, inTreeVisible, unreachable } from "./space.ts";
+import type { Change, GameDef, PropDef, PropValue, Q, Simulation, VerbDef, Verdict, World } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, fallback, grant, internalPropsOf } from "../core/sim.ts";
+import { denyUnreachable, inTreeVisible, reachFor } from "./space.ts";
 import { Type } from "typebox";
 
 /**
- * 开放世界（流沙荒原）：约束化重量（声明式法则）示例。
+ * 开放世界（流沙荒原）：约束化重量（卫语句式规则）示例。
  *  - 预设动词覆盖物理/生存动作：travel（路径移动）、move（拿起/放下/放入）、open（开合）、use（点燃）、harvest（采集）、fill/drink（水囊与渴感）。
- *  - 环境响应走声明式动词：mark（刻记号 marked）、examine（勘察 examined）——实体不可知法则按 reach 授予。
- *  - 结构性属性（位置/材质/明火/燃烧/生灭/钱币）由法则/系统变更，凭任意通道都改不了（提交硬墙 + 不变式）。
+ *  - 环境响应走声明式动词：mark（刻记号 marked）、examine（勘察 examined）——按 reach 授予的通用规则。
+ *  - 结构性属性（位置/材质/明火/燃烧/钱币）由规则/系统变更，凭任意通道都改不了（提交硬墙 + 不变式）。
  *  - 验证目标：AI 无法凭一句话凭空改材质、传送不可达物体、创造/销毁实体、击杀生物——开放世界的自由度
- *    由 动词表 + 法则 + 不变式硬墙 给出，不再需要 core 的 AI 提后果通道。
+ *    由 动词表 + 规则 + 不变式硬墙 给出。
  */
 
 const MATERIAL_LABELS: Record<string, string> = {
@@ -50,6 +49,8 @@ const WASTE_PROPS: Record<string, PropDef> = {
 const PROP_LABELS: Record<string, string> = Object.fromEntries(
 	Object.entries(WASTE_PROPS).filter(([, p]) => p.label).map(([k, p]) => [k, p.label!]),
 );
+
+const num = (v: unknown): number => Number(v ?? 0);
 
 function summarizeWaste(input: { world: World; changes: Change[]; actor: string }): string {
 	const { world, changes, actor } = input;
@@ -111,199 +112,12 @@ function digestWaste(sim: Simulation): string {
 }
 
 /** 移动授予理由：拿起 / 放到（当前场景）/ 放进（打开的容器）。 */
-const moveReason = (ctx: ExprCtx): string => {
-	const x = String(ctx.env.entity);
-	const d = String(ctx.env.dest);
-	if (d === ctx.actor) return `你拿起了${ctx.name(x)}。`;
-	return ctx.prop(d, "space") === true ? `你把${ctx.name(x)}放在${ctx.name(d)}。` : `你把${ctx.name(x)}放进了${ctx.name(d)}。`;
+const moveReason = (q: Q, id: string, dest: string): string => {
+	if (dest === q.actor) return `你拿起了${q.name(id)}。`;
+	return q.entity(dest)?.props.space === true ? `你把${q.name(id)}放在${q.name(dest)}。` : `你把${q.name(id)}放进了${q.name(dest)}。`;
 };
 
-const travelLaws: Law[] = [
-	{
-		id: "travel.walk",
-		when: [
-			P.exists(E.v("dest")),
-			P.eq(E.p("dest", "space"), E.lit(true)),
-			P.neq(E.p("actor", "in"), E.v("dest")),
-			{ k: "rel", from: E.p("actor", "in"), to: E.v("dest"), type: "path" },
-		],
-		each: [{ op: "set", e: E.v("actor"), p: "in", v: E.v("dest") }],
-		denies: [
-			{ when: [P.eq(E.p("actor", "in"), E.v("dest"))], denial: { law: "travel.stay", object: E.v("dest"), text: () => "你已经在目的地了。" } },
-			{
-				when: [P.exists(E.v("dest")), P.eq(E.p("dest", "space"), E.lit(true)), P.not({ k: "rel", from: E.p("actor", "in"), to: E.v("dest"), type: "path" })],
-				denial: { law: "travel.noway", subject: E.p("actor", "in"), object: E.v("dest"), text: (d, ctx) => `从这里（${ctx.name(d.subject ?? "")}）没有路径通往${ctx.name(d.object ?? "")}。` },
-			},
-		],
-		reason: (ctx) => `你沿荒径走向${ctx.name(String(ctx.env.dest))}。`,
-	},
-	{ id: "travel.dest", reject: { when: [P.not(P.exists(E.v("dest")))], denial: { law: "travel.dest", object: E.v("dest"), text: (d, ctx) => `${ctx.name(d.object ?? "")}？这里没有这个地方。` } } },
-	{ id: "denyAll.travel", reject: { when: [], denial: { law: "denyAll.travel", subject: E.p("actor", "in"), object: E.v("dest"), text: (d, ctx) => `你无法前往${ctx.name(d.object ?? "")}。` } } },
-];
-
-const moveLaws: Law[] = [
-	{
-		id: "move.open",
-		when: [
-			P.reach(E.v("entity")),
-			P.eq(E.p("entity", "grabbable"), E.lit(true)),
-			P.exists(E.v("dest")),
-			P.neq(E.v("entity"), E.v("dest")),
-			P.or([
-				P.and([P.eq(E.v("dest"), E.v("actor")), P.neq(E.p("entity", "in"), E.v("actor"))]),
-				P.and([
-					P.neq(E.v("dest"), E.v("actor")),
-					P.or([
-						P.and([P.eq(E.v("dest"), E.p("actor", "in")), P.eq(E.p("dest", "space"), E.lit(true))]),
-						P.and([P.eq(E.p("dest", "openable"), E.lit(true)), P.eq(E.p("dest", "open"), E.lit(true))]),
-					]),
-				]),
-			]),
-		],
-		each: [{ op: "set", e: E.v("entity"), p: "in", v: E.v("dest") }],
-		denies: [
-			{ when: [P.eq(E.p("entity", "in"), E.v("actor")), P.eq(E.v("dest"), E.v("actor"))], denial: { law: "move.hold", subject: E.v("entity"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}已经在你的手中。` } },
-		],
-		reason: moveReason,
-	},
-	{ id: "move.reach", reject: { when: [P.not(P.reach(E.v("entity")))], denial: unreachable(E.v("entity")) } },
-	{ id: "move.grabbable", reject: { when: [P.reach(E.v("entity")), P.neq(E.p("entity", "grabbable"), E.lit(true))], denial: { law: "move.grabbable", subject: E.v("entity"), text: (d, ctx) => `你搬不动${ctx.name(d.subject ?? "")}。` } } },
-	{ id: "move.dest", reject: { when: [P.not(P.exists(E.v("dest")))], denial: { law: "move.dest", subject: E.v("entity"), object: E.v("dest"), text: (d, ctx) => `${ctx.name(d.object ?? "")}？这里没有这个东西。` } } },
-	{ id: "denyAll.move", reject: { when: [], denial: { law: "denyAll.move", subject: E.v("entity"), object: E.v("dest"), text: (d, ctx) => `你无法把${ctx.name(d.subject ?? "")}放到${ctx.name(d.object ?? "")}。` } } },
-];
-
-/** 容器开合：openable 实体的 open 开关（true 开 / false 关）。 */
-const openVerbLaws: Law[] = [
-	{
-		id: "open.open",
-		when: [P.reach(E.v("entity")), P.eq(E.p("entity", "openable"), E.lit(true)), P.neq(E.p("entity", "open"), E.lit(true))],
-		each: [{ op: "set", e: E.v("entity"), p: "open", v: E.lit(true) }],
-		denies: [{ when: [P.eq(E.p("entity", "openable"), E.lit(true)), P.eq(E.p("entity", "open"), E.lit(true))], denial: { law: "open.already", subject: E.v("entity"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}已经开着。` } }],
-		reason: (ctx) => `你打开了${ctx.name(String(ctx.env.entity))}。`,
-	},
-	{
-		id: "open.close",
-		when: [P.reach(E.v("entity")), P.eq(E.p("entity", "openable"), E.lit(true)), P.eq(E.p("entity", "open"), E.lit(true))],
-		each: [{ op: "set", e: E.v("entity"), p: "open", v: E.lit(false) }],
-		reason: (ctx) => `你合上了${ctx.name(String(ctx.env.entity))}。`,
-	},
-	{ id: "open.notopenable", reject: { when: [P.reach(E.v("entity")), P.neq(E.p("entity", "openable"), E.lit(true))], denial: { law: "open.notopenable", subject: E.v("entity"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}打不开。` } } },
-	{ id: "denyAll.open", reject: { when: [], denial: { law: "denyAll.open", subject: E.v("entity"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}没有变化。` } } },
-];
-
-/** 点燃：source 有明火（lit）→ target 可燃（flammable）则燃烧。 */
-const useLaws: Law[] = [
-	{
-		id: "use.ignite",
-		when: [
-			P.eq(E.p("source", "lit"), E.lit(true)),
-			P.reach(E.v("target")),
-			P.eq(E.p("target", "flammable"), E.lit(true)),
-			P.neq(E.p("target", "burning"), E.lit(true)),
-		],
-		each: [
-			{ op: "set", e: E.v("target"), p: "burning", v: E.lit(true) },
-			{ op: "set", e: E.v("target"), p: "lit", v: E.lit(true) },
-		],
-		denies: [
-			{ when: [P.neq(E.p("source", "lit"), E.lit(true))], denial: { law: "ignite.nolight", subject: E.v("source"), object: E.v("target"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}没有火。` } },
-			{ when: [P.not(P.reach(E.v("target")))], denial: unreachable(E.v("target")) },
-			{ when: [P.neq(E.p("target", "flammable"), E.lit(true))], denial: { law: "ignite.notflammable", subject: E.v("source"), object: E.v("target"), text: (d, ctx) => `${ctx.name(d.object ?? "")}烧不起来。` } },
-			{ when: [P.eq(E.p("target", "burning"), E.lit(true))], denial: { law: "ignite.burning", subject: E.v("source"), object: E.v("target"), text: (d, ctx) => `${ctx.name(d.object ?? "")}已经在燃烧。` } },
-		],
-		reason: (ctx) => `${ctx.name(String(ctx.env.target))}燃起来了。`,
-	},
-	{ id: "denyAll.use", reject: { when: [], denial: { law: "denyAll.use", subject: E.v("source"), object: E.v("target"), text: (d, ctx) => `你用${ctx.name(d.subject ?? "")}碰了碰${ctx.name(d.object ?? "")}，什么也没有发生。` } } },
-];
-
-/** 采集浆果：成熟（ripe）且可达的浆果丛 → 得 1 颗浆果。 */
-const harvestLaws: Law[] = [
-	{
-		id: "harvest.berries",
-		when: [P.reach(E.v("bush")), P.eq(E.p("bush", "ripe"), E.lit(true))],
-		each: [
-			{ op: "inc", e: E.lit("player"), p: "berries", by: E.lit(1) },
-			{ op: "set", e: E.v("bush"), p: "ripe", v: E.lit(false) },
-		],
-		denies: [{ when: [P.eq(E.p("bush", "ripe"), E.lit(false))], denial: { law: "harvest.unripe", subject: E.v("bush"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}还没有成熟。` } }],
-		reason: (ctx) => `你采下了一颗浆果。`,
-	},
-	{ id: "denyAll.harvest", reject: { when: [], denial: { law: "denyAll.harvest", subject: E.v("bush"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}无法被采集。` } } },
-];
-
-/** 时间系统：燃烧计数 → 烧成灰烬；浆果丛再生。极简、全按属性键控。 */
-const burnTickSys: Law = {
-	id: "burn.tick",
-	over: [{ var: "b", source: "entities", where: [P.eq(E.p("b", "burning"), E.lit(true))] }],
-	each: [{ op: "inc", e: E.v("b"), p: "burnTicks", by: E.lit(1) }],
-};
-
-const burnAshSys: Law = {
-	id: "burn.ash",
-	over: [{ var: "b", source: "entities", where: [P.eq(E.p("b", "burning"), E.lit(true)), P.neq(E.p("b", "lasting"), E.lit(true)), P.gte(E.p("b", "burnTicks"), E.lit(3))] }],
-	each: [
-		{ op: "set", e: E.v("b"), p: "burning", v: E.lit(false) },
-		{ op: "set", e: E.v("b"), p: "lit", v: E.lit(false) },
-		{ op: "set", e: E.v("b"), p: "material", v: E.lit("ash") },
-		{ op: "set", e: E.v("b"), p: "flammable", v: E.lit(false) },
-	],
-	facts: (ctx) => [{ text: `${ctx.name(String(ctx.env.b))}烧成了灰烬。`, entities: [String(ctx.env.b)] }],
-};
-
-const growTickSys: Law = {
-	id: "grow.tick",
-	over: [{ var: "b", source: "entities", where: [P.eq(E.p("b", "ripe"), E.lit(false))] }],
-	each: [{ op: "inc", e: E.v("b"), p: "regrowTicks", by: E.lit(1) }],
-};
-
-const growRipeSys: Law = {
-	id: "grow.ripe",
-	over: [{ var: "b", source: "entities", where: [P.gte(E.p("b", "regrowTicks"), E.lit(5))] }],
-	each: [
-		{ op: "set", e: E.v("b"), p: "ripe", v: E.lit(true) },
-		{ op: "set", e: E.v("b"), p: "regrowTicks", v: E.lit(0) },
-	],
-};
-
-/** 渴感：每 tick +3（开放世界生存压力，无休息动词——干渴是不可逆的累积）。 */
-const thirstRise: Law = {
-	id: "thirst.rise",
-	over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true))] }],
-	each: [{ op: "inc", e: E.v("p"), p: "thirst", by: E.lit(3) }],
-};
-
-/** 干渴伤身：渴感 >= 100 后每 tick -5 体力。 */
-const thirstHurt: Law = {
-	id: "thirst.hurt",
-	over: [{ var: "p", source: "entities", where: [P.eq(E.p("p", "actor"), E.lit(true)), P.gte(E.p("p", "thirst"), E.lit(100))] }],
-	each: [{ op: "inc", e: E.v("p"), p: "hp", by: E.lit(-5) }],
-	facts: (ctx) => [{ text: "干渴灼烧着你的喉咙，你感到头昏眼花。", entities: [ctx.actor] }],
-};
-
-/** 夜袭（实体不可知）：同地且有攻击性的活物，入夜（time%4==3）时扑咬玩家。 */
-const beastNight: Law = {
-	id: "beast.night",
-	over: [{ var: "b", source: "entities", where: [P.eq(E.p("b", "alive"), E.lit(true)), P.eq(E.p("b", "aggressive"), E.lit(true)), P.eq(E.p("b", "in"), E.p("actor", "in"))] }],
-	when: [P.eq(E.mod(E.time(), E.lit(4)), E.lit(3))],
-	each: [{ op: "inc", e: E.v("actor"), p: "hp", by: E.lit(-2) }],
-	facts: (ctx) => [{ text: `夜色里，${ctx.name(String(ctx.env.b))}扑上来在你身上留下了一道伤口。`, entities: [String(ctx.env.b), ctx.actor] }],
-};
-
-/** 舀水（泉眼）：随身水囊容量 2，装满了不能再舀。 */
-const fillLaws: Law[] = [
-	{ id: "fill.water", when: [P.reach(E.lit("spring")), P.lt(E.p("actor", "water"), E.lit(2))], each: [{ op: "inc", e: E.v("actor"), p: "water", by: E.lit(1) }], reason: () => "你俯身舀起一袋清水。" },
-	{ id: "fill.full", reject: { when: [P.reach(E.lit("spring")), P.gte(E.p("actor", "water"), E.lit(2))], denial: { law: "fill.full", subject: E.lit("spring"), text: (d, ctx) => `你的水囊已经满了，装不下更多。` } } },
-	{ id: "denyAll.fill", reject: { when: [], denial: { law: "denyAll.fill", subject: E.lit("spring"), text: (d, ctx) => `这里没有水可舀。` } } },
-];
-
-/** 饮水：在泉眼直接喝（渴感归零）；或喝随身水（消耗 1 份水，渴感归零）。 */
-const drinkLaws: Law[] = [
-	{ id: "drink.spring", when: [P.reach(E.lit("spring"))], each: [{ op: "set", e: E.v("actor"), p: "thirst", v: E.lit(0) }], reason: () => "你俯身喝了口清泉，渴意尽消。" },
-	{ id: "drink.carry", when: [P.gte(E.p("actor", "water"), E.lit(1))], each: [{ op: "inc", e: E.v("actor"), p: "water", by: E.lit(-1) }, { op: "set", e: E.v("actor"), p: "thirst", v: E.lit(0) }], reason: () => "你喝了口随身带着的水，精神一振。" },
-	{ id: "denyAll.drink", reject: { when: [], denial: { law: "denyAll.drink", text: () => "你口干舌燥，却找不到水喝。" } } },
-];
-
-const travelVerb: VerbDef = {
+const travelVerb = defineVerb({
 	label: "跋涉",
 	description: "沿荒原小径前往相邻的地点（dest 是当前所在地的相邻场景 id）。",
 	schema: Type.Object({ dest: Type.String({ description: "相邻地点的实体 id（见路径关系）" }) }),
@@ -313,10 +127,21 @@ const travelVerb: VerbDef = {
 		const paths = (sim.world.relations ?? []).filter((r) => r.from === cur && r.type === "path").map((r) => r.to);
 		return { dest: paths };
 	},
-	laws: travelLaws,
-};
+	rules: [{
+		id: "travel.walk",
+		judge: (q, p) => {
+			const cur = String(q.entity(q.actor)?.props.in ?? "");
+			const d = q.entity(p.dest);
+			if (!d) return deny("travel.dest", { object: p.dest, reason: `${q.name(p.dest)}？这里没有这个地方。` });
+			if (d.props.space !== true) return deny("denyAll.travel", { subject: cur, object: p.dest, reason: `你无法前往${q.name(p.dest)}。`, fallback: true });
+			if (cur === p.dest) return deny("travel.stay", { object: p.dest, reason: "你已经在目的地了。" });
+			if (q.rel(cur, p.dest, "path") === null) return deny("travel.noway", { subject: cur, object: p.dest, reason: `从这里（${q.name(cur)}）没有路径通往${q.name(p.dest)}。` });
+			return grant([D.set(q.actor, "in", p.dest)], `你沿荒径走向${q.name(p.dest)}。`);
+		},
+	}],
+});
 
-const moveVerb: VerbDef = {
+const moveVerb = defineVerb({
 	label: "拾取与放置",
 	description: "拿起/放下/放入：把可达的可持握物品移到目标位置（玩家手中 / 当前地点 / 打开的容器）。",
 	schema: Type.Object({
@@ -325,57 +150,30 @@ const moveVerb: VerbDef = {
 	}),
 	entityParams: ["entity", "dest"],
 	candidates: (sim) => ({ dest: [...sim.visible(), sim.actor] }),
-	laws: moveLaws,
-};
-
-/** 刻记号/勘察：实体不可知法则（按 reach 授予），自由环境响应脱离枚举，但结构性属性仍由法则管理。 */
-const markLaws: Law[] = [
-	{
-		id: "mark.carve",
-		when: [P.reach(E.v("entity")), P.neq(E.p("entity", "marked"), E.lit(true))],
-		each: [{ op: "set", e: E.v("entity"), p: "marked", v: E.lit(true) }],
-		denies: [{ when: [P.eq(E.p("entity", "marked"), E.lit(true))], denial: { law: "mark.done", subject: E.v("entity"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}上已经刻过记号了。` } }],
-		reason: (ctx) => `你在${ctx.name(String(ctx.env.entity))}上刻下了一道记号。`,
-	},
-	{ id: "mark.reach", reject: { when: [P.not(P.reach(E.v("entity")))], denial: unreachable(E.v("entity")) } },
-	{ id: "denyAll.mark", reject: { when: [], denial: { law: "denyAll.mark", subject: E.v("entity"), text: () => "你没能在这上面刻下记号。" } } },
-];
-
-const examineLaws: Law[] = [
-	{
-		id: "examine.look",
-		when: [P.reach(E.v("entity"))],
-		each: [{ op: "set", e: E.v("entity"), p: "examined", v: E.lit(true) }],
-		reason: (ctx) => `你仔细勘察了${ctx.name(String(ctx.env.entity))}。`,
-	},
-	{ id: "examine.reach", reject: { when: [P.not(P.reach(E.v("entity")))], denial: unreachable(E.v("entity")) } },
-	{ id: "denyAll.examine", reject: { when: [], denial: { law: "denyAll.examine", subject: E.v("entity"), text: () => "你没能看清这个东西。" } } },
-];
-
-/** 环境响应动词的候选域：可见实体 - 玩家 - 场景（mark/examine 共用）。 */
-const envTargetCandidates = (sim: Simulation): Record<string, string[]> => ({
-	entity: [...sim.visible()].filter((id) => id !== sim.actor && sim.world.entities.find((e) => e.id === id)?.props.space !== true),
+	rules: [{
+		id: "move.open",
+		judge: (q, p) => {
+			if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
+			const t = q.entity(p.entity);
+			if (t?.props.grabbable !== true) return deny("move.grabbable", { subject: p.entity, reason: `你搬不动${q.name(p.entity)}。` });
+			const d = q.entity(p.dest);
+			if (!d) return deny("move.dest", { subject: p.entity, object: p.dest, reason: `${q.name(p.dest)}？这里没有这个东西。` });
+			const blocked = (): Verdict => deny("denyAll.move", { subject: p.entity, object: p.dest, reason: `你无法把${q.name(p.entity)}放到${q.name(p.dest)}。`, fallback: true });
+			if (p.entity === p.dest) return blocked();
+			if (p.dest === q.actor) {
+				if (t.props.in === q.actor) return deny("move.held", { subject: p.entity, reason: `${q.name(p.entity)}已经在你的手中。` });
+				return grant([D.set(p.entity, "in", p.dest)], moveReason(q, p.entity, p.dest));
+			}
+			const cur = String(q.entity(q.actor)?.props.in ?? "");
+			const intoOpen = d.props.openable === true && d.props.open === true;
+			if (!(d.id === cur && d.props.space === true) && !intoOpen) return blocked();
+			return grant([D.set(p.entity, "in", p.dest)], moveReason(q, p.entity, p.dest));
+		},
+	}],
 });
 
-const markVerb: VerbDef = {
-	label: "刻记号",
-	description: "在可达的实体上刻下一道记号（marked）。刻过的不能再刻。",
-	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
-	entityParams: ["entity"],
-	candidates: envTargetCandidates,
-	laws: markLaws,
-};
-
-const examineVerb: VerbDef = {
-	label: "勘察",
-	description: "仔细查看一个可达的实体（examined），记下它的细节。",
-	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
-	entityParams: ["entity"],
-	candidates: envTargetCandidates,
-	laws: examineLaws,
-};
-
-const openVerb: VerbDef = {
+/** 容器开合：openable 实体的 open 开关（true 开 / false 关）。 */
+const openVerb = defineVerb({
 	label: "开合",
 	description: "打开或关闭一个可开启物（entity 用 open:true / false）。",
 	schema: Type.Object({
@@ -384,10 +182,20 @@ const openVerb: VerbDef = {
 	}),
 	entityParams: ["entity"],
 	candidates: () => ({ open: [true, false] }),
-	laws: openVerbLaws,
-};
+	rules: [{
+		id: "open.toggle",
+		judge: (q, p) => {
+			if (!q.canReach(p.entity)) return deny("denyAll.open", { subject: p.entity, reason: `${q.name(p.entity)}没有变化。`, fallback: true });
+			const t = q.entity(p.entity);
+			if (t?.props.openable !== true) return deny("open.notopenable", { subject: p.entity, reason: `${q.name(p.entity)}打不开。` });
+			if (t.props.open !== true) return grant([D.set(p.entity, "open", true)], `你打开了${q.name(p.entity)}。`);
+			return grant([D.set(p.entity, "open", false)], `你合上了${q.name(p.entity)}。`);
+		},
+	}],
+});
 
-const useVerb: VerbDef = {
+/** 点燃：source 有明火（lit）→ target 可燃（flammable）则燃烧。 */
+const useVerb = defineVerb({
 	label: "作用",
 	description: "用一件东西作用于另一件东西（点燃：source 必须有明火，target 必须可燃）。施动的东西必须拿得动且够得着。",
 	schema: Type.Object({
@@ -396,31 +204,98 @@ const useVerb: VerbDef = {
 	}),
 	entityParams: ["source", "target"],
 	instrumentParams: ["source"],
-	laws: useLaws,
-};
+	rules: [{
+		id: "use.ignite",
+		judge: (q, p) => {
+			if (q.entity(p.source)?.props.lit !== true) return deny("ignite.nolight", { subject: p.source, object: p.target, reason: `${q.name(p.source)}没有火。` });
+			if (!q.canReach(p.target)) return denyUnreachable(q, p.target);
+			const t = q.entity(p.target);
+			if (t?.props.flammable !== true) return deny("ignite.notflammable", { subject: p.source, object: p.target, reason: `${q.name(p.target)}烧不起来。` });
+			if (t.props.burning === true) return deny("ignite.burning", { subject: p.source, object: p.target, reason: `${q.name(p.target)}已经在燃烧。` });
+			return grant([D.set(p.target, "burning", true), D.set(p.target, "lit", true)], `${q.name(p.target)}燃起来了。`);
+		},
+	}],
+});
 
-const harvestVerb: VerbDef = {
+/** 采集浆果：成熟（ripe）且可达的浆果丛 → 得 1 颗浆果。 */
+const harvestVerb = defineVerb({
 	label: "采集",
 	description: "从成熟的可达浆果丛采下一颗浆果（bush 是浆果丛实体 id）。",
 	schema: Type.Object({ bush: Type.String({ description: "浆果丛实体 id（必须成熟且可达）" }) }),
 	entityParams: ["bush"],
 	candidates: (sim) => ({ bush: sim.world.entities.filter((e) => e.props.ripe === true).map((e) => e.id) }),
-	laws: harvestLaws,
-};
+	rules: [{
+		id: "harvest.berries",
+		judge: (q, p) => {
+			if (q.entity(p.bush)?.props.ripe !== true) return deny("harvest.unripe", { subject: p.bush, reason: `${q.name(p.bush)}还没有成熟。` });
+			if (!q.canReach(p.bush)) return deny("denyAll.harvest", { subject: p.bush, reason: `${q.name(p.bush)}无法被采集。`, fallback: true });
+			return grant([D.inc(q.actor, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
+		},
+	}],
+});
 
-const fillVerb: VerbDef = {
+/** 舀水（泉眼）：随身水囊容量 2，装满了不能再舀。 */
+const fillVerb = defineVerb({
 	label: "舀水",
 	description: "在泉眼处把随身水囊装满一袋清水（水囊容量 2）。",
 	schema: Type.Object({}),
-	laws: fillLaws,
-};
+	rules: [{
+		id: "fill.water",
+		judge: (q) => {
+			if (!q.canReach("spring")) return deny("denyAll.fill", { subject: "spring", reason: "这里没有水可舀。", fallback: true });
+			if (num(q.entity(q.actor)?.props.water) >= 2) return deny("fill.full", { subject: "spring", reason: "你的水囊已经满了，装不下更多。" });
+			return grant([D.inc(q.actor, "water", 1)], "你俯身舀起一袋清水。");
+		},
+	}],
+});
 
-const drinkVerb: VerbDef = {
+/** 饮水：在泉眼直接喝（渴感归零）；或喝随身水（消耗 1 份水，渴感归零）。 */
+const drinkVerb = defineVerb({
 	label: "饮水",
 	description: "在泉眼直接喝（渴感归零）；或喝随身带着的水（消耗 1 份，渴感归零）。",
 	schema: Type.Object({}),
-	laws: drinkLaws,
-};
+	rules: [
+		{ id: "drink.spring", judge: (q) => (q.canReach("spring") ? grant([D.set(q.actor, "thirst", 0)], "你俯身喝了口清泉，渴意尽消。") : null) },
+		{ id: "drink.carry", judge: (q) => (num(q.entity(q.actor)?.props.water) < 1 ? null : grant([D.inc(q.actor, "water", -1), D.set(q.actor, "thirst", 0)], "你喝了口随身带着的水，精神一振。")) },
+		fallback("denyAll.drink", () => "你口干舌燥，却找不到水喝。"),
+	],
+});
+
+/** 环境响应动词的候选域：可见实体 - 玩家 - 场景（mark/examine 共用）。 */
+const envTargetCandidates = (sim: Simulation): Record<string, string[]> => ({
+	entity: [...sim.visible()].filter((id) => id !== sim.actor && sim.world.entities.find((e) => e.id === id)?.props.space !== true),
+});
+
+const markVerb = defineVerb({
+	label: "刻记号",
+	description: "在可达的实体上刻下一道记号（marked）。刻过的不能再刻。",
+	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
+	entityParams: ["entity"],
+	candidates: envTargetCandidates,
+	rules: [{
+		id: "mark.carve",
+		judge: (q, p) => {
+			if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
+			if (q.entity(p.entity)?.props.marked === true) return deny("mark.done", { subject: p.entity, reason: `${q.name(p.entity)}上已经刻过记号了。` });
+			return grant([D.set(p.entity, "marked", true)], `你在${q.name(p.entity)}上刻下了一道记号。`);
+		},
+	}],
+});
+
+const examineVerb = defineVerb({
+	label: "勘察",
+	description: "仔细查看一个可达的实体（examined），记下它的细节。",
+	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
+	entityParams: ["entity"],
+	candidates: envTargetCandidates,
+	rules: [{
+		id: "examine.look",
+		judge: (q, p) => {
+			if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
+			return grant([D.set(p.entity, "examined", true)], `你仔细勘察了${q.name(p.entity)}。`);
+		},
+	}],
+});
 
 export const waste: GameDef = {
 	id: "waste",
@@ -491,7 +366,55 @@ export const waste: GameDef = {
 			{ from: "forest", to: "dune", type: "path", value: true },
 		],
 	},
-	systems: [burnTickSys, burnAshSys, growTickSys, growRipeSys, thirstRise, thirstHurt, beastNight],
+	systems: [
+		{
+			id: "burn.tick",
+			run: (q) => ({ deltas: q.world.entities.filter((e) => e.props.burning === true).map((b) => D.inc(b.id, "burnTicks", 1)) }),
+		},
+		{
+			id: "burn.ash",
+			run: (q) => {
+				const done = q.world.entities.filter((e) => e.props.burning === true && e.props.lasting !== true && num(e.props.burnTicks) >= 3);
+				if (!done.length) return null;
+				return {
+					deltas: done.flatMap((b) => [D.set(b.id, "burning", false), D.set(b.id, "lit", false), D.set(b.id, "material", "ash"), D.set(b.id, "flammable", false)]),
+					facts: done.map((b) => ({ text: `${q.name(b.id)}烧成了灰烬。`, entities: [b.id] })),
+				};
+			},
+		},
+		{
+			id: "grow.tick",
+			run: (q) => ({ deltas: q.world.entities.filter((e) => e.props.ripe === false).map((b) => D.inc(b.id, "regrowTicks", 1)) }),
+		},
+		{
+			id: "grow.ripe",
+			run: (q) => {
+				const ready = q.world.entities.filter((e) => num(e.props.regrowTicks) >= 5);
+				if (!ready.length) return null;
+				return { deltas: ready.flatMap((b) => [D.set(b.id, "ripe", true), D.set(b.id, "regrowTicks", 0)]) };
+			},
+		},
+		{
+			id: "thirst.rise",
+			run: (q) => ({ deltas: [D.inc(q.actor, "thirst", 3)] }),
+		},
+		{
+			id: "thirst.hurt",
+			run: (q) => (num(q.entity(q.actor)?.props.thirst) < 100 ? null : { deltas: [D.inc(q.actor, "hp", -5)], facts: [{ text: "干渴灼烧着你的喉咙，你感到头昏眼花。", entities: [q.actor] }] }),
+		},
+		{
+			id: "beast.night",
+			run: (q) => {
+				if (q.time % 4 !== 3) return null;
+				const here = q.world.entities.filter((e) => e.props.alive === true && e.props.aggressive === true && e.props.in === q.entity(q.actor)?.props.in);
+				if (!here.length) return null;
+				return {
+					deltas: here.map(() => D.inc(q.actor, "hp", -2)),
+					facts: here.map((b) => ({ text: `夜色里，${q.name(b.id)}扑上来在你身上留下了一道伤口。`, entities: [b.id, q.actor] })),
+				};
+			},
+		},
+	],
 	props: WASTE_PROPS,
 	grounding: (world, actor) => [...inTreeVisible(world, actor)],
 	...reachFor(),
