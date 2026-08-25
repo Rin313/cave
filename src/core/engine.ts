@@ -190,7 +190,7 @@ export class Engine {
 	static async create(def: GameDef, options: EngineOptions = {}): Promise<Engine> {
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
 		const provider = options.provider ?? "opencode-go";
-		const model = options.model ?? "deepseek-v4-flash";
+		const model = options.model ?? "ox-alpha-free";
 		const modelDef = modelRuntime.getModel(provider, model);
 		if (!modelDef) throw new Error(`模型 ${provider}/${model} 不可用`);
 

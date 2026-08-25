@@ -16,7 +16,7 @@ src/
 - 改进和修复代码之前，深入思考是否存在更优雅的处理方案，而不是继续完善不合理的设计和打补丁
 - 注释只写一行，只记录从代码无法看出的意图或约束，不记录变更历史
 - 用户没有指示时，不要执行 git命令
-- 改完代码后执行 `npx vue-tsc --noEmit`
+- 改完代码后执行 `node_modules/.bin/tsc --noEmit`
 
 # Other
 > The limits of my language mean the limits of my world.
