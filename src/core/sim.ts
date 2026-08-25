@@ -25,7 +25,7 @@ export interface World {
 	entities: Entity[];
 	/** 显著性焦点：本回合动作/拒绝涉及的实体，跨回合指代锚点。 */
 	focus?: string | null;
-	/** 拒绝痕迹：实体 id → 玩家累计尝试/被拒次数（法则拒绝时累加）。 */
+	/** 拒绝痕迹：实体 id → 累计被拒次数（带 subject 的法则/施动前提/不变式拒绝时累加）。 */
 	traces?: Record<string, number>;
 	/** 关系边表：from→to 的 type 关系（信任/记忆/派系等）。游戏声明，规则以 deltas 变更。 */
 	relations?: Rel[];

@@ -101,7 +101,7 @@ export interface Over {
 	where?: Pred[];
 }
 
-/** 法则：条件 + 后果 + 拒绝。when 全部成立 → 提交 each；reject 先行（前置拒绝）；否则按序匹配 denies。 */
+/** 法则：条件 + 后果 + 拒绝。裁决顺序：reject 先行（前置拒绝）→ when 全部成立即授予 each → 否则按序匹配 denies。 */
 export interface Law {
 	id: string;
 	over?: Over[];
@@ -337,9 +337,8 @@ interface Match {
 }
 
 /** 法则求值：动作裁决（collect=false）与 tick 系统（collect=true）共用的单一解释器。
- *  - 动作模式：reject 先行 → 量词枚举首个授予即裁决 → 否则检查 denies（denies 同样按 over 绑定求值，
- *    修复「纯拒绝法则 / 混合法则的 denies 引用量词变量永不绑定」的陷阱）→ 兜底 granted:false。
- *  - 系统模式：量词枚举聚合全部匹配；无匹配即 granted:false；reject/denies 不参与（与旧 evaluateSystem 一致）。 */
+ *  - 动作模式：reject 先行 → 量词枚举首个授予即裁决 → 否则按绑定逐个检查 denies（可引用量词变量）→ 兜底 granted:false。
+ *  - 系统模式：量词枚举聚合全部匹配；无匹配即 granted:false；reject/denies 不参与。 */
 export function evaluateLaw(ctx: ExprCtx, law: Law, collect = false): LawResult {
 	const mkDenial = (d: DenialDef, c: ExprCtx): Denial => {
 		const s = (x: Expr | undefined): string | undefined => {

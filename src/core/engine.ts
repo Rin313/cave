@@ -16,8 +16,8 @@ import { coerceValue } from "./util.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
-	provider?: string;
-	model?: string;
+	provider: string;
+	model: string;
 	thinkingLevel?: string;
 	sim?: Simulation;
 	sessionManager?: SessionManager;
@@ -40,7 +40,7 @@ export type EngineEvent =
 	| { type: "validation"; round: number; error: string; attempt: string }
 	| { type: "raw_attempt"; round: number; text: string; error: string | null };
 
-/** act 工具向 Engine 直通回写裁决结果（execute 闭包内直接调用，取代 turn_end 事件嗅探 + 工具结果 JSON 反序列化）。 */
+/** act 工具 execute 闭包向 Engine 直通回写裁决结果（不经事件流嗅探与工具结果 JSON 往返）。 */
 interface ActChannel {
 	onResults: ((results: StepResult[], refusal?: { label: string }) => void) | null;
 }
@@ -136,12 +136,10 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	static async create(def: GameDef, options: EngineOptions = {}): Promise<Engine> {
+	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
-		const provider = options.provider ?? "opencode-go";
-		const model = options.model ?? "ox-alpha-free";
-		const modelDef = modelRuntime.getModel(provider, model);
-		if (!modelDef) throw new Error(`模型 ${provider}/${model} 不可用`);
+		const modelDef = modelRuntime.getModel(options.provider, options.model);
+		if (!modelDef) throw new Error(`模型 ${options.provider}/${options.model} 不可用`);
 
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";

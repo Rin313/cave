@@ -200,7 +200,7 @@ function resolveEntity(v: string, sim: Simulation): string {
 }
 
 /** 从游戏声明的动词表解析 CLI 动作：实体参数（entityParams）按 id/name 解析，
- *  其余参数按动词 schema 的属性顺序解析为标量。动词与参数名不再硬编码。 */
+ *  其余参数按动词 schema 的属性顺序解析为标量；动词与参数名均取自游戏的动词表声明。 */
 function parseActionToken(token: string, sim: Simulation): Action {
 	const [verbName, ...rest] = token.split(/\s+/);
 	const verb = sim.def.verbs[verbName!];

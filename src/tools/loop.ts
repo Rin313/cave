@@ -90,15 +90,14 @@ function locateRunDir(runId: string, game?: string): string | null {
 	return null;
 }
 
-/** 引擎配置的环境变量按游戏 id 命名空间读取：<GAME>_PROVIDER / <GAME>_MODEL / <GAME>_THINKING（如 CAVE_PROVIDER）。
- *  多游戏并存时各自独立配置，互不覆盖。 */
-function engineOptsFromEnv(gameId: string) {
+/** 引擎配置的环境变量按游戏 id 命名空间读取：<GAME>_PROVIDER / <GAME>_MODEL / <GAME>_THINKING（如 WASTE_PROVIDER）。
+ *  多游戏并存时各自独立配置，互不覆盖 */
+function engineOptsFromEnv(gameId: string): { provider: string; model: string; thinkingLevel?: string } {
 	const prefix = gameId.toUpperCase();
-	return {
-		provider: process.env[`${prefix}_PROVIDER`],
-		model: process.env[`${prefix}_MODEL`],
-		thinkingLevel: process.env[`${prefix}_THINKING`],
-	};
+	const provider = process.env[`${prefix}_PROVIDER`];
+	const model = process.env[`${prefix}_MODEL`];
+	if (!provider || !model) throw new Error(`模型未配置：请设置 ${prefix}_PROVIDER 与 ${prefix}_MODEL 环境变量`);
+	return { provider, model, thinkingLevel: process.env[`${prefix}_THINKING`] };
 }
 
 interface ValidationFailure {
@@ -328,7 +327,7 @@ async function main() {
 
 意图文本可省略引号（多个位置参数自动拼接）；--json 输出完整结构化结果，缺省精简输出（不含 world）。
 --game 在 act/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
-环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 CAVE_PROVIDER）
+环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 WASTE_PROVIDER；必填，无默认模型）
 `);
 		return;
 	}

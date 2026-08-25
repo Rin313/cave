@@ -1,6 +1,5 @@
 // 表达层声明契约核心（core 单一来源）：declare 工具提交的结构化新事实按实体 id 精确集合校验，
-// 无名字回退（prose 契约的名字子串匹配已移除，实证见 ARCHITECTURE §5-10 与实验记录）。
-// 涉及集（touched）推导与校验在此共享，engine/工具不重复实现。
+// 无名字回退。涉及集（touched）推导与校验在此共享，engine/工具不重复实现。
 import type { Change, World } from "./sim.ts";
 
 export interface DeclCtx {
