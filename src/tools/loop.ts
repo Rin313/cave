@@ -5,7 +5,7 @@ import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
 import type { Change, GameDef, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
-import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
+import { flagBool, flagStr, out, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
 	game: string;
@@ -61,7 +61,7 @@ function writeSessionReview(sessionFile: string): void {
 	const lines = readFileSync(sessionFile, "utf8").split(/\r?\n/).filter((l) => l.trim());
 	if (!lines.length) return;
 	const header = JSON.parse(lines[0]!) as { id?: string };
-	const out: string[] = [
+	const md: string[] = [
 		"# 会话审阅 " + (header.id ?? basename(sessionFile)),
 		"",
 		"> 由 `" + sessionFile + "` 逐条转换，未过滤任何字段。",
@@ -69,9 +69,9 @@ function writeSessionReview(sessionFile: string): void {
 	];
 	for (const [i, l] of lines.entries()) {
 		const e = JSON.parse(l) as { type: string; message?: { role?: string } };
-		out.push("### " + (i + 1) + ". " + e.type + (e.message?.role ? "（" + e.message.role + "）" : ""), "", "```json", l, "```", "");
+		md.push("### " + (i + 1) + ". " + e.type + (e.message?.role ? "（" + e.message.role + "）" : ""), "", "```json", l, "```", "");
 	}
-	writeFileSync(sessionFile.replace(/\.jsonl$/, ".review.md"), out.join("\n"), "utf8");
+	writeFileSync(sessionFile.replace(/\.jsonl$/, ".review.md"), md.join("\n"), "utf8");
 }
 
 function locateRunDir(runId: string, game?: string): string | null {
@@ -210,6 +210,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 		meta.sessionFile = engine.sessionFile;
 		saveMeta(dir, meta);
 		saveState(dir, sim);
+		const narration = texts.join("");
 		appendTranscript(dir, {
 			turn: meta.turn,
 			phase: "act",
@@ -219,7 +220,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
-			narration: texts.join(""),
+			narration,
 			validations,
 		});
 		writeSessionReview(meta.sessionFile!);
@@ -234,7 +235,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
-			narration: texts.join(""),
+			narration,
 			validations,
 			world: sim.snapshot(),
 		}, opts);
@@ -312,7 +313,6 @@ function joinIntent(positionals: string[]): string {
 }
 
 async function main() {
-	fixConsole();
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
 	const opts: CmdOpts = { json: flagBool(a, "json"), world: flagBool(a, "world") };
@@ -366,7 +366,4 @@ async function main() {
 	}
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
+runMain(main);

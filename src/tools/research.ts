@@ -6,6 +6,10 @@ const intent = args[0] ?? "";
 const run = args[1] ?? "ember1";
 
 const r = spawnSync("node", ["src/tools/loop.ts", "act", intent, "--run", run, "--json"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+if (!r.stdout) {
+	console.error(String(r.stderr) || `loop act 异常退出（code ${r.status}）`);
+	process.exit(1);
+}
 const out = JSON.parse(String(r.stdout));
 
 console.log(`INTENT: ${out.intent}`);

@@ -6,8 +6,8 @@
 
 | 层 | 选型 | 说明 |
 |---|---|---|
-| 桌面壳 | **Electron** | 非 Tauri |
-| 前端框架 | Vite | 渲染进程 |
+| 桌面壳 | **Electron** | |
+| 前端框架 | Vite | |
 | LLM 编排 | **pi coding-agent SDK**（进程内） | `@earendil-works/pi-coding-agent`，非 RPC mode，进程内集成；已发布 npm 包，直接依赖 registry 版本；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/`（SDK API 见 `sdk.md`） |
 | 持久化 | **SQLite** | 存档 + 回合审计，存什么见 §3 |
 | Node 运行时 | **Node 26** | 开发环境工具链；主进程实际运行在 Electron 内嵌 Node 上（Electron 43 内嵌 Node 24.18 ≥ pi SDK 的 `engines.node >= 22.19`；系统 Node 与内嵌 Node 相互独立，不冲突） |

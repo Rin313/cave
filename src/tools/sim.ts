@@ -4,7 +4,7 @@ import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { coerceValue } from "../core/util.ts";
-import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
+import { flagBool, flagStr, out, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
 	verb: string;
@@ -365,7 +365,6 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 }
 
 async function main(): Promise<void> {
-	fixConsole();
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
 	if (!cmd || cmd === "--help" || cmd === "-h") {
@@ -403,7 +402,4 @@ async function main(): Promise<void> {
 	throw new Error(`未知命令: ${cmd}`);
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
+runMain(main);

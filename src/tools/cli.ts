@@ -1,16 +1,3 @@
-import { execSync } from "node:child_process";
-
-/** 修复 Windows GB2312 控制台读取 UTF-8 输出导致的乱码。 */
-export function fixConsole(): void {
-	if (process.platform === "win32") {
-		try {
-			execSync("chcp 65001 >nul");
-		} catch {
-			/* 非交互终端可能失败，忽略 */
-		}
-	}
-}
-
 export interface ParsedArgs {
 	flags: Map<string, string | boolean>;
 	positionals: string[];
@@ -62,4 +49,12 @@ export function flagBool(a: ParsedArgs, name: string): boolean {
 /** JSON 输出（UTF-8）。 */
 export function out(obj: unknown): void {
 	process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
+}
+
+/** CLI 统一入口：未捕获错误打印到 stderr 并以非零码退出。 */
+export function runMain(main: () => Promise<void>): void {
+	main().catch((err) => {
+		console.error(err);
+		process.exit(1);
+	});
 }
