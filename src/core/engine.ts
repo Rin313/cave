@@ -40,39 +40,9 @@ export type EngineEvent =
 	| { type: "validation"; round: number; error: string; attempt: string }
 	| { type: "raw_attempt"; round: number; text: string; error: string | null };
 
-interface ToolResponse {
-	results?: StepResult[];
-	refusal?: { label: string; reason?: string };
-}
-
-interface Refusal {
-	label: string;
-}
-
-function toolResultTextFrom(tr: { content: readonly unknown[] }): string | undefined {
-	const first = tr.content[0];
-	if (first && typeof first === "object" && first !== null && "text" in first && typeof (first as { text: unknown }).text === "string") {
-		return (first as { text: string }).text;
-	}
-	return undefined;
-}
-
-function parseToolResponse(text: string): ToolResponse | null {
-	try {
-		const v = JSON.parse(text) as unknown;
-		if (v && typeof v === "object") {
-			const o = v as Record<string, unknown>;
-			if (Array.isArray(o.results)) return { results: o.results as StepResult[] };
-			if (o.refusal && typeof o.refusal === "object") {
-				const r = o.refusal as Record<string, unknown>;
-				return { refusal: { label: String(r.label ?? "refused"), reason: r.reason != null ? String(r.reason) : undefined } };
-			}
-		}
-		if (Array.isArray(v)) return { results: v as StepResult[] };
-	} catch {
-		/* 非 JSON，忽略 */
-	}
-	return null;
+/** act 工具向 Engine 直通回写裁决结果（execute 闭包内直接调用，取代 turn_end 事件嗅探 + 工具结果 JSON 反序列化）。 */
+interface ActChannel {
+	onResults: ((results: StepResult[], refusal?: { label: string }) => void) | null;
 }
 
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
@@ -97,6 +67,7 @@ export class Engine {
 	private readonly gate: ActGate;
 	private readonly declState: DeclToolState;
 	private readonly textBuf: string[];
+	private readonly channel: ActChannel;
 	private outcome: ActOutcome = { kind: "refused", results: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
@@ -111,6 +82,7 @@ export class Engine {
 		gate: ActGate,
 		declState: DeclToolState,
 		textBuf: string[],
+		channel: ActChannel,
 	) {
 		this.def = def;
 		this.sim = sim;
@@ -122,6 +94,22 @@ export class Engine {
 		this.gate = gate;
 		this.declState = declState;
 		this.textBuf = textBuf;
+		this.channel = channel;
+		channel.onResults = (results, refusal) => {
+			if (refusal) {
+				this.outcome.kind = "refused";
+				this.outcome.refusal = refusal;
+				this.emit({ type: "tool_result", results: [] });
+				return;
+			}
+			this.outcome.results.push(...results);
+			this.emit({ type: "tool_result", results });
+			const anyApplied = results.some((r) => r.ok);
+			const anyRejected = results.some((r) => !r.ok);
+			if (anyApplied && anyRejected) this.outcome.kind = "partial";
+			else if (anyApplied) this.outcome.kind = "applied";
+			else if (anyRejected) this.outcome.kind = "rejected";
+		};
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
@@ -134,34 +122,6 @@ export class Engine {
 						const args = event.args as { actions?: unknown[] };
 						this.emit({ type: "tool_call", actionCount: args.actions?.length ?? 0, actions: args.actions });
 					}
-					break;
-				case "turn_end":
-					if (!this.gate.active) break;
-					let anyApplied = false;
-					let anyRejected = false;
-					for (const tr of event.toolResults) {
-						if (tr.toolName !== ACT_TOOL) continue;
-						const text = toolResultTextFrom(tr);
-						if (!text) continue;
-						const resp = parseToolResponse(text);
-						if (!resp) continue;
-						if (resp.refusal) {
-							this.outcome.kind = "refused";
-							this.outcome.refusal = resp.refusal;
-							this.emit({ type: "tool_result", results: [] });
-							continue;
-						}
-						const results = resp.results ?? [];
-						this.outcome.results.push(...results);
-						this.emit({ type: "tool_result", results });
-						for (const r of results) {
-							if (r.ok) anyApplied = true;
-							else anyRejected = true;
-						}
-					}
-					if (anyApplied && anyRejected) this.outcome.kind = "partial";
-					else if (anyApplied) this.outcome.kind = "applied";
-					else if (anyRejected) this.outcome.kind = "rejected";
 					break;
 			}
 		});
@@ -190,7 +150,8 @@ export class Engine {
 		const declState: DeclToolState = { ctx: null, last: undefined };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
-			retry: { enabled: false },
+			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
+			retry: { enabled: true, maxRetries: 2 },
 		});
 		const loader: ResourceLoader = {
 			getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
@@ -206,7 +167,8 @@ export class Engine {
 			reload: async () => {},
 		};
 
-		const customTools = [buildActTool(def, sim, gate), buildDeclareTool(declState, gate, textBuf)];
+		const channel: ActChannel = { onResults: null };
+		const customTools = [buildActTool(def, sim, gate, channel), buildDeclareTool(declState, gate, textBuf)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
@@ -220,7 +182,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(def, sim, session, modelRuntime, modelDef, thinkingLevel, settingsManager, gate, declState, textBuf);
+		return new Engine(def, sim, session, modelRuntime, modelDef, thinkingLevel, settingsManager, gate, declState, textBuf, channel);
 	}
 
 	get sessionFile(): string | undefined {
@@ -361,6 +323,7 @@ export class Engine {
 	}
 
 	dispose(): void {
+		this.channel.onResults = null;
 		this.session.dispose();
 	}
 }
@@ -532,7 +495,7 @@ function buildDeclareTool(state: DeclToolState, gate: ActGate, textBuf: string[]
 	});
 }
 
-function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
+function buildActTool(def: GameDef, sim: Simulation, gate: ActGate, channel: ActChannel) {
 	const actionSchema = Type.Union(
 		Object.entries(def.verbs).map(([name, v]) =>
 			Type.Object(
@@ -614,12 +577,14 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate) {
 				return sim.apply(action);
 			};
 			if (params.refusal && !(params.actions?.length)) {
+				channel.onResults?.([], { label: params.refusal.label });
 				return { content: [{ type: "text", text: JSON.stringify({ refusal: { label: params.refusal.label } }) }], details: {} };
 			}
 			const results: StepResult[] = [];
 			for (const raw of params.actions ?? []) {
 				results.push(run(raw));
 			}
+			channel.onResults?.(results);
 			return {
 				content: [
 					{ type: "text", text: JSON.stringify({ results }) },
