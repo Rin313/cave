@@ -134,7 +134,7 @@ const game: GameDef = {
     // 每个动词：schema 约束参数（TypeBox）；candidates 给非实体参数候选值（动作空间接地/探测共用）；laws 裁决后果（delta 列表，短路：首个授予即生效；末尾可挂 denyAll.* 兜底法则）
   },
   systems: [Law],                 // 时间系统（可选，声明式法则）
-  messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/可达性/施动工具/不变式兜底），游戏注入自有语言，core 不内嵌任何语言
+  messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/施动工具/不变式兜底），游戏注入自有语言，core 不内嵌任何语言
   grounding: (w, a) => [...],     // 可见实体索引（可选）
   hint, summarize, props, // props：属性注册表（type/label/internal/stylistic）；表达一致性由声明契约 + 提交硬墙承担，无词表断言钩子
 };

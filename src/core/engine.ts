@@ -12,6 +12,7 @@ import { Compile } from "typebox/compile";
 import { Type } from "typebox";
 import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { validateFactIds, type DeclCtx, type StructuredFact } from "./declare.ts";
+import { coerceValue } from "./util.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -74,18 +75,6 @@ function parseToolResponse(text: string): ToolResponse | null {
 	return null;
 }
 
-function coerceValue(v: unknown): PropValue {
-	if (v === "true") return true;
-	if (v === "false") return false;
-	if (v === "null") return null;
-	if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) return v;
-	if (Array.isArray(v)) return v.map(coerceValue);
-	if (typeof v === "object") {
-		return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, coerceValue(val)]));
-	}
-	return String(v);
-}
-
 /** 行动阶段门闩：act 工具只能在 act() 期间执行，防止表达 pass 中模型误调工具变异世界。 */
 interface ActGate {
 	active: boolean;
@@ -107,7 +96,7 @@ export class Engine {
 	private readonly settingsManager: SettingsManager;
 	private readonly gate: ActGate;
 	private readonly declState: DeclToolState;
-	private readonly textBuf: { arr: string[] };
+	private readonly textBuf: string[];
 	private outcome: ActOutcome = { kind: "refused", results: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
@@ -121,7 +110,7 @@ export class Engine {
 		settingsManager: SettingsManager,
 		gate: ActGate,
 		declState: DeclToolState,
-		textBuf: { arr: string[] },
+		textBuf: string[],
 	) {
 		this.def = def;
 		this.sim = sim;
@@ -137,7 +126,7 @@ export class Engine {
 			switch (event.type) {
 				case "message_update":
 					if (event.assistantMessageEvent.type === "text_delta") {
-						if (!this.gate.active) this.textBuf.arr.push(event.assistantMessageEvent.delta);
+						if (!this.gate.active) this.textBuf.push(event.assistantMessageEvent.delta);
 					}
 					break;
 				case "tool_execution_start":
@@ -197,7 +186,7 @@ export class Engine {
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
 		const gate: ActGate = { active: false };
-		const textBuf: { arr: string[] } = { arr: [] };
+		const textBuf: string[] = [];
 		const declState: DeclToolState = { ctx: null, last: undefined };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
@@ -266,6 +255,7 @@ export class Engine {
 			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, [...internalPropsOf(this.def)], pending, action.intent, revealed),
 			changes,
 			involved,
+			pending,
 		);
 		this.emit({ type: "text_delta", delta: narration });
 		return this.outcome;
@@ -281,6 +271,7 @@ export class Engine {
 			buildExpressionPrompt(this.sim, state, results, undefined, instruction, [...internalPropsOf(this.def)], pending, undefined, []),
 			changes,
 			this.involvedEntities(results, []),
+			pending,
 		);
 		this.emit({ type: "text_delta", delta: narration });
 	}
@@ -318,12 +309,11 @@ export class Engine {
 		};
 	}
 
-	private async expressionPass(prompt: string, changes: Change[], involved: Set<string>): Promise<string> {
+	private async expressionPass(prompt: string, changes: Change[], involved: Set<string>, pending: Change[]): Promise<string> {
 		const internal = internalPropsOf(this.def);
 		const visible = changes.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
 		// 声明校验的涉及集保留 #spawn/#destroy 变更（本回合新生的实体须可被 facts 提及），仅剔除内部属性变更。
 		const touchedChanges = changes.filter((c) => !internal.has(c.prop));
-		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const ctx = this.declCtx(touchedChanges, pending, involved);
 		return this.expressionPassRun(prompt, ctx, visible);
 	}
@@ -350,13 +340,13 @@ export class Engine {
 	}
 
 	private async runToolAttempt(p: string, round: number): Promise<{ text: string; err: string | null }> {
-		this.textBuf.arr.length = 0;
+		this.textBuf.length = 0;
 		try {
 			await this.session.prompt(p);
 		} catch (err) {
 			return { text: "", err: String(err) };
 		}
-		const text = this.textBuf.arr.join("");
+		const text = this.textBuf.join("");
 		const last = this.declState.last;
 		let err: string | null = null;
 		if (text.trim() === "") err = "散文为空。";
@@ -506,7 +496,7 @@ export function buildExpressionPrompt(
 /** declare 工具：表达层新事实的结构化声明通道。取代 [facts:] 首行格式约定 + 正则解析——
  *  事实以结构化参数提交，逐条校验并即时反馈（模型回合内自我纠正），散文正文即纯文本，无需剥首行。
  *  校验核心复用 core/declare.ts 的 touched 集推导。散文缓冲在每次调用时清空：正文 = 最后一次 declare 之后输出的文本。 */
-function buildDeclareTool(state: DeclToolState, gate: ActGate, textBuf: { arr: string[] }) {
+function buildDeclareTool(state: DeclToolState, gate: ActGate, textBuf: string[]) {
 	return defineTool({
 		name: "declare",
 		label: "声明事实",
@@ -527,7 +517,7 @@ function buildDeclareTool(state: DeclToolState, gate: ActGate, textBuf: { arr: s
 			if (!state.ctx) {
 				return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "当前不在描写阶段。" }) }], details: {} };
 			}
-			textBuf.arr.length = 0;
+			textBuf.length = 0;
 			const facts: StructuredFact[] = [];
 			for (const raw of Array.isArray(params?.facts) ? params.facts : []) {
 				const f = (raw ?? {}) as Record<string, unknown>;

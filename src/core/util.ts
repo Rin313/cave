@@ -1,4 +1,17 @@
-import type { World } from "./sim.ts";
+import type { PropValue, World } from "./sim.ts";
+
+/** 未知值递归规约为 PropValue（LLM 参数与场景文件共用的宽松入口）：字符串 "true"/"false"/"null" 转字面量，其余原样保留。 */
+export function coerceValue(v: unknown): PropValue {
+	if (v === "true") return true;
+	if (v === "false") return false;
+	if (v === "null") return null;
+	if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) return v;
+	if (Array.isArray(v)) return v.map(coerceValue);
+	if (typeof v === "object") {
+		return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, coerceValue(val)]));
+	}
+	return String(v);
+}
 
 /** 确定性字符串哈希：任意字符串 → [0,1) 均匀分布值。纯函数、无状态。
  *  games 层用它从世界状态派生自有随机语义（如 hashStr(`${world.time}#${luck}#${salt}`)），

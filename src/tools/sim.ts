@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
+import { coerceValue } from "../core/util.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
@@ -50,18 +51,8 @@ interface ScenarioReport {
 	steps: StepReport[];
 }
 
-function parseValue(v: unknown): PropValue {
-	if (v === null) return null;
-	if (typeof v === "boolean" || typeof v === "number" || typeof v === "string") return v;
-	if (Array.isArray(v)) return v.map(parseValue);
-	if (typeof v === "object") {
-		return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, parseValue(val)]));
-	}
-	return String(v);
-}
-
 function asAction(a: ScenarioAction): Action {
-	return { verb: a.verb, params: Object.fromEntries(Object.entries(a.params).map(([k, v]) => [k, parseValue(v)])) };
+	return { verb: a.verb, params: Object.fromEntries(Object.entries(a.params).map(([k, v]) => [k, coerceValue(v)])) };
 }
 
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
@@ -265,7 +256,11 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 		}
 	};
 
-	for (const verbName of Object.keys(def.verbs)) {
+	/** 组合预算：按动词均分 maxCombos，超出即截断（报告 truncated），防止大实体量游戏 20^n 级爆炸。 */
+	const verbNames = Object.keys(def.verbs);
+	const perVerbBudget = verbNames.length ? Math.max(1, Math.ceil(maxCombos / verbNames.length)) : maxCombos;
+
+	for (const verbName of verbNames) {
 		const verb = def.verbs[verbName]!;
 		const entityParams = verb.entityParams ?? [];
 		const candidates = verb.candidates?.(sim) ?? {};
@@ -279,9 +274,6 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 		const keys = Object.keys(paramLists);
 		if (!keys.length) continue;
 
-		/** 组合预算：按动词均分 maxCombos，超出即截断（报告 truncated），防止大实体量游戏 20^n 级爆炸。 */
-		const verbNames = Object.keys(def.verbs);
-		const perVerbBudget = verbNames.length ? Math.max(1, Math.ceil(maxCombos / verbNames.length)) : maxCombos;
 		let verbChecks = 0;
 		const generate = (idx: number, acc: Record<string, PropValue>) => {
 			if (verbChecks >= perVerbBudget) {

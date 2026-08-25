@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
-import type { Change, World } from "../core/sim.ts";
+import type { Change, GameDef, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { fixConsole, flagBool, flagStr, out, parseArgs, requireFlag, type ParsedArgs } from "./cli.ts";
 
@@ -38,6 +38,10 @@ function transcriptPath(dir: string): string {
 
 function loadMeta(dir: string): RunMeta {
 	return JSON.parse(readFileSync(metaPath(dir), "utf8")) as RunMeta;
+}
+
+function saveMeta(dir: string, meta: RunMeta): void {
+	writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
 }
 
 function loadState(dir: string): World {
@@ -143,6 +147,32 @@ function emit(entry: unknown, opts: CmdOpts): void {
 	}
 }
 
+interface RunCtx {
+	dir: string;
+	meta: RunMeta;
+	def: GameDef;
+	sim: Simulation;
+	engine: Engine;
+}
+
+/** 打开既有 run 并装配引擎（load meta/state → open session → Engine.create），fn 结束后 dispose。 */
+async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
+	const dir = locateRunDir(runId, gameId);
+	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
+	const meta = loadMeta(dir);
+	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
+		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
+	}
+	const def = getGame(meta.game);
+	const sim = new Simulation(def, loadState(dir));
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager: SessionManager.open(meta.sessionFile) });
+	try {
+		await fn({ dir, meta, def, sim, engine });
+	} finally {
+		engine.dispose();
+	}
+}
+
 async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
@@ -160,7 +190,7 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 			sessionFile: engine.sessionFile,
 			...engineOptsFromEnv(gameId),
 		};
-		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
+		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: 1, phase: "start", scene, validations });
 		writeSessionReview(meta.sessionFile!);
@@ -171,25 +201,14 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 }
 
 async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined, opts: CmdOpts): Promise<void> {
-	const dir = locateRunDir(runId, gameId);
-	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
-	const meta = loadMeta(dir);
-	const def = getGame(meta.game);
-	const sim = Simulation.fromWorld(def, loadState(dir));
-	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
-		throw new Error(`run "${runId}" 缺少 session 文件（${meta.sessionFile ?? "(无)"}），请重新 start`);
-	}
-	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager });
-	try {
+	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		const { unsub, texts, validations, toolCalls } = collectEvents(engine);
 		const outcome = await engine.act({ intent, selection });
-		const narration = texts.join("");
 		unsub();
 
 		meta.turn += 1;
 		meta.sessionFile = engine.sessionFile;
-		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
+		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, {
 			turn: meta.turn,
@@ -200,7 +219,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
-			narration,
+			narration: texts.join(""),
 			validations,
 		});
 		writeSessionReview(meta.sessionFile!);
@@ -215,50 +234,26 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
-			narration,
+			narration: texts.join(""),
 			validations,
 			world: sim.snapshot(),
 		}, opts);
-	} finally {
-		engine.dispose();
-	}
+	});
 }
 
 async function cmdRender(runId: string, instruction: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
-	const dir = locateRunDir(runId, gameId);
-	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
-	const meta = loadMeta(dir);
-	const def = getGame(meta.game);
-	const sim = Simulation.fromWorld(def, loadState(dir));
-	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
-		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
-	}
-	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager });
-	try {
+	await withEngine(runId, gameId, async ({ dir, meta, engine }) => {
 		const { text: scene, validations } = await renderScene(engine, instruction);
 		meta.turn += 1;
-		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
+		saveMeta(dir, meta);
 		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations });
-		writeSessionReview(meta.sessionFile!);
+		writeSessionReview(engine.sessionFile!);
 		emit({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations }, opts);
-	} finally {
-		engine.dispose();
-	}
+	});
 }
 
 async function cmdWait(runId: string, n: number, gameId: string | undefined, opts: CmdOpts): Promise<void> {
-	const dir = locateRunDir(runId, gameId);
-	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
-	const meta = loadMeta(dir);
-	const def = getGame(meta.game);
-	const sim = Simulation.fromWorld(def, loadState(dir));
-	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
-		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
-	}
-	const sessionManager = SessionManager.open(meta.sessionFile);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager });
-	try {
+	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		const results = sim.tick(n);
 		const { text: scene, validations } = await renderScene(
 			engine,
@@ -267,7 +262,7 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 		);
 		meta.turn += 1;
 		meta.sessionFile = engine.sessionFile;
-		writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
+		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, {
 			turn: meta.turn,
@@ -289,9 +284,7 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 			validations,
 			world: sim.snapshot(),
 		}, opts);
-	} finally {
-		engine.dispose();
-	}
+	});
 }
 
 async function cmdState(runId: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
@@ -299,7 +292,7 @@ async function cmdState(runId: string, gameId: string | undefined, opts: CmdOpts
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
 	const def = getGame(meta.game);
-	const sim = Simulation.fromWorld(def, loadState(dir));
+	const sim = new Simulation(def, loadState(dir));
 	emit({ run: runId, game: meta.game, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() }, opts);
 }
 

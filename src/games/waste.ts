@@ -1,7 +1,7 @@
 import type { Change, GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
 import { entity, internalPropsOf } from "../core/sim.ts";
-import { E, P, type DenialDef, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
-import { reachFor, inTreeVisible } from "./space.ts";
+import { E, P, type Expr, type ExprCtx, type Law } from "../core/expr.ts";
+import { reachFor, inTreeVisible, unreachable } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -50,14 +50,6 @@ const WASTE_PROPS: Record<string, PropDef> = {
 const PROP_LABELS: Record<string, string> = Object.fromEntries(
 	Object.entries(WASTE_PROPS).filter(([, p]) => p.label).map(([k, p]) => [k, p.label!]),
 );
-
-/** 可达性拒绝（core 空槽 reach/reachReason 接线）：reason（构件 prose）优先，缺省"它不在这里。"。 */
-const unreachable = (e: Expr): DenialDef => ({
-	law: "reach",
-	subject: e,
-	reason: { k: "reachReason", e },
-	text: () => "它不在这里。",
-});
 
 function summarizeWaste(input: { world: World; changes: Change[]; actor: string }): string {
 	const { world, changes, actor } = input;
@@ -430,10 +422,6 @@ const drinkVerb: VerbDef = {
 	laws: drinkLaws,
 };
 
-/** 容器包含树可达性的理由文案与接线（游戏侧构件接入 core 的 reach/reachReason 槽位）。 */
-const REACH_MSGS = { reachMissing: "这里没有这个东西。", reachCycle: "位置存在循环引用。", reachNotHere: "它不在这里。", reachClosed: (n: string) => `${n}是关着的。` };
-const REACH_OPTS = { msgs: REACH_MSGS };
-
 export const waste: GameDef = {
 	id: "waste",
 	title: "流沙荒原（开放世界）",
@@ -443,7 +431,6 @@ export const waste: GameDef = {
 		unknownVerb: (verb) => `世界不认识「${verb}」这种动作。`,
 		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
 		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
-		...REACH_MSGS,
 		instrumentUnholdable: (name) => `${name}太沉重，你拿不动它来施力。`,
 		instrumentUnreachable: (name) => `${name}在你够不到的地方，没法拿来使。`,
 		invariantRejected: () => "世界拒绝了这个变化。",
@@ -506,8 +493,8 @@ export const waste: GameDef = {
 	},
 	systems: [burnTickSys, burnAshSys, growTickSys, growRipeSys, thirstRise, thirstHurt, beastNight],
 	props: WASTE_PROPS,
-	grounding: (world, actor) => [...inTreeVisible(world, actor, REACH_OPTS)],
-	...reachFor(REACH_OPTS),
+	grounding: (world, actor) => [...inTreeVisible(world, actor)],
+	...reachFor(),
 	// 可持握语义由游戏声明（core 不假定属性名）：荒原上只有明确可持握（grabbable）的东西能当工具/被拿起。
 	holdable: (world, _actor, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeWaste,

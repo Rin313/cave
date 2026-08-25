@@ -71,11 +71,6 @@ export interface Messages {
 	invalidParams: (label: string, known: string) => string;
 	/** 实体参数不可见/不存在（core 校验层拒绝）。 */
 	invisibleEntity: (ids: string[]) => string;
-	/** 容器包含树构件（games 侧可选）的可达性理由（作为 denial.reason 的缺省）。 */
-	reachMissing?: string;
-	reachCycle?: string;
-	reachNotHere?: string;
-	reachClosed?: (name: string) => string;
 	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具不可持握时渲染（name 为工具实体名）。 */
 	instrumentUnholdable?: (name: string) => string;
 	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具可达性不满足时渲染（name 为工具实体名）。 */
@@ -292,6 +287,24 @@ export function propGet(e: Entity, path: string): PropValue {
 	return cur;
 }
 
+/** 属性存在判定（点路径逐级键存在，值可为 null；与 propGet 同一语义的第二出口，供 has 谓词用）。 */
+export function propHas(e: Entity, path: string): boolean {
+	let cur: PropValue = e.props;
+	for (const p of splitPath(path)) {
+		if (cur === null || typeof cur !== "object") return false;
+		if (Array.isArray(cur)) {
+			const i = Number(p);
+			if (Number.isNaN(i) || !(i in cur)) return false;
+			cur = cur[i]!;
+		} else {
+			const o = cur as Record<string, PropValue>;
+			if (!(p in o)) return false;
+			cur = o[p]!;
+		}
+	}
+	return true;
+}
+
 export function propSet(e: Entity, path: string, value: PropValue): void {
 	const parts = splitPath(path);
 	const last = parts.pop()!;
@@ -356,9 +369,11 @@ export class Simulation {
 	/** 探测模式：跳过施动工具前提（instrumentParams）检查，仅 probeGrant 临时开启，审计「规则本身是否会在不可持握工具上授予」。 */
 	private probeSkipInstruments = false;
 
-	constructor(def: GameDef) {
+	/** 缺省克隆 def.world 作为初始世界；显式传入 world（存档恢复/dryTick 克隆源）则以其为完整真相。 */
+	constructor(def: GameDef, world?: World) {
 		this.def = def;
-		this.world = JSON.parse(JSON.stringify(def.world)) as World;
+		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
+		this.world.nextId ??= 0;
 	}
 
 	get actor(): string {
@@ -368,17 +383,6 @@ export class Simulation {
 	visible(): Set<string> {
 		if (this.def.grounding) return new Set(this.def.grounding(this.world, this.actor));
 		return new Set(this.world.entities.map((e) => e.id));
-	}
-
-	static fromWorld(def: GameDef, world: World): Simulation {
-		const s = new Simulation(def);
-		s.world.entities = JSON.parse(JSON.stringify(world.entities)) as Entity[];
-		s.world.time = world.time;
-		s.world.focus = world.focus ?? null;
-		s.world.traces = world.traces ? { ...world.traces } : undefined;
-		s.world.relations = world.relations ? JSON.parse(JSON.stringify(world.relations)) : undefined;
-		s.world.nextId = world.nextId ?? 0;
-		return s;
 	}
 
 	/** 只读裁决（不提交、不入日志）：动作空间接地与法则探测共用。
@@ -440,21 +444,7 @@ export class Simulation {
 			},
 			hasProp: (id, path) => {
 				const e = entity(world, id);
-				if (!e) return false;
-				let cur: PropValue = e.props;
-				for (const k of path.split(".")) {
-					if (cur === null || typeof cur !== "object") return false;
-					if (Array.isArray(cur)) {
-						const i = Number(k);
-						if (Number.isNaN(i) || !(i in cur)) return false;
-						cur = cur[i]!;
-					} else {
-						const o = cur as Record<string, PropValue>;
-						if (!(k in o)) return false;
-						cur = o[k]!;
-					}
-				}
-				return true;
+				return e ? propHas(e, path) : false;
 			},
 			reach: (id) => (this.def.reach ? this.def.reach(world, actor, id) : true),
 			rel: (from, to, type) => relVal(world, from, to, type),
@@ -722,7 +712,7 @@ export class Simulation {
 	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。表达层的"即将发生"合法预言来源。
 	 *  随机由 games 层以 World 状态自持（纯函数派生），克隆世界即完整预言——无需序列快照机制。 */
 	dryTick(n = 1): StepResult[] {
-		const clone = Simulation.fromWorld(this.def, this.world);
+		const clone = new Simulation(this.def, this.world);
 		return clone.tick(n);
 	}
 

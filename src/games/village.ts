@@ -1,8 +1,8 @@
 import type { GameDef, PropDef, PropValue, Simulation, VerbDef, World } from "../core/sim.ts";
 import { entity, internalPropsOf } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
-import { E, P, type DenialDef, type Expr, type ExprCtx, type Law, type Pred } from "../core/expr.ts";
-import { reachFor, inTreeVisible } from "./space.ts";
+import { E, P, evalExpr, type Expr, type ExprCtx, type Law, type Pred } from "../core/expr.ts";
+import { reachFor, inTreeVisible, unreachable } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -76,14 +76,6 @@ const trustPred: { k: "rel"; from: Expr; to: Expr; type: string; op: "gte"; b: E
 };
 const priceExpr = (sign: 1 | -1): Expr =>
 	E.mul(E.lit(sign), E.sub(E.lit(10), { k: "if", c: trustPred, t: E.lit(2), f: E.lit(0) }));
-
-/** 可达性拒绝（core 空槽 reach/reachReason 接线）：reason（构件 prose）优先，缺省"它不在这里。"。 */
-const unreachable = (e: Expr): DenialDef => ({
-	law: "reach",
-	subject: e,
-	reason: { k: "reachReason", e },
-	text: () => "它不在这里。",
-});
 
 const gatherLaws: Law[] = [
 	{ id: "gather.take", when: [P.reach(E.v("entity")), P.eq(E.p("entity", "grabbable"), E.lit(true)), P.neq(E.p("entity", "in"), E.v("actor"))], each: [{ op: "set", e: E.v("entity"), p: "in", v: E.v("actor") }], reason: (ctx) => `你拾起了${ctx.name(String(ctx.env.entity))}。` },
@@ -203,10 +195,7 @@ const buyGrainLaws: Law[] = [
 			{ op: "inc", e: E.v("actor"), p: "coins", by: E.mul(E.lit(-1), grainPrice()) },
 			{ op: "inc", e: E.lit("farmer"), p: "coins", by: grainPrice() },
 		],
-		reason: (ctx) => {
-			const price = 13 - Number(ctx.prop("wheatfield", "grain") ?? 0) - (Number(ctx.rel("farmer", "player", "信任") ?? 0) >= 2 ? 2 : 0);
-			return `你花${price}铜币从老农手里买了一捧谷物。`;
-		},
+		reason: (ctx) => `你花${evalExpr(ctx, grainPrice())}铜币从老农手里买了一捧谷物。`,
 	},
 	{ id: "buygrain.empty", reject: { when: [P.reach(E.lit("wheatfield")), P.lt(E.p("wheatfield", "grain"), E.lit(1))], denial: { law: "buygrain.empty", subject: E.lit("wheatfield"), text: (d, ctx) => `${ctx.name(d.subject ?? "")}已经空了，没有谷物可卖。` } } },
 	{ id: "buygrain.broke", reject: { when: [P.reach(E.lit("wheatfield")), P.lt(E.p("actor", "coins"), grainPrice())], denial: { law: "buygrain.broke", text: () => "你的钱不够买这捧谷物。" } } },
@@ -251,10 +240,6 @@ const bodyCollapse: Law = { id: "body.collapse", over: [{ var: "p", source: "ent
 /** 麦田再生长：每 4 个时段补 1 单位存粮（上限 10），供给端驱动米/谷价格波动。 */
 const fieldGrow: Law = { id: "field.grow", over: [{ var: "w", source: "entities", where: [P.eq(E.p("w", "wheat"), E.lit(true)), P.lt(E.p("w", "grain"), E.lit(10))] }], when: [P.eq(E.mod(E.time(), E.lit(4)), E.lit(0))], each: [{ op: "inc", e: E.v("w"), p: "grain", by: E.lit(1) }] };
 
-/** 容器包含树可达性的理由文案与接线（游戏侧构件接入 core 的 reach/reachReason 槽位）。 */
-const REACH_MSGS = { reachMissing: "这里没有这个东西。", reachCycle: "位置存在循环引用。", reachNotHere: "它不在这里。", reachClosed: (n: string) => `${n}是关着的。` };
-const REACH_OPTS = { msgs: REACH_MSGS };
-
 export const village: GameDef = {
 	id: "village",
 	title: "河畔村（era/DoL 极探针）",
@@ -264,7 +249,6 @@ export const village: GameDef = {
 		unknownVerb: (verb) => `世界不认识「${verb}」这种动作。`,
 		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
 		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
-		...REACH_MSGS,
 		invariantRejected: (id, msg) => (id === "coins.conserved" ? msg : "世界拒绝了这个变化。"),
 		defaultReason: "……",
 		notInActionPhase: "当前不在行动阶段，无法执行操作。",
@@ -323,8 +307,8 @@ export const village: GameDef = {
 			},
 		},
 	],
-	grounding: (world, actor) => [...inTreeVisible(world, actor, REACH_OPTS)],
-	...reachFor(REACH_OPTS),
+	grounding: (world, actor) => [...inTreeVisible(world, actor)],
+	...reachFor(),
 	// 可持握语义由游戏声明（core 不假定属性名）：河畔村同样只有 grabbable 的东西可被拿起。
 	holdable: (world, _actor, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeVillage,
