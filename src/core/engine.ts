@@ -1,14 +1,16 @@
 import {
 	createAgentSession,
-	createExtensionRuntime,
+	DefaultResourceLoader,
 	defineTool,
+	getAgentDir,
 	ModelRuntime,
 	SessionManager,
 	SettingsManager,
 	type CreateAgentSessionOptions,
-	type ResourceLoader,
+	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
 import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { validateFactIds, type DeclCtx, type StructuredFact } from "./declare.ts";
 import { coerceValue } from "./util.ts";
@@ -37,7 +39,8 @@ export type EngineEvent =
 	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
 	| { type: "tool_result"; results: StepResult[] }
 	| { type: "validation"; round: number; error: string; attempt: string }
-	| { type: "raw_attempt"; round: number; text: string; error: string | null };
+	| { type: "raw_attempt"; round: number; text: string; error: string | null }
+	| { type: "usage"; input: number; output: number; cacheRead: number; cacheWrite: number };
 
 /** act 工具 execute 闭包向 Engine 直通回写裁决结果（不经事件流嗅探与工具结果 JSON 往返）。 */
 interface ActChannel {
@@ -63,6 +66,8 @@ export class Engine {
 	private readonly modelDef: NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 	private readonly thinkingLevel: string;
 	private readonly settingsManager: SettingsManager;
+	private readonly sessionManager: SessionManager;
+	private readonly memory: MemoryTurn[];
 	private readonly gate: ActGate;
 	private readonly declState: DeclToolState;
 	private readonly textBuf: string[];
@@ -78,6 +83,8 @@ export class Engine {
 		modelDef: NonNullable<ReturnType<ModelRuntime["getModel"]>>,
 		thinkingLevel: string,
 		settingsManager: SettingsManager,
+		sessionManager: SessionManager,
+		memory: MemoryTurn[],
 		gate: ActGate,
 		declState: DeclToolState,
 		textBuf: string[],
@@ -90,6 +97,8 @@ export class Engine {
 		this.modelDef = modelDef;
 		this.thinkingLevel = thinkingLevel;
 		this.settingsManager = settingsManager;
+		this.sessionManager = sessionManager;
+		this.memory = memory;
 		this.gate = gate;
 		this.declState = declState;
 		this.textBuf = textBuf;
@@ -122,6 +131,12 @@ export class Engine {
 						this.emit({ type: "tool_call", actionCount: args.actions?.length ?? 0, actions: args.actions });
 					}
 					break;
+				case "agent_end":
+					for (const m of event.messages ?? []) {
+						const u = (m as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } }).usage;
+						if (m.role === "assistant" && u) this.emit({ type: "usage", input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
+					}
+					break;
 			}
 		});
 	}
@@ -150,19 +165,22 @@ export class Engine {
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
 			retry: { enabled: true, maxRetries: 2 },
 		});
-		const loader: ResourceLoader = {
-			getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-			getSkills: () => ({ skills: [], diagnostics: [] }),
-			getPrompts: () => ({ prompts: [], diagnostics: [] }),
-			getThemes: () => ({ themes: [], diagnostics: [] }),
-			getAgentsFiles: () => ({ agentsFiles: [] }),
-			getSystemPrompt: () => buildSystemPrompt(def),
-			getSystemPromptSource: () => undefined,
-			getAppendSystemPrompt: () => [],
-			getAppendSystemPromptSources: () => [],
-			extendResources: () => {},
-			reload: async () => {},
-		};
+		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
+		const memory = loadMemory(sessionManager.getEntries());
+		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
+		const loader = new DefaultResourceLoader({
+			cwd: process.cwd(),
+			agentDir: getAgentDir(),
+			settingsManager,
+			systemPrompt: buildSystemPrompt(def),
+			extensionFactories: [buildContextExtension(() => memory)],
+			noExtensions: true,
+			noSkills: true,
+			noPromptTemplates: true,
+			noThemes: true,
+			noContextFiles: true,
+		});
+		await loader.reload();
 
 		const channel: ActChannel = { onResults: null };
 		const customTools = [buildActTool(def, sim, gate, channel), buildDeclareTool(declState, gate, textBuf)];
@@ -173,13 +191,13 @@ export class Engine {
 			thinkingLevel: (thinkingLevel as never),
 			resourceLoader: loader,
 			settingsManager,
-			sessionManager: options.sessionManager ?? SessionManager.inMemory(),
+			sessionManager,
 			tools: [ACT_TOOL, "declare"],
 			customTools,
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(def, sim, session, modelRuntime, modelDef, thinkingLevel, settingsManager, gate, declState, textBuf, channel);
+		return new Engine(def, sim, session, modelRuntime, modelDef, thinkingLevel, settingsManager, sessionManager, memory, gate, declState, textBuf, channel);
 	}
 
 	get sessionFile(): string | undefined {
@@ -216,8 +234,27 @@ export class Engine {
 			involved,
 			pending,
 		);
+		this.recordTurn(action.intent);
 		this.emit({ type: "text_delta", delta: narration });
 		return this.outcome;
+	}
+
+	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。 */
+	private recordTurn(intent: string): void {
+		const o = this.outcome;
+		this.memory.push({
+			time: this.sim.world.time,
+			intent: intent.slice(0, 80),
+			kind: o.kind,
+			moves: o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`),
+			refusal: o.refusal?.label,
+		});
+		if (this.memory.length > MEMORY_LIMIT) this.memory.splice(0, this.memory.length - MEMORY_LIMIT);
+		try {
+			this.sessionManager.appendCustomEntry(MEMORY_CUSTOM_TYPE, this.memory[this.memory.length - 1]);
+		} catch {
+			// 持久化失败不阻断回合：内存窗口仍有效
+		}
 	}
 
 	async render(instruction: string, changes: Change[] = []): Promise<void> {
@@ -323,6 +360,16 @@ export class Engine {
 		this.channel.onResults = null;
 		this.session.dispose();
 	}
+}
+
+/** 上下文策略扩展：每次 LLM 调用前把消息裁剪为「近况 + 当前运行」（core/context.ts），会话文件不受影响。 */
+function buildContextExtension(memory: () => readonly MemoryTurn[]): InlineExtension {
+	return {
+		name: "cave-context",
+		factory: (pi) => {
+			pi.on("context", async (event) => ({ messages: pruneContext(event.messages, memory()) }));
+		},
+	};
 }
 
 function buildMappingPrompt(state: string, intent: string, selection: string | undefined, affordances: string[] = [], focusName: string | null = null): string {

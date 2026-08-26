@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { Engine } from "../core/engine.ts";
+import { Engine, type ActOutcome } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
 import type { Change, GameDef, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
@@ -16,6 +16,14 @@ interface RunMeta {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: string;
+}
+
+/** 单次 LLM 调用的用量（agent_end 的 assistant usage），进 transcript 供 report 聚合。 */
+interface UsageRow {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
 }
 
 const RUNS_ROOT = "runs";
@@ -69,7 +77,7 @@ function writeSessionReview(sessionFile: string): void {
 	];
 	for (const [i, l] of lines.entries()) {
 		const e = JSON.parse(l) as { type: string; message?: { role?: string } };
-		md.push("### " + (i + 1) + ". " + e.type + (e.message?.role ? "（" + e.message.role + "）" : ""), "", "```json", l, "```", "");
+		md.push("### " + (i + 1) + ". " + e.type + (e.message?.role ? `（${e.message.role}）` : ""), "", "```json", l, "```", "");
 	}
 	writeFileSync(sessionFile.replace(/\.jsonl$/, ".review.md"), md.join("\n"), "utf8");
 }
@@ -110,39 +118,77 @@ interface CollectEventsResult {
 	unsub: () => void;
 	texts: string[];
 	validations: ValidationFailure[];
-	/** 映射层提交的原始动作提案（tool_call 事件）。 */
 	toolCalls: unknown[];
+	usages: UsageRow[];
 }
 
 function collectEvents(engine: Engine): CollectEventsResult {
 	const texts: string[] = [];
 	const validations: ValidationFailure[] = [];
 	const toolCalls: unknown[] = [];
+	const usages: UsageRow[] = [];
 	const unsub = engine.subscribe((e) => {
 		if (e.type === "text_delta") texts.push(e.delta);
 		else if (e.type === "validation") validations.push({ round: e.round, error: e.error, attempt: e.attempt });
 		else if (e.type === "tool_call") toolCalls.push({ actionCount: e.actionCount, actions: e.actions });
+		else if (e.type === "usage") usages.push({ input: e.input, output: e.output, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite });
 	});
-	return { unsub, texts, validations, toolCalls };
+	return { unsub, texts, validations, toolCalls, usages };
 }
 
-async function renderScene(engine: Engine, instruction: string, changes: Change[] = []): Promise<{ text: string; validations: ValidationFailure[] }> {
-	const { unsub, texts, validations } = collectEvents(engine);
+async function renderScene(engine: Engine, instruction: string, changes: Change[] = []): Promise<{ text: string; validations: ValidationFailure[]; usages: UsageRow[] }> {
+	const { unsub, texts, validations, usages } = collectEvents(engine);
 	await engine.render(instruction, changes);
 	unsub();
-	return { text: texts.join(""), validations };
+	return { text: texts.join(""), validations, usages };
 }
 
 interface CmdOpts {
 	json: boolean;
-	world: boolean;
 }
 
-function emit(entry: unknown, opts: CmdOpts): void {
-	if (opts.json) out(entry);
-	else {
-		const { world, ...rest } = entry as Record<string, unknown>;
-		out(opts.world ? { ...rest, world } : rest);
+// ---------- 紧凑人类输出（缺省模式）：研究流程直接可读，不必解析 JSON ----------
+
+const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+function usageLine(rows: UsageRow[]): string {
+	if (!rows.length) return "";
+	let i = 0, o = 0, cr = 0, cw = 0;
+	for (const r of rows) { i += r.input; o += r.output; cr += r.cacheRead; cw += r.cacheWrite; }
+	return `  tok ×${rows.length}：入 ${k(i)}（缓读 ${k(cr)}／缓写 ${k(cw)}）出 ${k(o)}`;
+}
+
+function warnValidations(vs: ValidationFailure[]): void {
+	for (const v of vs) console.log(`  ⚠ 校验失败 round${v.round}：${v.error}`);
+}
+
+function proposalLines(toolCalls: unknown[]): string[] {
+	const lines: string[] = [];
+	for (const tc of toolCalls) {
+		const t = tc as { actions?: { verb?: string; params?: unknown }[] };
+		for (const a of t.actions ?? []) lines.push(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
+	}
+	return lines;
+}
+
+function printAct(sim: Simulation, o: {
+	turn: number; intent: string; selection?: string | null;
+	outcome: ActOutcome; toolCalls: unknown[]; validations: ValidationFailure[];
+	usages: UsageRow[]; narration: string; brief?: boolean;
+}): void {
+	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
+	const ref = o.outcome.refusal ? `（${o.outcome.refusal.label}）` : "";
+	console.log(`\n【#${o.turn} act】${o.intent}${sel} → ${o.outcome.kind}${ref}`);
+	for (const l of proposalLines(o.toolCalls)) console.log(l);
+	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action)}：${r.reason}`);
+	warnValidations(o.validations);
+	const u = usageLine(o.usages);
+	if (u) console.log(u);
+	if (o.brief) {
+		const first = o.narration.split(/\n/).find((l) => l.trim()) ?? "";
+		console.log(`  ┈ ${first.length > 100 ? `${first.slice(0, 100)}…` : first}`);
+	} else {
+		console.log(`  ┈ ${o.narration.replace(/\n/g, "\n  ")}`);
 	}
 }
 
@@ -180,7 +226,7 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 	const sessionManager = SessionManager.create(process.cwd(), dir);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sim, sessionManager });
 	try {
-		const { text: scene, validations } = await renderScene(engine, "请用文学笔触描写当前场景。");
+		const { text: scene, validations, usages } = await renderScene(engine, "请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
 			game: gameId,
 			runId,
@@ -191,9 +237,17 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 		};
 		saveMeta(dir, meta);
 		saveState(dir, sim);
-		appendTranscript(dir, { turn: 1, phase: "start", scene, validations });
+		appendTranscript(dir, { turn: 1, phase: "start", scene, validations, usage: usages });
 		writeSessionReview(meta.sessionFile!);
-		emit({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, world: sim.snapshot() }, opts);
+		if (opts.json) {
+			out({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, usage: usages, world: sim.snapshot() });
+		} else {
+			console.log(`【${runId}·start】${def.title}`);
+			console.log(scene);
+			warnValidations(validations);
+			const u = usageLine(usages);
+			if (u) console.log(u);
+		}
 	} finally {
 		engine.dispose();
 	}
@@ -201,7 +255,7 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 
 async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
-		const { unsub, texts, validations, toolCalls } = collectEvents(engine);
+		const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
 		const outcome = await engine.act({ intent, selection });
 		unsub();
 
@@ -221,41 +275,86 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			results: outcome.results,
 			narration,
 			validations,
+			usage: usages,
 		});
 		writeSessionReview(meta.sessionFile!);
-		emit({
-			run: runId,
-			game: meta.game,
-			turn: meta.turn,
-			phase: "act",
-			intent,
-			selection: selection ?? null,
-			toolCalls,
-			kind: outcome.kind,
-			refusal: outcome.refusal ?? null,
-			results: outcome.results,
-			narration,
-			validations,
-			world: sim.snapshot(),
-		}, opts);
+		if (opts.json) {
+			out({
+				run: runId, game: meta.game, turn: meta.turn, phase: "act",
+				intent, selection: selection ?? null, toolCalls,
+				kind: outcome.kind, refusal: outcome.refusal ?? null,
+				results: outcome.results, narration, validations, usage: usages,
+				world: sim.snapshot(),
+			});
+		} else {
+			printAct(sim, { turn: meta.turn, intent, selection, outcome, toolCalls, validations, usages, narration });
+		}
 	});
+}
+
+/** 顺序执行意图文件（一行一意图；#注释/@wait N）；同一引擎会话内连跑，A/B 意图集用。 */
+async function cmdBatch(runId: string, file: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
+	const lines = readFileSync(file, "utf8").split(/\r?\n/)
+		.map((l) => l.trim())
+		.filter((l) => l !== "" && !l.startsWith("#"));
+	if (!lines.length) throw new Error(`意图文件 ${file} 为空`);
+	const steps: unknown[] = [];
+	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
+		for (const line of lines) {
+			if (line.startsWith("@wait")) {
+				const n = Number(line.split(/\s+/)[1] ?? 1);
+				const results = sim.tick(n);
+				meta.turn += 1;
+				appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, usage: [] });
+				console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+				steps.push({ turn: meta.turn, phase: "wait", ticks: n, events: results });
+			} else {
+				const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
+				const outcome = await engine.act({ intent: line });
+				unsub();
+				meta.turn += 1;
+				const narration = texts.join("");
+				const entry = {
+					turn: meta.turn, phase: "act", intent: line, selection: null, toolCalls,
+					kind: outcome.kind, refusal: outcome.refusal ?? null, results: outcome.results,
+					narration, validations, usage: usages,
+				};
+				appendTranscript(dir, entry);
+				printAct(sim, { turn: meta.turn, intent: line, outcome, toolCalls, validations, usages, narration, brief: true });
+				steps.push(entry);
+			}
+			meta.sessionFile = engine.sessionFile;
+			saveMeta(dir, meta);
+			saveState(dir, sim);
+		}
+		writeSessionReview(engine.sessionFile!);
+	});
+	if (opts.json) out({ run: runId, game: gameId, steps });
 }
 
 async function cmdRender(runId: string, instruction: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, engine }) => {
-		const { text: scene, validations } = await renderScene(engine, instruction);
+		const { text: scene, validations, usages } = await renderScene(engine, instruction);
 		meta.turn += 1;
 		saveMeta(dir, meta);
-		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations });
+		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations, usage: usages });
 		writeSessionReview(engine.sessionFile!);
-		emit({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations }, opts);
+		if (opts.json) {
+			out({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations, usage: usages });
+		} else {
+			console.log(`\n【#${meta.turn} render】${instruction}`);
+			console.log(scene);
+			warnValidations(validations);
+			const u = usageLine(usages);
+			if (u) console.log(u);
+		}
 	});
 }
 
 async function cmdWait(runId: string, n: number, gameId: string | undefined, opts: CmdOpts): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		const results = sim.tick(n);
-		const { text: scene, validations } = await renderScene(
+		const { text: scene, validations, usages } = await renderScene(
 			engine,
 			"时间流逝。请用文学笔触描写当前场景发生的变化。",
 			results.flatMap((r) => r.changes),
@@ -264,26 +363,17 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 		meta.sessionFile = engine.sessionFile;
 		saveMeta(dir, meta);
 		saveState(dir, sim);
-		appendTranscript(dir, {
-			turn: meta.turn,
-			phase: "wait",
-			ticks: n,
-			events: results,
-			scene,
-			validations,
-		});
+		appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages });
 		writeSessionReview(meta.sessionFile!);
-		emit({
-			run: runId,
-			game: meta.game,
-			turn: meta.turn,
-			phase: "wait",
-			ticks: n,
-			events: results,
-			scene,
-			validations,
-			world: sim.snapshot(),
-		}, opts);
+		if (opts.json) {
+			out({ run: runId, game: meta.game, turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages, world: sim.snapshot() });
+		} else {
+			console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+			console.log(scene);
+			warnValidations(validations);
+			const u = usageLine(usages);
+			if (u) console.log(u);
+		}
 	});
 }
 
@@ -293,7 +383,12 @@ async function cmdState(runId: string, gameId: string | undefined, opts: CmdOpts
 	const meta = loadMeta(dir);
 	const def = getGame(meta.game);
 	const sim = new Simulation(def, loadState(dir));
-	emit({ run: runId, game: meta.game, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() }, opts);
+	if (opts.json) {
+		out({ run: runId, game: meta.game, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() });
+	} else {
+		console.log(`【${runId}】${meta.game} 第${meta.turn}回合`);
+		console.log(JSON.stringify(JSON.parse(sim.serialize()), null, 1));
+	}
 }
 
 async function cmdReset(runId: string, game?: string): Promise<void> {
@@ -306,6 +401,86 @@ async function cmdReset(runId: string, game?: string): Promise<void> {
 	process.stdout.write(`已重置 run "${runId}"\n`);
 }
 
+interface ReportRow {
+	dir: string;
+	game: string;
+	acts: number;
+	waits: number;
+	kinds: Record<string, number>;
+	fails: number;
+	tin: number;
+	tout: number;
+	cread: number;
+	calls: number;
+	firstIn: number | null;
+	lastIn: number | null;
+}
+
+/** 汇总 runs/ 下各 run 的回合数、裁决分布、表达校验失败与 token 用量（对照实验的一眼视图）。 */
+function collectReport(gameId: string | undefined): ReportRow[] {
+	const rows: ReportRow[] = [];
+	if (!existsSync(RUNS_ROOT)) return rows;
+	for (const g of readdirSync(RUNS_ROOT).sort()) {
+		if (gameId && g !== gameId) continue;
+		const gdir = join(RUNS_ROOT, g);
+		for (const id of readdirSync(gdir).sort()) {
+			const tp = transcriptPath(join(gdir, id));
+			if (!existsSync(tp)) continue;
+			const row: ReportRow = { dir: `${g}/${id}`, game: g, acts: 0, waits: 0, kinds: {}, fails: 0, tin: 0, tout: 0, cread: 0, calls: 0, firstIn: null, lastIn: null };
+			for (const l of readFileSync(tp, "utf8").split(/\r?\n/)) {
+				if (!l.trim()) continue;
+				let e: { phase?: string; kind?: string; validations?: unknown[]; usage?: UsageRow[] };
+				try {
+					e = JSON.parse(l);
+				} catch {
+					continue;
+				}
+				if (e.phase === "act") row.acts++;
+				if (e.phase === "wait") row.waits++;
+				if (e.phase === "act" && e.kind) row.kinds[e.kind] = (row.kinds[e.kind] ?? 0) + 1;
+				row.fails += Array.isArray(e.validations) ? e.validations.length : 0;
+				for (const u of Array.isArray(e.usage) ? e.usage : []) {
+					row.calls++;
+					row.tin += u.input;
+					row.tout += u.output;
+					row.cread += u.cacheRead;
+					row.lastIn = u.input;
+					row.firstIn ??= u.input;
+				}
+			}
+			rows.push(row);
+		}
+	}
+	return rows;
+}
+
+function printReport(rows: ReportRow[], gameId: string | undefined): void {
+	const scope = gameId ?? "全部游戏";
+	if (!rows.length) {
+		console.log(`runs/ 下没有可汇总的 transcript（scope: ${scope}）。`);
+		return;
+	}
+	console.log(`=== loop report（${scope}）===`);
+	const kindsStr = (r: ReportRow): string =>
+		["applied", "rejected", "partial", "refused"].map((kd) => (r.kinds[kd] ? `${kd}=${r.kinds[kd]}` : "")).filter(Boolean).join(" ");
+	for (const r of rows) {
+		// provider 的 usage.input 不含缓存命中，缓存份额分母 = input + cacheRead
+		const cache = r.tin + r.cread ? `${Math.round((r.cread / (r.tin + r.cread)) * 100)}%` : "-";
+		const trend = r.firstIn != null ? `${k(r.firstIn)}→${k(r.lastIn ?? 0)}` : "-";
+		console.log(
+			`${r.dir.padEnd(30)} act=${r.acts} wait=${r.waits}  ${(kindsStr(r) || "-").padEnd(44)} 校验失败=${r.fails}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
+		);
+	}
+	if (rows.length > 1) {
+		const sum = (f: (r: ReportRow) => number): number => rows.reduce((a, r) => a + f(r), 0);
+		const kinds: Record<string, number> = {};
+		for (const r of rows) for (const [kd, v] of Object.entries(r.kinds)) kinds[kd] = (kinds[kd] ?? 0) + v;
+		console.log(
+			`${"TOTAL".padEnd(30)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  ${kindsStr({ dir: "", game: "", acts: 0, waits: 0, kinds, fails: 0, tin: 0, tout: 0, cread: 0, calls: 0, firstIn: null, lastIn: null }).padEnd(44)} 校验失败=${sum((r) => r.fails)}  出 ${k(sum((r) => r.tout))}`,
+		);
+	}
+}
+
 /** 解析位置参数为完整意图文本（支持不带引号的多词意图）。 */
 function joinIntent(positionals: string[]): string {
 	return positionals.join(" ").trim();
@@ -314,27 +489,32 @@ function joinIntent(positionals: string[]): string {
 async function main() {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
-	const opts: CmdOpts = { json: flagBool(a, "json"), world: flagBool(a, "world") };
+	const opts: CmdOpts = { json: flagBool(a, "json") };
 
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  loop start --run <id> --game <id> [--json] [--world]
-  loop act <意图文本> --run <id> [--select <选中文本>] [--game <id>] [--json] [--world]
-  loop render --run <id> [--instruction <指令>] [--game <id>] [--json] [--world]
-  loop state --run <id> [--game <id>] [--json] [--world]
-  loop wait <n> --run <id> [--game <id>] [--json] [--world]
+  loop start --run <id> --game <id> [--json]
+  loop act <意图文本> --run <id> [--select <选中文本>] [--game <id>] [--json]
+  loop batch <intents.txt> --run <id> [--game <id>] [--json]
+  loop render --run <id> [--instruction <指令>] [--game <id>] [--json]
+  loop state --run <id> [--game <id>] [--json]
+  loop wait <n> --run <id> [--game <id>] [--json]
+  loop report [--game <id>]
   loop reset --run <id> [--game <id>]
 
-意图文本可省略引号（多个位置参数自动拼接）；--json 输出完整结构化结果，缺省精简输出（不含 world）。
---game 在 act/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
+缺省为紧凑人类可读输出（含提案/裁决/校验警告/token 用量与叙述）；--json 输出完整结构化结果。
+batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
+report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、表达校验失败数与 token 用量（入列首→末展示裁剪后的输入趋势）。
+--game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 WASTE_PROVIDER；必填，无默认模型）
 `);
 		return;
 	}
 
-	const runId = requireFlag(a, "run", "用 --run <id> 指定回合记录");
 	const gameId = flagStr(a, "game");
 	const positionals = a.positionals;
+	// report 不绑定具体 run；其余命令都需要 --run
+	const runId = cmd === "report" ? "" : requireFlag(a, "run", "用 --run <id> 指定回合记录");
 
 	switch (cmd) {
 		case "start":
@@ -344,6 +524,12 @@ async function main() {
 			const intent = flagStr(a, "intent") ?? joinIntent(positionals);
 			if (!intent) throw new Error("act 需要意图文本（位置参数或 --intent）");
 			await cmdAct(runId, intent, flagStr(a, "select"), gameId, opts);
+			return;
+		}
+		case "batch": {
+			const file = positionals[0];
+			if (!file) throw new Error("batch 需要意图文件路径（位置参数）");
+			await cmdBatch(runId, file, gameId, opts);
 			return;
 		}
 		case "render":
@@ -356,6 +542,9 @@ async function main() {
 		}
 		case "state":
 			await cmdState(runId, gameId, opts);
+			return;
+		case "report":
+			printReport(collectReport(gameId), gameId);
 			return;
 		case "reset":
 			await cmdReset(runId, gameId);

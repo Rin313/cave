@@ -1,0 +1,70 @@
+// 上下文裁剪策略（core 单一来源）：LLM 每次调用只见「近况记录 + 当前运行后缀」，会话文件仍保存全量审计。
+// 近况经 custom 条目持久化在会话文件内（custom 不参与 LLM 上下文），进程重启后由此重建窗口。
+import type { ContextEvent } from "@earendil-works/pi-coding-agent";
+
+export type CtxMessages = ContextEvent["messages"];
+
+/** 单回合动作记录（世界腔，无 id）：映射层的指代/续接锚点，取代回流叙述。 */
+export interface MemoryTurn {
+	time: number;
+	intent: string;
+	kind: "applied" | "rejected" | "refused" | "partial";
+	moves: string[];
+	refusal?: string;
+}
+
+export const MEMORY_CUSTOM_TYPE = "cave.memory";
+export const MEMORY_LIMIT = 6;
+
+interface EntryLike {
+	type: string;
+	customType?: unknown;
+	data?: unknown;
+}
+
+/** 从会话 custom 条目重建近期窗口（取最近 MEMORY_LIMIT 条）。 */
+export function loadMemory(entries: readonly EntryLike[]): MemoryTurn[] {
+	const out: MemoryTurn[] = [];
+	for (const e of entries) {
+		if (e.type !== "custom" || e.customType !== MEMORY_CUSTOM_TYPE) continue;
+		const d = e.data as Partial<MemoryTurn> | undefined;
+		if (!d || typeof d.intent !== "string") continue;
+		out.push({
+			time: Number(d.time ?? 0),
+			intent: String(d.intent).slice(0, 80),
+			kind: d.kind === "applied" || d.kind === "rejected" || d.kind === "partial" ? d.kind : "refused",
+			moves: Array.isArray(d.moves) ? d.moves.map(String) : [],
+			refusal: typeof d.refusal === "string" ? d.refusal : undefined,
+		});
+	}
+	return out.slice(-MEMORY_LIMIT);
+}
+
+/** 近况渲染：符号连接 + 游戏自产的世界腔理由，core 不新增自然语句。 */
+export function renderMemory(memory: readonly MemoryTurn[]): string {
+	if (!memory.length) return "";
+	const lines = memory.map((m) => {
+		const moves = m.moves.length ? m.moves.join("；") : `未解析（${m.refusal ?? "?"}）`;
+		return `- t${m.time} 「${m.intent}」→ ${moves}`;
+	});
+	return ["[近况] 最近几步的世界结果（供指代与续接，勿复述为当前叙述）：", ...lines].join("\n");
+}
+
+/** 裁剪：只保留最后一条 user 消息起的当前运行后缀（toolCall/toolResult 配对天然完整），近况并入该消息头部。
+ *  引擎 prompt 均为字符串内容；块内容消息回落纯后缀保留。每次调用独立生效，不改会话持久化。 */
+export function pruneContext(messages: CtxMessages, memory: readonly MemoryTurn[]): CtxMessages {
+	let last = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i]?.role === "user") {
+			last = i;
+			break;
+		}
+	}
+	if (last < 0) return messages;
+	const suffix = [...messages.slice(last)];
+	const head = renderMemory(memory);
+	const first = suffix[0] as (CtxMessages[number] & { content?: unknown }) | undefined;
+	if (!head || !first || typeof first.content !== "string") return suffix;
+	first.content = `${head}\n\n${first.content}`;
+	return suffix;
+}
