@@ -60,7 +60,7 @@ function summarizeVillage(input: { world: World; changes: Change[]; actor: strin
 		if (Number(player.props.water ?? 0) > 0) bits.push(`清水 ${player.props.water}`);
 		if (player.props.down === true) bits.push("你昏迷着。");
 	}
-	return ["你站在河畔村。"].concat(bits, changes.filter((c) => !c.prop.startsWith("#")).map((c) => `变更：${name(world, c.entity)}的${PROP_LABELS[c.prop] ?? c.prop} ${String(c.from)} → ${String(c.to)}`)).join("\n");
+	return ["你站在河畔村。"].concat(bits, changes.map((c) => `变更：${name(world, c.entity)}的${PROP_LABELS[c.prop] ?? c.prop} ${String(c.from)} → ${String(c.to)}`)).join("\n");
 }
 
 function digestVillage(sim: Simulation): string {

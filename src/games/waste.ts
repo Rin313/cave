@@ -85,7 +85,6 @@ function summarizeWaste(input: { world: World; changes: Change[]; actor: string 
 		return String(v);
 	};
 	for (const ch of changes) {
-		if (ch.prop.startsWith("#")) continue;
 		const e = entity(world, ch.entity);
 		lines.push(`变更：${e?.name ?? ch.entity}的${PROP_LABELS[ch.prop] ?? ch.prop} ${fmt(ch.from)} → ${fmt(ch.to)}`);
 	}

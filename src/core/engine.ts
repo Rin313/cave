@@ -307,10 +307,8 @@ export class Engine {
 
 	private async expressionPass(prompt: string, changes: Change[], involved: Set<string>, pending: Change[]): Promise<string> {
 		const internal = internalPropsOf(this.def);
-		const visible = changes.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
-		// 声明校验的涉及集保留 #spawn/#destroy 变更（本回合新生的实体须可被 facts 提及），仅剔除内部属性变更。
-		const touchedChanges = changes.filter((c) => !internal.has(c.prop));
-		const ctx = this.declCtx(touchedChanges, pending, involved);
+		const visible = changes.filter((c) => !internal.has(c.prop));
+		const ctx = this.declCtx(visible, pending, involved);
 		return this.expressionPassRun(prompt, ctx, visible);
 	}
 
@@ -462,7 +460,7 @@ export function buildExpressionPrompt(
 	if (narratable.length) {
 		lines.push("本回合尝试：");
 		for (const r of narratable) {
-			const visible = r.changes.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
+			const visible = r.changes.filter((c) => !internal.has(c.prop));
 			const changes = visible.length
 				? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}`
 				: "";
@@ -476,7 +474,7 @@ export function buildExpressionPrompt(
 	} else {
 		lines.push("没有任何改变。");
 	}
-	const pendingVisible = pending.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
+	const pendingVisible = pending.filter((c) => !internal.has(c.prop));
 	if (pendingVisible.length) {
 		lines.push("即将发生（下一时刻）：");
 		for (const c of pendingVisible) {
