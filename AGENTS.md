@@ -5,11 +5,11 @@ ARCHITECTURE.md
 DESIGN.md
 package.json
 tsconfig.json
-scenarios/
 src/
   core/
   games/
   tools/
+scenarios/
 
 # Standards
 - 架构越简洁越好，文件数量越少越好

@@ -380,7 +380,7 @@ async function main(): Promise<void> {
 	const positionals = a.positionals;
 	if (cmd === "scenario") {
 		const path = positionals[0];
-		if (!path) throw new Error("scenario 需要场景文件路径（如 scenarios/waste.json）");
+		if (!path) throw new Error("scenario 需要场景文件路径");
 		await cmdScenario(path);
 		return;
 	}

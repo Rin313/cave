@@ -1,0 +1,106 @@
+{
+	"game": "yume",
+	"name": "梦核验证（梦日记）",
+	"scenarios": [
+		{
+			"name": "睡眠门：房间坠梦、梦中醒来、床垫只是氛围",
+			"steps": [
+				{ "name": "互动床垫（纯氛围，无状态变更）", "action": { "verb": "interact", "params": { "entity": "futon" } }, "expect": { "ok": true, "state": { "player.in": "room", "player.awake": true } } },
+				{ "name": "睡去：坠入门厅", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true, "reason": "门厅", "state": { "player.in": "nexus", "player.awake": false } } },
+				{ "name": "梦中再睡：醒来回到房间", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true, "reason": "房间", "state": { "player.in": "room", "player.awake": true } } }
+			]
+		},
+		{
+			"name": "拓扑与拒绝：门厅是枢纽，非相邻地点没有路",
+			"steps": [
+				{ "name": "睡去", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true } },
+				{ "name": "去沙之海（相邻）", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true, "state": { "player.in": "desert" } } },
+				{ "name": "直接去雪原（非相邻，被拒）", "action": { "verb": "go", "params": { "dest": "snow" } }, "expect": { "ok": false, "reason": "没有路" } },
+				{ "name": "回门厅", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true, "state": { "player.in": "nexus" } } },
+				{ "name": "去森林再入深处", "action": { "verb": "go", "params": { "dest": "forest" } }, "expect": { "ok": true } },
+				{ "name": "深入密林", "action": { "verb": "go", "params": { "dest": "deep" } }, "expect": { "ok": true, "state": { "player.in": "deep" } } },
+				{ "name": "凭空去不存在的地点（被拒）", "action": { "verb": "go", "params": { "dest": "nowhere" } }, "expect": { "ok": false, "reason": "没有这个地方" } }
+			]
+		},
+		{
+			"name": "暗处需要光：死巷在拿到灯效果前后",
+			"steps": [
+				{ "name": "睡去后进霓虹巷", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true } },
+				{ "name": "去霓虹巷", "action": { "verb": "go", "params": { "dest": "neon" } }, "expect": { "ok": true } },
+				{ "name": "无灯闯死巷被拒", "action": { "verb": "go", "params": { "dest": "alley" } }, "expect": { "ok": false, "reason": "黑得化不开" } },
+				{ "name": "回门厅转沙之海取灯", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "到沙之海", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
+				{ "name": "拾取灯效果", "action": { "verb": "take", "params": { "entity": "lamp_effect" } }, "expect": { "ok": true, "reason": "收下", "state": { "lamp_effect.in": "player" } } },
+				{ "name": "带灯折返霓虹巷", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "再进霓虹巷", "action": { "verb": "go", "params": { "dest": "neon" } }, "expect": { "ok": true } },
+				{ "name": "有灯闯死巷成功", "action": { "verb": "go", "params": { "dest": "alley" } }, "expect": { "ok": true, "state": { "player.in": "alley" } } },
+				{ "name": "拾取自行车效果", "action": { "verb": "take", "params": { "entity": "bike_effect" } }, "expect": { "ok": true, "state": { "bike_effect.in": "player" } } }
+			]
+		},
+		{
+			"name": "效果改写互动 + 生灭：刀让无脸鸟从世界里消失",
+			"steps": [
+				{ "name": "睡去，穿森林入深处取刀", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true } },
+				{ "name": "去森林", "action": { "verb": "go", "params": { "dest": "forest" } }, "expect": { "ok": true } },
+				{ "name": "互动无脸鸟（无刀：只有注视）", "action": { "verb": "interact", "params": { "entity": "bird" } }, "expect": { "ok": true, "reason": "歪着头", "state": { "bird.in": "forest" } } },
+				{ "name": "去深处拿刀效果", "action": { "verb": "go", "params": { "dest": "deep" } }, "expect": { "ok": true } },
+				{ "name": "拾取刀效果", "action": { "verb": "take", "params": { "entity": "knife_effect" } }, "expect": { "ok": true, "state": { "knife_effect.in": "player" } } },
+				{ "name": "回森林", "action": { "verb": "go", "params": { "dest": "forest" } }, "expect": { "ok": true } },
+				{ "name": "带刀互动无脸鸟：鸟消失、长羽出现", "action": { "verb": "interact", "params": { "entity": "bird" } }, "expect": { "ok": true, "reason": "长羽", "state": { "feather.in": "forest", "bird.in": null } } },
+				{ "name": "再互动：视野里已没有那只鸟", "action": { "verb": "interact", "params": { "entity": "bird" } }, "expect": { "ok": false, "reason": "视野里" } }
+			]
+		},
+		{
+			"name": "拓扑生长：石猫睁眼，世界多出一扇门",
+			"steps": [
+				{ "name": "睡去后到沙之海", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true } },
+				{ "name": "去沙之海", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
+				{ "name": "互动石猫：小屋生成并接路", "action": { "verb": "interact", "params": { "entity": "stone_cat" } }, "expect": { "ok": true, "reason": "多出了一扇门" } },
+				{ "name": "走进新生的小屋", "action": { "verb": "go", "params": { "dest": "hut" } }, "expect": { "ok": true, "state": { "player.in": "hut" } } },
+				{ "name": "拾取猫效果", "action": { "verb": "take", "params": { "entity": "cat_effect" } }, "expect": { "ok": true, "state": { "cat_effect.in": "player" } } },
+				{ "name": "回沙之海再看石猫", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
+				{ "name": "石猫已闭眼（一次性事件）", "action": { "verb": "interact", "params": { "entity": "stone_cat" } }, "expect": { "ok": true, "reason": "闭着眼" } }
+			]
+		},
+		{
+			"name": "自贩机一次性吐罐；独轮车人随机传送",
+			"steps": [
+				{ "name": "睡去后到霓虹巷", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true } },
+				{ "name": "去霓虹巷", "action": { "verb": "go", "params": { "dest": "neon" } }, "expect": { "ok": true } },
+				{ "name": "互动自贩机：吐出罐子", "action": { "verb": "interact", "params": { "entity": "machine" } }, "expect": { "ok": true, "reason": "哐当", "state": { "can.in": "neon" } } },
+				{ "name": "再互动：只剩嗡嗡声", "action": { "verb": "interact", "params": { "entity": "machine" } }, "expect": { "ok": true, "reason": "嗡嗡声" } },
+				{ "name": "回门厅找独轮车人", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "独轮车人传送（确定性骰子）", "action": { "verb": "interact", "params": { "entity": "wheel_man" } }, "expect": { "ok": true, "reason": "独轮车人" } }
+			]
+		},
+		{
+			"name": "终局观测：收齐四枚效果，阳台上出现人影",
+			"steps": [
+				{ "name": "未收齐时互动阳台窗只是黄昏", "action": { "verb": "interact", "params": { "entity": "window" } }, "expect": { "ok": true, "reason": "黄昏" } },
+				{ "name": "睡去", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true } },
+				{ "name": "森林→深处→取刀", "action": { "verb": "go", "params": { "dest": "forest" } }, "expect": { "ok": true } },
+				{ "name": "入深处", "action": { "verb": "go", "params": { "dest": "deep" } }, "expect": { "ok": true } },
+				{ "name": "取刀效果", "action": { "verb": "take", "params": { "entity": "knife_effect" } }, "expect": { "ok": true } },
+				{ "name": "回森林回门厅", "action": { "verb": "go", "params": { "dest": "forest" } }, "expect": { "ok": true } },
+				{ "name": "回门厅", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "去沙之海取灯", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
+				{ "name": "取灯效果", "action": { "verb": "take", "params": { "entity": "lamp_effect" } }, "expect": { "ok": true } },
+				{ "name": "回门厅转霓虹巷", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "进霓虹巷", "action": { "verb": "go", "params": { "dest": "neon" } }, "expect": { "ok": true } },
+				{ "name": "带灯入死巷取自行车", "action": { "verb": "go", "params": { "dest": "alley" } }, "expect": { "ok": true } },
+				{ "name": "取自行车效果", "action": { "verb": "take", "params": { "entity": "bike_effect" } }, "expect": { "ok": true } },
+				{ "name": "回霓虹巷回门厅", "action": { "verb": "go", "params": { "dest": "neon" } }, "expect": { "ok": true } },
+				{ "name": "回门厅", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "去沙之海唤石猫", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
+				{ "name": "石猫开门", "action": { "verb": "interact", "params": { "entity": "stone_cat" } }, "expect": { "ok": true } },
+				{ "name": "入小屋取猫效果", "action": { "verb": "go", "params": { "dest": "hut" } }, "expect": { "ok": true } },
+				{ "name": "取猫效果（第四枚）", "action": { "verb": "take", "params": { "entity": "cat_effect" } }, "expect": { "ok": true } },
+				{ "name": "出小屋回沙之海", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
+				{ "name": "回门厅", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
+				{ "name": "睡醒回家", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true, "state": { "player.in": "room", "player.awake": true } } },
+				{ "name": "时刻推进：人影出现在阳台上", "tick": 1, "expect": { "ok": true, "state": { "shadow.in": "room", "player.ended": true } } },
+				{ "name": "隔窗拉住那只手：终局成立", "action": { "verb": "interact", "params": { "entity": "window" } }, "expect": { "ok": true, "reason": "拉住", "state": { "player.ending": true } } }
+			]
+		}
+	]
+}

@@ -210,7 +210,8 @@ export class Engine {
 		this.outcome = { kind: "refused", results: [], elapsed: [] };
 		this.gate.active = true;
 		const state = this.sim.digest();
-		const affordances = this.sim.affordances();
+		// 动作空间接地可由游戏关闭（GameDef.affordances）：发现式世界不剧透菜单，试错即玩法
+		const affordances = this.def.affordances === false ? [] : this.sim.affordances();
 		const visibleBefore = this.sim.visible();
 		const focusName = this.sim.focus ? (this.sim.world.entities.find((e) => e.id === this.sim.focus)?.name ?? null) : null;
 		try {
@@ -308,6 +309,7 @@ export class Engine {
 			involved,
 			changes,
 			pending,
+			vanished: new Set(changes.filter((c) => c.op === "despawn").map((c) => c.entity)),
 		};
 	}
 
@@ -426,9 +428,11 @@ function fmtValue(sim: Simulation, v: PropValue): string {
 }
 
 /** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接）：
- *  普通变更 `<name>.<label>: <from> → <to>`；rel 变更 `<from>.<type>.<to>: <from值> → <to值>`。
+ *  普通变更 `<name>.<label>: <from> → <to>`；rel 变更 `<from>.<type>.<to>: <from值> → <to值>`；生灭 `+ name` / `- name`。
  *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
 export function fmtChange(sim: Simulation, c: Change): string {
+	if (c.op === "spawn") return `+ ${fmtValue(sim, c.entity)}`;
+	if (c.op === "despawn") return `- ${typeof c.to === "string" ? c.to : c.entity}`;
 	const m = /^rel:([^@]+)@(.+)$/.exec(c.prop);
 	if (m) {
 		const [type, to] = [m[1]!, m[2]!];

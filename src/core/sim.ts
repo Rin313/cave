@@ -32,18 +32,24 @@ export interface World {
 }
 
 /** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
- *  关系变更 prop 编码为 `rel:<type>@<to>`（entity 为 from 端点），表达层据此格式化。 */
+ *  关系变更 prop 编码为 `rel:<type>@<to>`（entity 为 from 端点），表达层据此格式化。
+ *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 本就可建边，配合 spawn 可让世界生长）。
+ *  despawn 只级联清理核心结构（关系边/焦点/痕迹）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "inc"; entity: string; prop: string; by: number }
 	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean }
-	| { op: "relInc"; from: string; to: string; type: string; by: number };
+	| { op: "relInc"; from: string; to: string; type: string; by: number }
+	| { op: "spawn"; entity: Entity }
+	| { op: "despawn"; entity: string };
 
 export interface Change {
 	entity: string;
 	prop: string;
 	from: PropValue;
 	to: PropValue;
+	/** 实体生灭标记（spawn/despawn；普通属性变更缺省）。 */
+	op?: "spawn" | "despawn";
 	/** 变更来源（law:spread / rule:move / system:burnout），审计与回滚依据。 */
 	src?: string;
 }
@@ -179,6 +185,8 @@ export const D = {
 	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
 	relSet: (from: string, to: string, type: string, value: number | string | boolean): Delta => ({ op: "relSet", from, to, type, value }),
 	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
+	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
+	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
 
 /** 动词定义助手：规则参数 p 由 TypeBox schema 推导为编译期类型（边界处已完成 schema 校验）。 */
@@ -206,7 +214,9 @@ export function defineVerb<S extends TObject>(spec: {
 function collectInvolved(deltas: Delta[], facts: Fact[] = []): string[] {
 	const s = new Set<string>();
 	for (const d of deltas) {
-		if (d.op === "set" || d.op === "inc") s.add(d.entity);
+		if (d.op === "spawn") s.add(d.entity.id);
+		else if (d.op === "despawn") s.add(d.entity);
+		else if (d.op === "set" || d.op === "inc") s.add(d.entity);
 		else {
 			s.add(d.from);
 			s.add(d.to);
@@ -261,6 +271,9 @@ export interface GameDef {
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
 	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
 	probeScope?: (world: World, actor: string) => string[];
+	/** 动作空间接地开关：映射 prompt 是否注入 affordances 枚举（缺省 true）。
+	 *  发现式游戏应关闭——「世界会授予什么」的菜单会剧透世界，试错本身就是玩法。 */
+	affordances?: boolean;
 	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
 	reactiveSystems?: boolean;
 	/** 回合级时间驱动：引擎每回合动作裁决后、表达前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
@@ -543,7 +556,7 @@ export class Simulation {
 		const changes = this.commit(deltas, src);
 		const inv = this.checkInvariants();
 		if (inv) {
-			// 回滚：先删掉提交期间新建的键（relations/nextId 等快照中不存在的），再整体恢复。
+			// 回滚：先删掉提交期间新建的键（relations 等快照中不存在的），再整体恢复。
 			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
 			Object.assign(this.world, before);
 			const denial: Denial = inv.authored
@@ -608,7 +621,7 @@ export class Simulation {
 	private updateFocus(r: { ok: boolean; denial?: Denial; involved?: string[] }, action: Action, beforeVisible: Set<string>): void {
 		if (r.ok) {
 			const revealed = [...this.visible()].filter((id) => id !== this.actor && !beforeVisible.has(id));
-			const id = revealed.length ? revealed[0] : (this.firstEntityParam(action) ?? r.involved?.find((x) => x !== this.actor));
+			const id = revealed.length ? revealed[0] : (this.firstEntityParam(action) ?? r.involved?.find((x) => x !== this.actor && this.world.entities.some((e) => e.id === x)));
 			if (id) this.world.focus = id;
 		} else {
 			const subj = r.denial?.subject;
@@ -741,7 +754,8 @@ export class Simulation {
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
 			const res = sys.run(this.query({}));
-			if (!res || res.deltas.length === 0) continue;
+			// 纯氛围输出（fact-only，无状态变更）同样成立——氛围系统的合法通道
+			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			const cc = this.commitChecked(res.deltas, src);
 			if (!cc.ok) {
 				emit({
@@ -798,6 +812,23 @@ export class Simulation {
 			else rels.push({ from, to, type, value });
 		};
 		for (const d of deltas) {
+			if (d.op === "spawn") {
+				if (entity(this.world, d.entity.id)) continue;
+				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
+				changes.push({ entity: d.entity.id, prop: "", from: null, to: null, op: "spawn", src });
+				continue;
+			}
+			if (d.op === "despawn") {
+				const i = this.world.entities.findIndex((e) => e.id === d.entity);
+				if (i < 0) continue;
+				const gone = this.world.entities[i]!;
+				this.world.entities.splice(i, 1);
+				this.world.relations = (this.world.relations ?? []).filter((r) => r.from !== d.entity && r.to !== d.entity);
+				if (this.world.focus === d.entity) this.world.focus = null;
+				delete this.world.traces?.[d.entity];
+				changes.push({ entity: d.entity, prop: "", from: null, to: gone.name, op: "despawn", src });
+				continue;
+			}
 			if (d.op === "relSet") {
 				const from = relVal(this.world, d.from, d.to, d.type);
 				if (from === d.value) continue;

@@ -8,6 +8,8 @@ export interface DeclCtx {
 	involved: Set<string>;
 	changes: Change[];
 	pending: Change[];
+	/** 本回合消逝的实体（despawn）：叙述其消失合法，豁免可见性检查。 */
+	vanished?: Set<string>;
 }
 
 /** 本回合涉及集 ∪ 变更/即将发生实体（rel 变更按字符串编码解析对端，见 sim.ts 的 rel:type@to）。 */
@@ -44,11 +46,11 @@ export function validateFactIds(facts: StructuredFact[], ctx: DeclCtx): string[]
 		}
 		for (const id of f.entities) {
 			const e = ctx.world.entities.find((x) => x.id === id);
-			if (!e || !ctx.visible.has(id)) {
+			if ((!e || !ctx.visible.has(id)) && !ctx.vanished?.has(id)) {
 				errors.push(`声明「${f.statement}」提及了不存在的实体「${id}」。`);
 				continue;
 			}
-			if (!touched.has(id)) errors.push(`声明「${f.statement}」提及了未涉及的实体「${e.name}」。`);
+			if (!touched.has(id)) errors.push(`声明「${f.statement}」提及了未涉及的实体「${e?.name ?? id}」。`);
 		}
 	}
 	return errors.length ? errors : null;

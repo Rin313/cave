@@ -1,7 +1,5 @@
 # 技术架构决策记录
 
-> 本文档记录与 DESIGN.md 平行的技术选型与工程决策，随讨论持续更新。未决项写入 §4。
-
 ## 1. 已确定的技术栈
 
 | 层 | 选型 | 说明 |
@@ -25,7 +23,7 @@
    | 拒绝 §4.2 | 结构化拒绝（仅 label）+ `considered` 交规则裁决：理由由规则/denyAll 给出，映射 pass 不产散文 |
 
 3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给 act + declare 两个 tool：映射阶段模型 `act`（提案 actions）或写文字；表达阶段模型先用 `declare` 声明本回合新事实（可选，可多次调用、回合内逐条校验反馈）、随后输出散文正文；`execute()` 内部就是规则裁决/校验边界。
-4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给 Vue。
+4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给前端。
 5. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的（不再硬编码 apply/move/set）。
 
 6. **上下文裁剪已启用（`context` 事件 + 近况记录）**：每次 LLM 调用前经内联扩展（`DefaultResourceLoader.extensionFactories` 的 `cave-context`，`core/context.ts` 为策略单一来源）把消息裁剪为「近况记录 + 当前运行后缀」——后缀 = 最后一条 user 消息起的原样保留（toolCall/toolResult 配对天然完整），近况 = 最近 6 回合的「意图 → 世界腔裁决行」，并入该 user 消息头部。会话文件仍累积全量消息作审计；近况另以 custom 条目持久化于同一文件（custom 不参与 LLM 上下文），进程重启由其重建窗口。**缓存代价是显式决策**：状态每回合重注入使消息前缀天然不稳定，跨调用前缀复用只剩 [tools+system] 头块——因此系统提示与工具数组必须字节级稳定（易变状态一律走 per-turn prompt，禁入系统提示），且不做 setActiveTools 相位切换（工具块位于序列化前缀头部，每次切换即整体前缀失效）。compaction 保持关闭：pi 缺省摘要是编码任务形状、且把旧叙述摘要重新注入，与「模拟层唯一真相源」相悖；长度兜底走显式新开会话。资源发现全部关闭（noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles）：cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt。
@@ -33,13 +31,14 @@
 ## 2.5 GameDef 表面契约
 
 - **`verbs`**：游戏声明的动词表，每个动词含 `schema`（TypeBox，生成 act 工具参数校验，并经 `defineVerb` 推导规则参数的编译期类型）、`entityParams`（哪些参数是实体 id，供可见性校验）、`candidates`（非实体参数的候选值，动作空间接地与探测共用）、`rules`（卫语句式规则函数，按序裁决首个表态即判决；末尾可挂 fallback 兜底规则）。动词集由各游戏声明：era/DoL 类可声明 `talk/travel/equip` 等，开放世界可声明 `attack/trade/craft` 等。`set` 通用动词及其"属性选择器"参数（`propParams`）是错误设计，已移除——"改属性"的语义应由游戏自定的领域动词 + 法则承担。
-- **环境响应（声明式动词，v3 取代软通道）**：非预设的自由动作由游戏声明动词 + 实体不可知法则承担——如 waste 的 `mark`/`examine`，规则按 `canReach` 键控，一条规则覆盖全部可达实体（无 2^N 组合面）。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底（如「湿柴不得燃烧」一条声明式取代逐条守卫）。**软通道已移除（v3）**：`fallback:"soft"`/`access:"soft"`/`Proof`/`proofSchema`/`softAdjudicate`/`normalizeProof` 全删（研究结论见 §5-8~11）——AI 提后果与实体不可知法则在 e2e 上等价且可写面相同，却带授予理由退化与静默假授予 bug；移除后 DESIGN §1「AI 不产生系统后果」重新成立。
-- **动作空间接地**：`Simulation.affordances()` 每回合枚举 动词 × 可见实体 × `candidates` 的只读裁决 `check()`，把当前世界会授予的动作注入映射 prompt（预算按动词均分）。**施动工具参数（`instrumentParams`）在枚举时自动跳过不可持握实体**——固定在地面、搬不动的重物不再出现在施动位。映射层仍可提出动作空间之外的动作，由规则层裁决。
-- **`Rule`（卫语句式规则，按动词分组，v4 取代 Expr/Law AST 解释器）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/actor/time/params + `rel/relNum/roll/canReach/name` 等引擎语义唯一入口），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses），解释器的隐式控制流（短路吞没、denial 记录覆写）不复存在。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc`），LLM 不提案数值。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。**迁移依据见 §5-13**：法则不序列化、不被静态分析、不构成沙箱边界，数据化只留下成本——分界线落在快照上：跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码；隐式语义显式化为具名入口（如 `relNum` 的缺边缺省在调用点写明）。
+- **环境响应（声明式动词，取代软通道）**：非预设的自由动作由游戏声明动词 + 法则承担——法则网络形态按属性键控一条规则覆盖全部可达实体；authored 形态（yume）则逐实体书写互动子句。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底。
+- **动作空间接地**：`Simulation.affordances()` 每回合枚举 动词 × 可见实体 × `candidates` 的只读裁决 `check()`，把当前世界会授予的动作注入映射 prompt（预算按动词均分）。**施动工具参数（`instrumentParams`）在枚举时自动跳过不可持握实体**——固定在地面、搬不动的重物不再出现在施动位。映射层仍可提出动作空间之外的动作，由规则层裁决。**`GameDef.affordances:false` 整体关闭接地注入**：发现式世界的菜单即剧透，试错本身是玩法（yume 启用）。
+- **`Rule`（卫语句式规则，按动词分组，取代 Expr/Law AST 解释器）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/actor/time/params + `rel/relNum/roll/canReach/name` 等引擎语义唯一入口），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses），解释器的隐式控制流（短路吞没、denial 记录覆写）不复存在。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc/spawn/despawn`——生灭原语让梦核/authored 世界可动态生长，despawn 级联清理核心结构、悬空 id 引用由完整性硬墙回滚），LLM 不提案数值。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。**迁移依据见 §5-13**：法则不序列化、不被静态分析、不构成沙箱边界，数据化只留下成本——分界线落在快照上：跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码；隐式语义显式化为具名入口（如 `relNum` 的缺边缺省在调用点写明）。
 - **`fallback` 兜底规则**：动词末尾的无条件拒绝规则，其 Denial 带 `fallback: true` 结构化标记（取代 `denyAll.` 前缀字符串分类）；runner 对全部规则未表态的动作回落 noResponse（同样计为 denyAll）。散文内联在规则文本里，`sim probe` 据标记报告法则缺口。
 - **拒绝文案内联（取代 `denialTemplates` 并行映射）**：拒绝理由以世界腔字符串直书在规则代码里（`deny(law, { reason })`），缺省回落 `messages.noResponse`——"一个行为的文案与其条件同处一处"。core 产出的拒绝由 `Messages` 注入语言：施动工具前提（`instrumentUnholdable`/`instrumentUnreachable`，收工具名）、不可见实体（`invisibleEntity`，可选，收解析后的实体名）。**不变式按产出方渲染**：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案（取代 invariantRejected 手工分流）。
 - **校验收敛与协议性拒绝**：动词存在/schema/实体可见性校验从 act 工具收敛进 `Simulation.adjudicateRaw` 单一瓶颈（严格校验器构造期从动词 schema 编译，additionalProperties:false），场景/CLI/probe 与 LLM 入口同一裁决口径。裁决门顺序：未知动词 → schema → 施动工具前提 → 可见性 → 规则。三类结构化拒绝：`action.unknown` / `action.schema` 为**协议性拒绝**（`deniedBy:"protocol"`，映射层形态错误属引擎↔模型通道流量，表达层整体过滤、理由回落 noResponse，诊断进 `Denial.debug`）；`action.invisible` 为世界性拒绝（已存在但不可见的实体用游戏自己的 `reachReason` 槽位解释，幻觉 id 无名字回落通用文案；工具参数的不可达由 instrument 门优先点名工具）。**Messages 收窄**：契约只收解析后的 referent（名字），不收 id/属性名；机器诊断一律走 `Denial.debug`。
-- **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas（火蔓延、燃尽、日程等）。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交后立即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱等"动作→世界响应"的因果链在当回合成立，不依赖显式 wait。reactive 产出并入动作的 StepResult（facts/involved 合并），不重复入日志。**`turnTicks`（GameDef 可选，缺省 0）是回合级时间驱动**：引擎在 act() 的动作裁决后、表达前 `sim.tick(n)` 并把 elapsed 并入表达输入/声明契约/近况，不计入 ActOutcome.results（kind 只反映玩家动作）；缺省 0 保持既有行为，waste 启用 1。
+- **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas/facts（火蔓延、燃尽、日程等）；**fact-only 输出合法**——零状态变更的纯氛围事实（如梦中低语）同样成立并进入表达输入与声明契约。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交后立即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱等“动作→世界响应”的因果链在当回合成立，不依赖显式 wait。reactive 产出并入动作的 StepResult（facts/involved 合并），不重复入日志。**`turnTicks`（GameDef 可选，缺省 0）是回合级时间驱动**：引擎在 act() 的动作裁决后、表达前 `sim.tick(n)` 并把 elapsed 并入表达输入/声明契约/近况，不计入 ActOutcome.results（kind 只反映玩家动作）；缺省 0 保持既有行为，yume 启用 1。
+- **两种创作形态（authorial regimes）**：**法则网络形态**——规则按属性组合键控、随新实体自动泛化（承重墙针对此形态，防组合爆炸）；**authored 形态**——梦核/脚本化世界的正当写法：互动按实体逐个书写（每条一个卫语句子句 + 兜底）、效果改写互动结果、实体生灭与动态拓扑。两形态共用同一套裁决瓶颈、提交硬墙与表达契约，差异只在作者书写风格与不变式密度，core 不感知形态（先例：yume 以四动词、零领域不变式、两氛围系统实现「发现即玩法」）。
 - **`grounding`**：可见实体索引钩子，决定哪些实体进 LLM 序列化；缺省全部可见。**`reach`/`reachReason`（GameDef 可选）是可达性空槽**：`P.reach`/施动工具前提共用的谓词，缺省全可达、无理由——core 不内嵌任何空间模型；容器包含树语义是游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`/`reachFor`），需要空间语义的游戏自选接入。**`holdable`（GameDef 可选）是可持握空槽**：施动工具前提/`wieldable` 共用的谓词（`wieldable = holdable + reach`），core 不提供缺省——未声明的游戏一律不可持握；可持握语义（grabbable 属性、体力门槛、材质、锋利等）由游戏声明，与 `reach` 同一模式。
 - **`messages`**（GameDef 必填）：core 产出的用户可见文案（时间流逝、施动工具前提、不可见实体等）由游戏注入自有语言；core 不内嵌任何语言。**契约只收解析后的 referent（实体名），不收 id/属性名**——机器诊断一律走 `Denial.debug`；协议性拒绝与 core 完整性不变式违反回落 `noResponse`。可达性理由文案内置于游戏侧空间构件 `src/games/space.ts`（`SpaceOpts.msgs` 可覆盖），不进 Messages。
 - **`probeScope`**（GameDef 可选）：法则探测域钩子，决定 `sim probe` 枚举动作参数候选时使用的实体集；缺省 = 可见实体 - 玩家 - `space` 标记的场景实体。大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。
@@ -58,7 +57,7 @@
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`props`（属性注册表：type/label/internal/stylistic）。
 - **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性（`integrityInvariant`：实体 id 唯一、id 型属性/关系端点/焦点指向存在的实体），游戏可追加领域不变式（如「燃着必须明火」）。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式（如 village 的 `coins.conserved`：铜币总量 == 初始世界总量），凭空铸币/灭币一律被回滚。
 - **core 只提供通用工具，不耦合游戏**：状态化 rng 已移除——随机由 games 层以 World 状态自持（纯函数派生），`World` 即完整真相源，check/apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`roll`（确定性骰子，`hashStr(time#key)` 派生 [1,sides]，key 需同 tick 唯一——规则经 `Q.roll(key, sides)` 调用，check/apply/dryTick 天然一致）、`sumProp`（聚合助手，守恒不变式用）、`reach`/`reachReason`（可达性空槽，空间构件由游戏自选，如 `src/games/space.ts`）、`holdable`（可持握空槽，游戏必须声明，core 不提供缺省，可持握语义由游戏自定）、`integrityInvariant`（引用完整性硬墙）。引擎隐式语义经只读上下文 `Q` 具名入口收口（`q.time` 读时刻、`q.roll` 骰子等）。多时间尺度（回合/日/月）由游戏自持（`world.day` 等计数器，systems 内按 `q.time` 判定），core 不内置历法。
-- **games 层怎么写都没有问题，且永不耦合进 core**：games 代码允许任意写法与重复样板（含按实体键控的特判、逐游戏重复的 digest/summarize/label 派生）——这是创作者的自由，不是待修的债；即便多个游戏收敛出相同形态，也不得「提升为 core 工具」——core 吸收游戏侧形态即开始耦合游戏、挤压其余游戏的写法空间。共享的游戏侧语义只走 games/ 内自愿接入的构件（先例：`src/games/space.ts`）。
+- **games 层怎么写都行，且永不耦合进 core**：games 代码允许任意写法与重复样板（含按实体键控的特判、逐游戏重复的 digest/summarize/label 派生）——这是创作者的自由，不是待修的债；即便多个游戏收敛出相同形态，也不得「提升为 core 工具」——core 吸收游戏侧形态即开始耦合游戏、挤压其余游戏的写法空间。共享的游戏侧语义只走 games/ 内自愿接入的构件（先例：`src/games/space.ts`）。
 
 ## 3. 持久化边界
 
@@ -70,14 +69,7 @@
 | `messages` | 回合历史：用户操作、映射结果、表达层输出（回放/审计） |
 | `sessions` | pi SDK 会话索引（SDK 自己写 JSONL，这里只存元数据 + 映射关系） |
 
-## 4. 待确认的开放问题
-
-1. **SQLite 驱动**：优先 `node:sqlite`（Node 22.5+ 内置、零原生编译、零 rebuild），需实测 API 是否够用（同步 API、参数化、事务）。不够再退 `better-sqlite3`（原生模块，需 electron-rebuild 对齐 ABI）。
-2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
-3. **模拟层**：动作空间为游戏声明动词表（`verbs`），不再硬编码 apply/move/set；era 类社会性动作可声明为新动词。数据结构 `Rule → Verdict → Delta`、只读裁决 `check()`（`apply` 的裁决/提交拆分，动作空间接地与探测共用）、法则完整性检查工具 `sim probe`（按 `deniedBy === "denyAll"` 报法则缺口）均已落地（§2.5）。probe 的缺口分组按 `def.verbs` 动态生成（不再硬编码 use/move/set），组合预算由 `--max` 控制（缺省 10000，按动词均分，超出报 truncated）或经 `probeScope` 收窄候选域。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测「法则本身是否会在不可持握工具上授予」，报告作者漏声明前提的潜在洞（如"用搬不动的重物施力仍被法则授予"即由此发现）。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 laws。
-4. **跨回合指代**：`world.focus` 确定性维护（动作/新见/被拒实体），映射 prompt 注入 `[焦点]`。实测：无回流上下文下，「打开容器 → 把里面的东西拿起来」正确解析到新见物品；「把它关上」被动词约束（物品不可 open）正确回落容器。**但 focus 只是优先候选而非硬绑定**，多实体歧义场景仍可能失败；上下文可裁剪已落地（§2-6）：LLM 每次调用只见近况窗口 + 当前运行后缀，指代锚点 = 确定性 focus + 近况记录。
-
-## 5. 研究与验证经验
+## 4. 研究与验证经验
 
 1. **端到端 `loop` 才是有效验证，`sim` 只验证确定性裁决。** `sim scenario` 断言"能授予/能拒绝 + 状态正确"，但真实质量（自由文本意图能否被映射到正确动词、表达层能否零幻觉叙述）只有 `loop` 能测。**sim 全绿 ≠ 可用**；验证新机制必须跑 loop。
 2. **LLM 有随机性，单次 e2e 结果带噪声。** 同一意图两次跑可能映射到不同动词，且同一会话内世界状态会级联（前一步点燃了柴 → 下一步"泼湿"被不变式回滚）。做机制对比要控制变量：**同世界、同开局、同意图集、每组独立开局**；跨回合级联导致的差异不要误判为机制差异。
