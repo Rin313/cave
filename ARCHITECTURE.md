@@ -19,7 +19,7 @@
    | DESIGN.md 层 | pi SDK 落点 |
    |---|---|
    | 映射层 §4.2 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；映射 pass 只产结构化结果 |
-   | 表达层 §4.3 | 第二个自定义 tool `declare`（新事实声明，取代 `[facts:]` 首行格式约定）+ session 的普通文本输出（`text_delta` 流式）；在状态变更后的独立 prompt（双 pass），输入 = 当前状态 + changes + 法则 facts |
+   | 表达层 §4.3 | 第二个自定义 tool `declare` + session 的普通文本输出（`text_delta` 流式）；在状态变更后的独立 prompt（双 pass），输入 = 当前状态 + changes + 法则 facts |
    | 模拟层 §4.1 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 §9 | AgentSession 自带：messages + compact() + SessionManager；叙述不回流（幻觉不固化） |
    | 拒绝 §4.2 | 结构化拒绝（仅 label）+ `considered` 交规则裁决：理由由规则/denyAll 给出，映射 pass 不产散文 |
@@ -34,14 +34,12 @@
 - **环境响应（声明式动词，v3 取代软通道）**：非预设的自由动作由游戏声明动词 + 实体不可知法则承担——如 waste 的 `mark`/`examine`，规则按 `canReach` 键控，一条规则覆盖全部可达实体（无 2^N 组合面）。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底（如「湿柴不得燃烧」一条声明式取代逐条守卫）。**软通道已移除（v3）**：`fallback:"soft"`/`access:"soft"`/`Proof`/`proofSchema`/`softAdjudicate`/`normalizeProof` 全删（研究结论见 §5-8~11）——AI 提后果与实体不可知法则在 e2e 上等价且可写面相同，却带授予理由退化与静默假授予 bug；移除后 DESIGN §1「AI 不产生系统后果」重新成立。
 - **动作空间接地**：`Simulation.affordances()` 每回合枚举 动词 × 可见实体 × `candidates` 的只读裁决 `check()`，把当前世界会授予的动作注入映射 prompt（预算按动词均分）。**施动工具参数（`instrumentParams`）在枚举时自动跳过不可持握实体**——固定在地面、搬不动的重物不再出现在施动位。映射层仍可提出动作空间之外的动作，由规则层裁决。
 - **`Rule`（卫语句式规则，按动词分组，v4 取代 Expr/Law AST 解释器）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/actor/time/params + `rel/relNum/roll/canReach/name` 等引擎语义唯一入口），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses），解释器的隐式控制流（短路吞没、denial 记录覆写）不复存在。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc`），LLM 不提案数值。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。**迁移依据见 §5-13**：法则不序列化、不被静态分析、不构成沙箱边界，数据化只留下成本——分界线落在快照上：跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码；隐式语义显式化为具名入口（如 `relNum` 的缺边缺省在调用点写明）。
-- **开放通道（反向解析，`fallback: "proven"`，已移除）**：非预设动词不接受 AI 手写 deltas——proof 给 `claims`（前置事实，须为真）+ `desired`（期望后果），`resolveUnscripted` 在开放法则（`Law.open` 标记或 `GameDef.openLaws`）中反查：对每条法则用 desired 解出变量绑定（效果模板形状匹配），forward 求值后若其后果覆盖 desired，**经该法则提交**（级联/不变式/痕迹照常）。未命中落 `denyAll.*`。这是"AI 提后果、世界走法则"的重量机制：无开放法则能产出的后果（凭空改材质、传送不可持握物）一律被拒。`openLawsOf(def)` 汇集 `GameDef.openLaws` + 动词 laws 中 `open:true` 者。
-
-  **已移除（v2→v3，替换为环境响应声明式动词）**：精确模板匹配把"自由面"绑定到法则枚举——每加一种环境写需一条法则、每加一个属性组合需 2^N 组合法则，交互面随法则量膨胀，即"菜单化"。v2 曾由 `fallback: "soft"` 软通道承担（`Law.open` / `GameDef.openLaws` / `resolveUnscripted` 已删；点燃/采集/移动/开合迁为预设 law 动词）；v3 研究证明软通道与实体不可知法则等价（§5-8），且软通道自身带授予理由退化与静默假授予 bug（§5-9），已一并移除，环境响应改由实体不可知法则承担（见上）。
 - **`fallback` 兜底规则**：动词末尾的无条件拒绝规则，其 Denial 带 `fallback: true` 结构化标记（取代 `denyAll.` 前缀字符串分类）；runner 对全部规则未表态的动作回落 noResponse（同样计为 denyAll）。散文内联在规则文本里，`sim probe` 据标记报告法则缺口。
-- **拒绝文案内联（取代 `denialTemplates` 并行映射）**：拒绝理由以世界腔字符串直书在规则代码里（`deny(law, { reason })`），缺省回落 `messages.noResponse`——"一个行为的文案与其条件同处一处"。core 产出的拒绝（施动工具前提 `instrument.*`、不变式硬墙 `invariant.*`）由 `Messages` 的 `instrumentUnholdable`/`instrumentUnreachable`/`invariantRejected` 注入语言。
+- **拒绝文案内联（取代 `denialTemplates` 并行映射）**：拒绝理由以世界腔字符串直书在规则代码里（`deny(law, { reason })`），缺省回落 `messages.noResponse`——"一个行为的文案与其条件同处一处"。core 产出的拒绝由 `Messages` 注入语言：施动工具前提（`instrumentUnholdable`/`instrumentUnreachable`，收工具名）、不可见实体（`invisibleEntity`，可选，收解析后的实体名）。**不变式按产出方渲染**：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案（取代 invariantRejected 手工分流）。
+- **校验收敛与协议性拒绝**：动词存在/schema/实体可见性校验从 act 工具收敛进 `Simulation.adjudicateRaw` 单一瓶颈（严格校验器构造期从动词 schema 编译，additionalProperties:false），场景/CLI/probe 与 LLM 入口同一裁决口径。裁决门顺序：未知动词 → schema → 施动工具前提 → 可见性 → 规则。三类结构化拒绝：`action.unknown` / `action.schema` 为**协议性拒绝**（`deniedBy:"protocol"`，映射层形态错误属引擎↔模型通道流量，表达层整体过滤、理由回落 noResponse，诊断进 `Denial.debug`）；`action.invisible` 为世界性拒绝（已存在但不可见的实体用游戏自己的 `reachReason` 槽位解释，幻觉 id 无名字回落通用文案；工具参数的不可达由 instrument 门优先点名工具）。**Messages 收窄**：契约只收解析后的 referent（名字），不收 id/属性名；机器诊断一律走 `Denial.debug`。
 - **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas（火蔓延、燃尽、日程等）。**`reactiveSystems`（GameDef 可选，默认 false）开启后，granted 动作提交后立即按序跑一次 systems**——把火源放入易燃物当场引燃、开箱触发陷阱等"动作→世界响应"的因果链在当回合成立，不依赖显式 wait。reactive 产出并入动作的 StepResult（facts/involved 合并），不重复入日志。
 - **`grounding`**：可见实体索引钩子，决定哪些实体进 LLM 序列化；缺省全部可见。**`reach`/`reachReason`（GameDef 可选）是可达性空槽**：`P.reach`/施动工具前提共用的谓词，缺省全可达、无理由——core 不内嵌任何空间模型；容器包含树语义是游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`/`reachFor`），需要空间语义的游戏自选接入。**`holdable`（GameDef 可选）是可持握空槽**：施动工具前提/`wieldable` 共用的谓词（`wieldable = holdable + reach`），core 不提供缺省——未声明的游戏一律不可持握；可持握语义（grabbable 属性、体力门槛、材质、锋利等）由游戏声明，与 `reach` 同一模式。
-- **`messages`**（GameDef 必填）：core 产出的用户可见文案（校验层拒绝、时间流逝等）由游戏注入自有语言；core 不内嵌任何语言，缺省为空、倒逼游戏声明。可达性理由文案内置于游戏侧空间构件 `src/games/space.ts`（`SpaceOpts.msgs` 可覆盖），不进 Messages。
+- **`messages`**（GameDef 必填）：core 产出的用户可见文案（时间流逝、施动工具前提、不可见实体等）由游戏注入自有语言；core 不内嵌任何语言。**契约只收解析后的 referent（实体名），不收 id/属性名**——机器诊断一律走 `Denial.debug`；协议性拒绝与 core 完整性不变式违反回落 `noResponse`。可达性理由文案内置于游戏侧空间构件 `src/games/space.ts`（`SpaceOpts.msgs` 可覆盖），不进 Messages。
 - **`probeScope`**（GameDef 可选）：法则探测域钩子，决定 `sim probe` 枚举动作参数候选时使用的实体集；缺省 = 可见实体 - 玩家 - `space` 标记的场景实体。大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。
 - **泄漏检查（`leakageCheck` 已移除）**：散文正文曾有一道"只禁实现工件"的通用泄漏检查（JSON 键值对形态、声明头 `[facts:` 复现、「实现形状」的 id/属性名词边界匹配）。研究与 `forbiddenTerms` 同源：标识符分支是词表式匹配，纯小写豁免规则（`!/^[a-z]+$/`）本身是语言假设、与"引擎不感知语言"的立场矛盾，且与系统提示"不得写出 id/属性名"重复——豁免规则把纯小写世界整体排除在守卫面外，其实际守卫面仅剩非纯小写标识符这一自设窄面。任何校验误触发都会走重试/摘要回退路径。 整机制随 `forbiddenTerms` 一并移除——正文不再有机械检查，忠实性只由声明契约（新事实 ⊆ 状态可推导集）+ 提交硬墙承担；JSON dump 等格式崩坏由 declare 工具的参数 schema 天然拦截。语言相关的词汇约束**不设硬拦截**（`forbiddenTerms` 已移除）：语言是 LLM 的原生能力，交给 prompt 设计与模型合规，词表式硬约束不提高游戏上限、只引入维护负担。
 - **`props`（属性注册表）**：`{ prop: { type, label?, internal?, stylistic? } }`。`internal: true` 的属性（如 `burnTicks`、`actor` 标记）不进 LLM 序列化 / changes / 表达校验，从源头杜绝泄漏；`label` 是属性世界化说法（拒绝/变更文本用），**并是表达 prompt 变更馈送的默认渲染源**——「本回合尝试/即将发生」用实体名 + `label` 做语言无关线性化（`fmtChange`，`name.label: from → to`，core 只做符号连接、不内嵌语言词），不再输出 raw `entity.prop`（A/B 实证无回归，且消除与「不写出 id/属性名」约束的自相矛盾；缺 label 回退 raw 属性名，可见属性应声明 label）；`stylistic: true` 标记润饰属性（表达层可文学润饰，如「刻痕斑驳」）。`internalPropsOf(def)` / `stylisticPropsOf(def)` 派生内部/润饰属性集。
@@ -49,7 +47,7 @@
 - **表达层声明契约（唯一契约 structured，工具化）**：新事实经第二个自定义工具 `declare` 以结构化参数提交（每条 `{ entities: string[], statement }`），涉及集推导与校验集中在 `core/declare.ts`（单一来源：`validateFactIds`）。校验为集合成员判断——实体须可见且属本回合**状态可推导集**（touched：actor + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数；被拒动作参数不在内——被拒动作未改变任何状态），无名字回退。逐条错误即时返回，模型在同一 turn 内自我纠正（无需重试 prompt）。**`[facts:]` 首行格式约定 + 正则解析已移除**（`parseDeclaration`/`parseFactIds`/`validateDecl`/`Decl` 全删，实证见 §5-12）：散文正文即纯文本输出，不再剥首行。
 - **`summarize`**：确定性回退摘要钩子（游戏腔调、可读），缺省用引擎的通用 JSON 序列化。
 - **`digest`**：序列化投影钩子（GameDef 可选），决定状态以什么形态进映射/表达 prompt；缺省 = `serialize()` 全量 JSON。游戏可裁剪冗余字段、格式化关系边、聚焦点置顶，以控制 prompt 体积。
-- **`deniedBy: "rule" | "denyAll"`**：否决来源语义标记；`sim probe` 依此报告规则缺口，不依赖理由字符串匹配。
+- **`deniedBy: "rule" | "denyAll" | "protocol"`**：否决来源语义标记；`sim probe` 依此报告规则缺口（只认 denyAll），不依赖理由字符串匹配；protocol（映射层形态错误）不进玩家叙述。
 - **焦点与拒绝痕迹**：`Simulation` 确定性维护 `world.focus`（本回合动作/新见/被拒实体，跨回合指代锚点）与 `world.traces`（实体 id → 累计被拒次数，拒绝痕迹）。二者进序列化，映射 prompt 注入 `[焦点]` 提示（「它/那个」优先指向 focus，但以玩家显式提到的实体为准）。
 - **关系边表**：`world.relations` 为 `{ from, to, type, value }` 边表，表达社会/叙事状态（信任、记忆、派系）。规则以 `relSet/relInc` 变更，核心提供 `relVal/relAll` 查询。变更在表达层格式化为「from 对 to 的 type」的世界腔文本，快照/克隆/序列化完整保留。
 - **refusal 契约**：act 工具 `refusal` 只含 `label`。**理由一律由规则层产出，模型不撰写拒绝理由**：模型直接提交 action 由规则层裁决（否认 → 规则 denyReason，授予 → 执行）；纯拒绝（label）进审计，表达层自然回应。`refusal.considered`（模型预判被拒的动作交规则裁决以纠正误判）为**未实现的未来优化**。`sim probe` 可把 refusal 标签纳入覆盖报告。
@@ -75,11 +73,7 @@
 1. **SQLite 驱动**：优先 `node:sqlite`（Node 22.5+ 内置、零原生编译、零 rebuild），需实测 API 是否够用（同步 API、参数化、事务）。不够再退 `better-sqlite3`（原生模块，需 electron-rebuild 对齐 ABI）。
 2. **Electron + ESM 的坑**：pi SDK 是 ESM（`"type": "module"`），Electron 主进程 ESM 支持已成熟，但 preload 脚本必须是 CJS 或需特殊处理。待脚手架验证。
 3. **模拟层**：动作空间为游戏声明动词表（`verbs`），不再硬编码 apply/move/set；era 类社会性动作可声明为新动词。数据结构 `Rule → Verdict → Delta`、只读裁决 `check()`（`apply` 的裁决/提交拆分，动作空间接地与探测共用）、法则完整性检查工具 `sim probe`（按 `deniedBy === "denyAll"` 报法则缺口）均已落地（§2.5）。probe 的缺口分组按 `def.verbs` 动态生成（不再硬编码 use/move/set），组合预算由 `--max` 控制（缺省 10000，按动词均分，超出报 truncated）或经 `probeScope` 收窄候选域。**新增 `latent` 审计**：对 `instrumentParams` 拦截的动作，用 `probeGrant()`（只读、跳过工具前提）探测「法则本身是否会在不可持握工具上授予」，报告作者漏声明前提的潜在洞（如"用搬不动的重物施力仍被法则授予"即由此发现）。probe 盲区：仅覆盖已声明 `instrumentParams` 的动词，未声明者需作者自查 laws。
-4. **解析与忠实性**：
-   - **已落地**：双 pass 分离；表达层后置校验器（仅 `props` 注册表的 internal 标记隔离 + 结构化声明契约——正文不再有词表/形状匹配，`leakageCheck` 已移除；语言相关的词汇约束不设硬拦截，交给 prompt 设计与 LLM）；结构化声明契约（唯一契约，工具化）——经 `declare` 工具结构化提交，校验"声明 id ⊆ 本回合状态可推导集（actor + 法则 facts + 本回合新见 + 变更(from/to)/即将发生 + 授予动作参数；被拒动作参数不在内——被拒动作未改变任何状态）"；`Simulation.dryTick()`（克隆世界）把「即将发生」作为合法预言注入 prompt——**引擎无状态化随机**：随机由 games 层以 World 状态自持（纯函数派生，如 `hashStr(world 计数器)`），世界即完整真相源，dryTick 克隆世界即完整预言，与真实 tick 天然一致，无需序列快照机制。声明校验是集合成员判断（可靠）；散文正文无词表扫描器（§5-11），只受泄漏检查约束、自由表达。
-   - **预言/已发生区分**：`pending`（即将发生的变更）进声明校验的 touched 集与表达 prompt 的「即将发生」区——预言实体（如「将燃」的容器）可被合法声明，叙述为征兆不算幻觉。原 `checkAssertions` 的 pending 豁免逻辑（weak/strong 断言词区分）随扫描器一并移除（§5-11）。
-   - **未实现**：散文正文与声明的一致性（声明外暗含新事实无法机器拦截，属 NLP 难题）；规则 `facts` 的自动校验。
-5. **跨回合指代**：`world.focus` 确定性维护（动作/新见/被拒实体），映射 prompt 注入 `[焦点]`。实测：无回流上下文下，「打开容器 → 把里面的东西拿起来」正确解析到新见物品；「把它关上」被动词约束（物品不可 open）正确回落容器。**但 focus 只是优先候选而非硬绑定**，多实体歧义场景仍可能失败；上下文可裁剪仍未落地（session 依赖回流与 focus 共同工作）。
+4. **跨回合指代**：`world.focus` 确定性维护（动作/新见/被拒实体），映射 prompt 注入 `[焦点]`。实测：无回流上下文下，「打开容器 → 把里面的东西拿起来」正确解析到新见物品；「把它关上」被动词约束（物品不可 open）正确回落容器。**但 focus 只是优先候选而非硬绑定**，多实体歧义场景仍可能失败；上下文可裁剪仍未落地（session 依赖回流与 focus 共同工作）。
 
 ## 5. 研究与验证经验
 

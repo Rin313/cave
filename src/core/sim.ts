@@ -1,4 +1,5 @@
-import { type Static, type TObject } from "typebox";
+import { Compile } from "typebox/compile";
+import { Type, type Static, type TObject } from "typebox";
 import { roll as rollDice } from "./util.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
@@ -53,22 +54,17 @@ export interface Action {
 	params: Record<string, PropValue>;
 }
 
-/** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言。 */
+/** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言。
+ *  契约只收解析后的 referent（实体名等世界语），不收 id/属性名——机器诊断一律走 Denial.debug。 */
 export interface Messages {
-	/** 所有法则均未表态时的兜底回应。 */
+	/** 所有法则均未表态时的兜底回应；协议性拒绝（映射层形态错误）与 core 完整性不变式违反也回落此文案。 */
 	noResponse: string;
-	/** 动词不存在（core 校验层拒绝，非规则产出）。 */
-	unknownVerb: (verb: string) => string;
-	/** 参数不在动词 schema 声明范围内（core 校验层拒绝）。 */
-	invalidParams: (label: string, known: string) => string;
-	/** 实体参数不可见/不存在（core 校验层拒绝）。 */
-	invisibleEntity: (ids: string[]) => string;
+	/** 实体参数不可见/不存在（core 校验层拒绝）：收已存在实体的解析名；全为幻觉 id 时为空列表。 */
+	invisibleEntity?: (names: string[]) => string;
 	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具不可持握时渲染（name 为工具实体名）。 */
 	instrumentUnholdable?: (name: string) => string;
 	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具可达性不满足时渲染（name 为工具实体名）。 */
 	instrumentUnreachable?: (name: string) => string;
-	/** 不变式硬墙拒绝（core 产出，游戏注入语言）：check 返回的 message 渲染为世界腔文案；缺省回落 messages.noResponse（不泄漏实现消息）。 */
-	invariantRejected?: (id: string, message: string) => string;
 	/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
 	defaultReason: string;
 	/** 行动阶段门闩拦截（表达 pass 中误调 act 工具时的防御性拒绝）。 */
@@ -103,7 +99,7 @@ export interface PropDef {
 	stylistic?: boolean;
 }
 
-/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。 */
+/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。协议性标记由 StepResult.deniedBy:"protocol" 承担（单一事实源），Denial 只携带 referent 与诊断。 */
 export interface Denial {
 	/** 法则标识，如 "move.reach"（审计与探测依据）。 */
 	law: string;
@@ -342,8 +338,8 @@ export interface StepResult {
 	reason: string;
 	changes: Change[];
 	action: Action;
-	/** 否决来源：具体法则给了世界性理由（rule），还是落到通用兜底（denyAll.* 法则）。 */
-	deniedBy?: "rule" | "denyAll";
+	/** 否决来源：具体法则给了世界性理由（rule）、通用兜底（denyAll），还是映射层形态错误的协议性拒绝（protocol，引擎↔模型通道流量，表达层整体过滤）。 */
+	deniedBy?: "rule" | "denyAll" | "protocol";
 	/** 结构化拒绝（deniedBy=rule 时给出），供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
@@ -407,11 +403,16 @@ export class Simulation {
 	readonly log: StepResult[] = [];
 	/** 探测模式：跳过施动工具前提（instrumentParams）检查，仅 probeGrant 临时开启，审计「规则本身是否会在不可持握工具上授予」。 */
 	private probeSkipInstruments = false;
+	/** 动词参数严格校验器（additionalProperties:false），构造期从动词 schema 编译——所有入口（act 工具/场景/CLI/probe）共用同一裁决瓶颈。 */
+	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
 
 	/** 缺省克隆 def.world 作为初始世界；显式传入 world（存档恢复/dryTick 克隆源）则以其为完整真相。 */
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
+		for (const [name, v] of Object.entries(def.verbs)) {
+			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
+		}
 	}
 
 	get actor(): string {
@@ -444,13 +445,32 @@ export class Simulation {
 	}
 
 	private adjudicateRaw(action: Action): RawResult {
+		const msgs = messagesFor(this.def);
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
-			return { ok: false, reason: messagesFor(this.def).unknownVerb(action.verb), changes: [], deltas: [], action, deniedBy: "rule" };
+			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.unknown", debug: `verb:${action.verb}` } };
 		}
+		if (!this.validators.get(action.verb)!.Check(action.params)) {
+			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.schema", debug: this.schemaErrors(action.verb, action.params) } };
+		}
+		// 施动工具前提先于可见性：工具够不够得着是关于「手」的问题，能点名工具（比通用不可见文案更具体）；
+		// 不存在的 id 由 instrument 跳过、交给可见性门兜住。
 		const inst = this.probeSkipInstruments ? null : this.instrumentViolation(action, verb);
 		if (inst) {
 			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
+		}
+		// 可见性按当前状态逐动作计算：同一提案内的多动作（如先 travel 再移动实体）不沿用旧快照。
+		const curVis = this.visible();
+		const invalid = (verb.entityParams ?? [])
+			.map((p) => action.params[p])
+			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
+		if (invalid.length) {
+			// 已存在但不可见的实体用游戏自己的可达性理由解释（关着的容器/不在本地）；幻觉 id 无名字，回落通用文案
+			const first = invalid[0]!;
+			const hit = entity(this.world, first);
+			const reason =
+				(hit ? (this.def.reachReason?.(this.world, this.actor, first) ?? msgs.invisibleEntity?.([hit.name])) : msgs.invisibleEntity?.([])) ?? msgs.noResponse;
+			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", subject: first, reason, debug: invalid.join(",") } };
 		}
 		const q = this.query(action.params);
 		for (const r of verb.rules) {
@@ -489,6 +509,12 @@ export class Simulation {
 		};
 	}
 
+	/** 协议性 schema 错误的机器诊断（进 Denial.debug，不进玩家文案）。 */
+	private schemaErrors(verbName: string, params: Record<string, PropValue>): string {
+		const errs = this.validators.get(verbName)!.Errors(params);
+		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
+	}
+
 	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（holdable 槽位）且可达。
 	 *  只产出结构化拒绝（law + subject + reason），世界腔文案由游戏经 messages 注入，core 不撰写理由。 */
 	private instrumentViolation(action: Action, verb: VerbDef): Denial | null {
@@ -508,7 +534,8 @@ export class Simulation {
 		return null;
 	}
 
-	/** 提交 + 不变式硬墙：先快照，提交后校验；违反则回滚整个提交并拒绝（原子）。 */
+	/** 提交 + 不变式硬墙：先快照，提交后校验；违反则回滚整个提交并拒绝（原子）。
+	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案。 */
 	private commitChecked(deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
 		const before = this.snapshot();
 		const changes = this.commit(deltas, src);
@@ -517,19 +544,21 @@ export class Simulation {
 			// 回滚：先删掉提交期间新建的键（relations/nextId 等快照中不存在的），再整体恢复。
 			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
 			Object.assign(this.world, before);
-			const reason = messagesFor(this.def).invariantRejected?.(inv.id, inv.message) ?? messagesFor(this.def).noResponse;
-			const d: Denial = { law: `invariant.${inv.id}`, debug: inv.message, reason };
-			return { ok: false, changes: [], denial: d, reason };
+			const denial: Denial = inv.authored
+				? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
+				: { law: `invariant.${inv.id}`, debug: inv.message };
+			return { ok: false, changes: [], denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
 		}
 		return { ok: true, changes };
 	}
 
-	/** 运行全部不变式（core 默认引用完整性 + 游戏声明），返回首个违反者。 */
-	private checkInvariants(): { id: string; message: string } | null {
-		const list: Invariant[] = [integrityInvariant(), ...(this.def.invariants ?? [])];
-		for (const inv of list) {
-			const err = inv.check(this.world, { def: this.def, actor: this.actor });
-			if (err) return { id: inv.id, message: err };
+	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者（authored 标记产出方）。 */
+	private checkInvariants(): { id: string; message: string; authored: boolean } | null {
+		const integrity = integrityInvariant().check(this.world, { def: this.def, actor: this.actor });
+		if (integrity) return { id: "integrity", message: integrity, authored: false };
+		for (const inv of this.def.invariants ?? []) {
+			const msg = inv.check(this.world, { def: this.def, actor: this.actor });
+			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
 	}

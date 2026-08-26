@@ -8,7 +8,6 @@ import {
 	type CreateAgentSessionOptions,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { Compile } from "typebox/compile";
 import { Type } from "typebox";
 import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { validateFactIds, type DeclCtx, type StructuredFact } from "./declare.ts";
@@ -412,9 +411,10 @@ export function buildExpressionPrompt(
 		const e = sim.world.entities.find((x) => x.id === sim.focus);
 		if (e) lines.push(`[焦点] ${e.name} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。叙述可围绕它展开，也可如实描写场景中其他可见实体；不得因此虚构该实体的任何状态。`, "");
 	}
-	if (results.length) {
+	const narratable = results.filter((r) => r.deniedBy !== "protocol"); // 协议性拒绝是引擎↔模型通道流量，不是世界事件，不进玩家叙述
+	if (narratable.length) {
 		lines.push("本回合尝试：");
-		for (const r of results) {
+		for (const r of narratable) {
 			const visible = r.changes.filter((c) => !internal.has(c.prop) && !c.prop.startsWith("#"));
 			const changes = visible.length
 				? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}`
@@ -504,11 +504,6 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate, channel: Act
 			),
 		),
 	);
-	/** 每个动词的参数校验器（strict：schema 未声明的参数一律打回）。SDK 不校验工具参数，需引擎自检。 */
-	const verbValidators = new Map<string, ReturnType<typeof Compile>>();
-	for (const [name, v] of Object.entries(def.verbs)) {
-		verbValidators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
-	}
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
@@ -552,25 +547,7 @@ function buildActTool(def: GameDef, sim: Simulation, gate: ActGate, channel: Act
 					verb: a.verb ?? "",
 					params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
 				};
-				const verb = def.verbs[action.verb];
-				if (!verb) {
-					return { ok: false, reason: messagesFor(def).unknownVerb(action.verb), changes: [], action, deniedBy: "rule" };
-				}
-				const validator = verbValidators.get(action.verb)!;
-				if (!validator.Check(action.params)) {
-					const known = Object.keys((verb.schema as { properties?: Record<string, unknown> }).properties ?? {}).join("/");
-					return { ok: false, reason: messagesFor(def).invalidParams(verb.label, known), changes: [], action, deniedBy: "rule" };
-				}
-				// 可见性须按当前状态逐动作计算：同一工具调用内的多动作（如先 travel 到新地点再移动实体）
-				// 不能沿用调用起始时的快照，否则后续动作会对旧位置做可见性裁决。
-				const curVis = sim.visible();
-				const invalid = (verb.entityParams ?? []).filter((p) => {
-					const id = action.params[p];
-					return typeof id === "string" && id.length > 0 && !curVis.has(id);
-				});
-				if (invalid.length) {
-					return { ok: false, reason: messagesFor(def).invisibleEntity(invalid), changes: [], action, deniedBy: "rule" };
-				}
+				// 动词/schema/可见性校验收敛在 sim.apply 的单一裁决瓶颈，与场景/CLI/probe 同一口径。
 				return sim.apply(action);
 			};
 			if (params.refusal && !(params.actions?.length)) {

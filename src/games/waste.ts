@@ -303,12 +303,9 @@ export const waste: GameDef = {
 	playerId: "player",
 	messages: {
 		noResponse: "世界没有以这种方式回应。",
-		unknownVerb: (verb) => `世界不认识「${verb}」这种动作。`,
-		invalidParams: (label, known) => `「${label}」的参数不在声明范围内（可接受：${known}）。`,
-		invisibleEntity: (ids) => `实体 ${ids.join("、")} 不可见或不存在。`,
+		invisibleEntity: (names) => (names.length ? `你看不到${names.join("、")}在哪里。` : "这里没有那样的东西。"),
 		instrumentUnholdable: (name) => `${name}太沉重，你拿不动它来施力。`,
 		instrumentUnreachable: (name) => `${name}在你够不到的地方，没法拿来使。`,
-		invariantRejected: () => "世界拒绝了这个变化。",
 		defaultReason: "……",
 		notInActionPhase: "当前不在行动阶段，无法执行操作。",
 		timePassed: "时间流逝",

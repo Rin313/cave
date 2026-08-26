@@ -120,7 +120,7 @@ const game: GameDef = {
     // 每个动词：schema 约束参数（TypeBox）；candidates 给非实体参数候选值（动作空间接地/探测共用）；rules 为卫语句式规则（按序裁决首个表态即判决，末尾可挂 fallback 兜底）
   },
   systems: [SystemRule],           // 时间系统（可选，world→deltas 的纯函数规则）
-  messages,                       // 必填：core 产出的用户可见文案（校验拒绝/时间流逝/施动工具/不变式兜底），游戏注入自有语言，core 不内嵌任何语言
+  messages,                       // 必填：core 产出的用户可见文案（时间流逝/施动工具/不可见实体等），只收解析后的 referent（名字），core 不内嵌任何语言
   grounding: (w, a) => [...],     // 可见实体索引（可选）
   hint, summarize, props, // props：属性注册表（type/label/internal/stylistic）；表达一致性由声明契约 + 提交硬墙承担，无词表断言钩子
 };

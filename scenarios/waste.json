@@ -30,7 +30,7 @@
 				{ "name": "勘察石碑（可达即授予）", "action": { "verb": "examine", "params": { "entity": "stele" } }, "expect": { "ok": true, "reason": "勘察", "state": { "stele.examined": true } } },
 				{ "name": "刻记号（可达即授予）", "action": { "verb": "mark", "params": { "entity": "stele" } }, "expect": { "ok": true, "reason": "刻下", "state": { "stele.marked": true } } },
 				{ "name": "重复刻记号被拒（mark.done）", "action": { "verb": "mark", "params": { "entity": "stele" } }, "expect": { "ok": false, "reason": "已经刻过", "state": { "stele.marked": true } } },
-				{ "name": "结构性墙：没有 do 动词，凭空改材质无从谈起", "action": { "verb": "do", "params": {} }, "expect": { "ok": false, "reason": "不认识", "state": { "stele.material": "stone" } } }
+				{ "name": "结构性墙：没有 do 动词，凭空改材质无从谈起", "action": { "verb": "do", "params": {} }, "expect": { "ok": false, "reason": "回应", "state": { "stele.material": "stone" } } }
 			]
 		},
 		{
