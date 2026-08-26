@@ -345,6 +345,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 			console.log(`\n>>> ${actionDesc}`);
 			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}`);
 			for (const ch of r.changes) console.log(`     ${ch.entity}.${ch.prop}: ${JSON.stringify(ch.from)} → ${JSON.stringify(ch.to)}`);
+			for (const d of r.systemDenied ?? []) console.log(`     ⚠ 系统事件被硬墙拒绝：${d.law}（${d.debug ?? d.reason ?? ""}）`);
 		}
 	}
 

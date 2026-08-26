@@ -12,10 +12,10 @@ export interface DeclCtx {
 	vanished?: Set<string>;
 }
 
-/** 本回合涉及集 ∪ 变更/即将发生实体（rel 变更按字符串编码解析对端，见 sim.ts 的 rel:type@to）。 */
+/** 本回合涉及集 ∪ 变更/即将发生实体（rel 变更按字符串编码解析对端 id，见 sim.ts 的 rel:type@to）。 */
 function touchedFrom(ctx: DeclCtx): Set<string> {
 	const touched = new Set<string>(ctx.involved);
-	const relTo = (prop: string): string | null => /^rel:([^@]+)@(.+)$/.exec(prop)?.[1] ?? null;
+	const relTo = (prop: string): string | null => /^rel:([^@]+)@(.+)$/.exec(prop)?.[2] ?? null;
 	for (const c of [...ctx.changes, ...ctx.pending]) {
 		touched.add(c.entity);
 		const relT = relTo(c.prop);

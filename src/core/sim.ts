@@ -50,6 +50,8 @@ export interface Change {
 	to: PropValue;
 	/** 实体生灭标记（spawn/despawn；普通属性变更缺省）。 */
 	op?: "spawn" | "despawn";
+	/** 生灭实体的展示名（实体已离开状态，变更是唯一载体；普通属性变更缺省）。 */
+	name?: string;
 	/** 变更来源（law:spread / rule:move / system:burnout），审计与回滚依据。 */
 	src?: string;
 }
@@ -361,6 +363,8 @@ export interface StepResult {
 	involved?: string[];
 	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
 	src?: string;
+	/** reactive 系统产出被不变式硬墙拒绝的事件（动作本身成立；记于此防静默丢失）。 */
+	systemDenied?: Denial[];
 }
 
 export function entity(world: World, id: string): Entity | undefined {
@@ -607,6 +611,7 @@ export class Simulation {
 					changes: [...sr.changes, ...reactive.flatMap((x) => x.changes)],
 					facts: [...(sr.facts ?? []), ...reactive.flatMap((x) => x.facts ?? [])],
 					involved: [...new Set([...(sr.involved ?? []), ...reactive.flatMap((x) => x.involved ?? [])])],
+					systemDenied: [...(sr.systemDenied ?? []), ...reactive.filter((x) => !x.ok && x.denial).map((x) => x.denial!)],
 				};
 			}
 		}
@@ -815,7 +820,7 @@ export class Simulation {
 			if (d.op === "spawn") {
 				if (entity(this.world, d.entity.id)) continue;
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
-				changes.push({ entity: d.entity.id, prop: "", from: null, to: null, op: "spawn", src });
+				changes.push({ entity: d.entity.id, prop: "", from: null, to: null, op: "spawn", name: d.entity.name, src });
 				continue;
 			}
 			if (d.op === "despawn") {
@@ -826,7 +831,7 @@ export class Simulation {
 				this.world.relations = (this.world.relations ?? []).filter((r) => r.from !== d.entity && r.to !== d.entity);
 				if (this.world.focus === d.entity) this.world.focus = null;
 				delete this.world.traces?.[d.entity];
-				changes.push({ entity: d.entity, prop: "", from: null, to: gone.name, op: "despawn", src });
+				changes.push({ entity: d.entity, prop: "", from: null, to: null, op: "despawn", name: gone.name, src });
 				continue;
 			}
 			if (d.op === "relSet") {

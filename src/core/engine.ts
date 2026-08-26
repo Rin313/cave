@@ -431,8 +431,8 @@ function fmtValue(sim: Simulation, v: PropValue): string {
  *  普通变更 `<name>.<label>: <from> → <to>`；rel 变更 `<from>.<type>.<to>: <from值> → <to值>`；生灭 `+ name` / `- name`。
  *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
 export function fmtChange(sim: Simulation, c: Change): string {
-	if (c.op === "spawn") return `+ ${fmtValue(sim, c.entity)}`;
-	if (c.op === "despawn") return `- ${typeof c.to === "string" ? c.to : c.entity}`;
+	if (c.op === "spawn") return `+ ${c.name ?? fmtValue(sim, c.entity)}`;
+	if (c.op === "despawn") return `- ${c.name ?? c.entity}`;
 	const m = /^rel:([^@]+)@(.+)$/.exec(c.prop);
 	if (m) {
 		const [type, to] = [m[1]!, m[2]!];
