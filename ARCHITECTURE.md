@@ -7,7 +7,6 @@
 | 桌面壳 | **Electron** | |
 | LLM 编排 | **pi coding-agent SDK**（进程内） | `@earendil-works/pi-coding-agent`，非 RPC mode，进程内集成；已发布 npm 包，直接依赖 registry 版本；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/`（SDK API 见 `sdk.md`） |
 | 持久化 | **SQLite** | 存档 + 回合审计，存什么见 §3 |
-| Node 运行时 | **Node 26** | 开发环境工具链；主进程实际运行在 Electron 内嵌 Node 上（Electron 43 内嵌 Node 24.18 ≥ pi SDK 的 `engines.node >= 22.19`；系统 Node 与内嵌 Node 相互独立，不冲突） |
 
 ## 2. 核心架构主张
 
@@ -52,7 +51,7 @@
 - **焦点与拒绝痕迹**：`Simulation` 确定性维护 `world.focus`（本回合动作/新见/被拒实体，跨回合指代锚点）与 `world.traces`（实体 id → 累计被拒次数，拒绝痕迹）。二者进序列化，映射 prompt 注入 `[焦点]` 提示（「它/那个」优先指向 focus，但以玩家显式提到的实体为准）。
 - **关系边表**：`world.relations` 为 `{ from, to, type, value }` 边表，表达社会/叙事状态（信任、记忆、派系）。规则以 `relSet/relInc` 变更，核心提供 `relVal/relAll` 查询。变更在表达层格式化为「from 对 to 的 type」的世界腔文本，快照/克隆/序列化完整保留。
 - **refusal 契约**：act 工具 `refusal` 只含 `label`。**理由一律由规则层产出，模型不撰写拒绝理由**：模型直接提交 action 由规则层裁决（否认 → 规则 denyReason，授予 → 执行）；纯拒绝（label）进审计，表达层自然回应。`refusal.considered`（模型预判被拒的动作交规则裁决以纠正误判）为**未实现的未来优化**。`sim probe` 可把 refusal 标签纳入覆盖报告。
-- **`--game` / 游戏注册表**：`src/games/registry.ts` 按 id 解析 GameDef，`loop`/`sim` 工具均已参数化，不再硬编码游戏 id。**tool 层不提供隐藏默认值**：`loop start` / `sim run` / `sim probe` 必须显式 `--game`；`sim scenario` 必须显式场景文件路径（场景文件内声明 `game`）；`loop` 除 `report` 外各命令必须显式 `--run`。`sim verify` 自动发现并运行 `scenarios/` 下全部场景（跳过未注册游戏，归档场景保留作参考）。`loop` 缺省输出紧凑人类可读结果（提案/裁决/校验警告/token 用量/叙述），`--json` 为完整结构化模式；每回合 LLM usage（含 cacheRead）经 EngineEvent 进 transcript，`loop batch <file>` 在同一引擎会话内顺序执行意图文件（#注释、@wait N），`loop report [--game]` 跨 run 汇总回合/裁决分布/校验失败/用量——对照实验（§5-2）的一眼视图；研究辅助脚本 research.ts 已由紧凑输出取代删除。`loop` 的引擎配置环境变量按游戏 id 命名空间读取：`<GAME>_PROVIDER` / `<GAME>_MODEL` / `<GAME>_THINKING`（如 `WASTE_PROVIDER`），多游戏并存互不覆盖。
+- **`--game` / 游戏注册表**：`src/games/registry.ts` 按 id 解析 GameDef，`loop`/`sim` 工具均已参数化，不再硬编码游戏 id。**tool 层不提供隐藏默认值**：`loop start` / `sim run` / `sim probe` 必须显式 `--game`；`sim scenario` 必须显式场景文件路径（场景文件内声明 `game`）；`loop` 除 `report` 外各命令必须显式 `--run`。`sim verify` 自动发现并运行 `scenarios/` 下全部场景（跳过未注册游戏，归档场景保留作参考）。`loop` 缺省输出紧凑人类可读结果（提案/裁决/校验警告/token 用量/叙述），`--json` 为完整结构化模式；每回合 LLM usage（含 cacheRead）经 EngineEvent 进 transcript，`loop batch <file>` 在同一引擎会话内顺序执行意图文件（#注释、@wait N），`loop report [--game]` 跨 run 汇总回合/裁决分布/校验失败/用量——对照实验（§5-2）的一眼视图；研究辅助脚本 research.ts 已由紧凑输出取代删除。`loop` 的引擎配置环境变量按游戏 id 命名空间读取：`<GAME>_PROVIDER` / `<GAME>_MODEL` / `<GAME>_THINKING`，多游戏并存互不覆盖。
 - **引擎保留伪动词 `TICK_VERB`**：`"tick"` 是引擎级时间流逝动作标识（`systems` 产出的 StepResult 与 `loop wait` 用），非游戏声明的动词；游戏不应声明同名动词。`sim run` 的 `tick N` 关键字在游戏声明同名动词时优先走游戏动词。
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`props`（属性注册表：type/label/internal/stylistic）。
 - **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性（`integrityInvariant`：实体 id 唯一、id 型属性/关系端点/焦点指向存在的实体），游戏可追加领域不变式（如「燃着必须明火」）。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式（如 village 的 `coins.conserved`：铜币总量 == 初始世界总量），凭空铸币/灭币一律被回滚。

@@ -98,7 +98,7 @@ function locateRunDir(runId: string, game?: string): string | null {
 	return null;
 }
 
-/** 引擎配置的环境变量按游戏 id 命名空间读取：<GAME>_PROVIDER / <GAME>_MODEL / <GAME>_THINKING（如 WASTE_PROVIDER）。
+/** 引擎配置的环境变量按游戏 id 命名空间读取：<GAME>_PROVIDER / <GAME>_MODEL / <GAME>_THINKING。
  *  多游戏并存时各自独立配置，互不覆盖 */
 function engineOptsFromEnv(gameId: string): { provider: string; model: string; thinkingLevel?: string } {
 	const prefix = gameId.toUpperCase();

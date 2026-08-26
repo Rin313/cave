@@ -8,7 +8,9 @@ import { Type } from "typebox";
  * era/DoL 极研究探针：河畔村。
  * 用现有 core 原语构造最小"强一致数值系统"：
  * 多尺度时间调度、三数值互锁、经济守恒、NPC 关系、顺序过程（阶段链）。
- * 验证目标：core 是否服务 era/DoL 极；缺的是机制还是原语。
+ * 法则纪律（承重墙）：规则代码零实体 id 字面量——交易对象/卖家/出资人/货源全部由实体属性声明
+ * （price/resale/vendor/patron/yields/phase/bounty…），携带同组属性的任何新实体即被既有法则自动接纳；
+ * 「规则读取数据中的 id」合法，「规则写死 id」即越墙。
  */
 
 const VILLAGE_PROPS: Record<string, PropDef> = {
@@ -25,12 +27,19 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	berries: { type: "number", label: "浆果" },
 	ripe: { type: "boolean", label: "成熟" },
 	price: { type: "number", label: "价钱" },
+	resale: { type: "number", label: "回收价" },
+	vendor: { type: "id", label: "卖家" },
+	closesNight: { type: "boolean", label: "夜歇" },
+	dealTrust: { type: "number", label: "折价交情" },
+	dealCut: { type: "number", label: "折价" },
+	priceBase: { type: "number", label: "基价" },
+	yields: { type: "string", label: "出产" },
 	phase: { type: "number", label: "阶段" },
+	patron: { type: "id", label: "出资人" },
+	bounty: { type: "number", label: "赏钱" },
+	capacity: { type: "number", label: "容量" },
 	supply: { type: "boolean", label: "出水量" },
 	aggressive: { type: "boolean", label: "攻击性" },
-	grain: { type: "number", label: "谷物" },
-	water: { type: "number", label: "清水" },
-	wheat: { type: "boolean", internal: true },
 };
 
 const PROP_LABELS: Record<string, string> = Object.fromEntries(
@@ -42,13 +51,17 @@ function name(w: World, id: string): string {
 }
 
 const num = (v: unknown): number => Number(v ?? 0);
+/** 可选数值属性的安全读取：仅认有限 number，缺省/非数返回 null（区别于 0——「属性不存在」不可冒充数值）。 */
+const fin = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const isNight = (q: Q): boolean => q.time % 4 === 3;
 /** NPC 对玩家的信任（缺边按 0 显式参与比较）。 */
 const trust = (q: Q, from: string): number => q.relNum(from, q.actor, "信任", 0);
-/** 老店主对玩家的信任 >=2 时米价 8 折（关系边 → 经济耦合）。 */
-const flourPrice = (q: Q): number => 10 - (trust(q, "merchant") >= 2 ? 2 : 0);
-/** 谷物动态价格：13 - 麦田存粮（存粮越少越贵）；老农信任 >= 2 时再减 2。 */
-const grainPrice = (q: Q): number => 13 - num(entity(q.world, "wheatfield")?.props.grain) - (trust(q, "farmer") >= 2 ? 2 : 0);
+/** 卖家忠诚折价：vendor 以 dealTrust/dealCut 声明「信任达标即减价」——关系边 → 经济耦合的通用形态。 */
+const loyalCut = (q: Q, vendorId: string): number => {
+	const v = q.entity(vendorId);
+	if (!v || v.props.dealTrust === undefined) return 0;
+	return trust(q, vendorId) >= num(v.props.dealTrust) ? num(v.props.dealCut) : 0;
+};
 
 function summarizeVillage(input: { world: World; changes: Change[]; actor: string }): string {
 	const { world, changes, actor } = input;
@@ -138,7 +151,7 @@ export const village: GameDef = {
 		}),
 		talk: defineVerb({
 			label: "交谈",
-			description: "与村民攀谈（老店主/老农）：对方对自己的信任 +1；信任 >= 5 后无话可说；各自物价折扣看 hint。",
+			description: "与村民攀谈：对方对自己的信任 +1；信任 >= 5 后无话可说。",
 			schema: Type.Object({ target: Type.String({ description: "交谈对象 id" }) }),
 			entityParams: ["target"],
 			candidates: (sim) => ({ target: sim.world.entities.filter((e) => e.kind === "npc").map((e) => e.id) }),
@@ -152,53 +165,58 @@ export const village: GameDef = {
 		}),
 		buy: defineVerb({
 			label: "购买",
-			description: "从老店主处买一袋米（10 铜币，信任 >= 2 后 8 铜币），钱不够被拒；入夜歇业。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "buy.flour",
-				judge: (q) => {
-					if (isNight(q)) return deny("buy.night", { reason: "夜色已深，老店主已经打烊歇息了。" });
-					if (entity(q.world, "flour")?.props.in === q.actor) return deny("buy.held", { reason: "你手里已经有一袋米了。" });
-					const price = flourPrice(q);
-					if (num(q.entity(q.actor)?.props.coins) < price) return deny("buy.broke", { reason: "你的钱不够买这袋米。" });
-					const flour = entity(q.world, "flour");
-					if (!flour || !q.canReach("flour") || flour.props.in !== "village") return deny("denyAll.buy", { reason: "货摊上暂时没有可买的。", fallback: true });
-					return grant([D.set("flour", "in", q.actor), D.inc("merchant", "coins", price), D.inc(q.actor, "coins", -price)], "你用铜币买了一袋米。");
+			description: "向货品的卖家（vendor）购买：独件货品（有 price）整件到手；出产型货物（有 yields）从存量中买一份。价格随存量浮动，卖家信任达标（dealTrust）再减价（dealCut）；挂着夜歇的卖家入夜打烊。",
+			schema: Type.Object({ goods: Type.String({ description: "货品实体 id" }) }),
+			entityParams: ["goods"],
+			candidates: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.price != null || e.props.priceBase != null).map((e) => e.id) }),
+			rules: [
+				{
+					id: "buy.goods",
+					judge: (q, p) => {
+						const g = q.entity(p.goods);
+						const vendorId = typeof g?.props.vendor === "string" ? g.props.vendor : "";
+						const vendor = vendorId ? q.entity(vendorId) : null;
+						const pb = fin(g?.props.priceBase);
+						const pr = fin(g?.props.price);
+						if (!g || !vendor || vendor.props.alive === false || (pb === null && pr === null)) return deny("buy.notgoods", { subject: p.goods, reason: `${q.name(p.goods)}不是待售的货品。`, fallback: true });
+						if (isNight(q) && vendor.props.closesNight === true) return deny("buy.closed", { subject: vendorId, reason: `夜色已深，${q.name(vendorId)}已经打烊歇息了。` });
+						const yields = typeof g.props.yields === "string" ? g.props.yields : null;
+						const stock = yields ? num(g.props[yields]) : 0;
+						if (yields && stock < 1) return deny("buy.emptystock", { subject: p.goods, reason: `${q.name(p.goods)}已经卖光了。` });
+						if (!yields && g.props.in === q.actor) return deny("buy.held", { subject: p.goods, reason: `${q.name(p.goods)}已经在你手里了。` });
+						const price = Math.max(1, (pb ?? pr!) - (yields ? stock : 0) - loyalCut(q, vendorId));
+						if (num(q.entity(q.actor)?.props.coins) < price) return deny("buy.broke", { subject: vendorId, reason: "你的钱不够。" });
+						if (!q.canReach(p.goods)) return denyUnreachable(q, p.goods);
+						return yields
+							? grant([D.inc(p.goods, yields, -1), D.inc(q.actor, yields, 1), D.inc(vendorId, "coins", price), D.inc(q.actor, "coins", -price)], `你花${price}铜币从${q.name(vendorId)}手里买了一份${q.name(p.goods)}的出产。`)
+							: grant([D.set(p.goods, "in", q.actor), D.inc(vendorId, "coins", price), D.inc(q.actor, "coins", -price)], `你花${price}铜币向${q.name(vendorId)}买下了${q.name(p.goods)}。`);
+					},
 				},
-			}],
+			],
 		}),
 		sell: defineVerb({
 			label: "出售",
-			description: "把手里的米以 5 铜币卖回给老店主；入夜歇业。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "sell.flour",
-				judge: (q) => {
-					if (isNight(q)) return deny("sell.night", { reason: "夜色已深，老店主已经歇下了。" });
-					if (entity(q.world, "flour")?.props.in !== q.actor) return deny("sell.notheld", { reason: "你手里没有米可卖。" });
-					return grant([D.set("flour", "in", "village"), D.inc(q.actor, "coins", 5), D.inc("merchant", "coins", -5)], "你把一袋米卖回给了老店主。");
+			description: "把手里带回收价（resale）的货品卖回给它的卖家（vendor）；挂着夜歇的卖家入夜歇业。",
+			schema: Type.Object({ goods: Type.String({ description: "手中货品 id" }) }),
+			entityParams: ["goods"],
+			candidates: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.in === sim.actor && e.props.resale != null).map((e) => e.id) }),
+			rules: [
+				{
+					id: "sell.goods",
+					judge: (q, p) => {
+						const g = q.entity(p.goods);
+						if (!g || g.props.in !== q.actor || !(num(g.props.resale) > 0)) return null;
+						const vendorId = typeof g.props.vendor === "string" ? g.props.vendor : "";
+						const vendor = vendorId ? q.entity(vendorId) : null;
+						const dest = typeof vendor?.props.in === "string" ? vendor.props.in : null;
+						if (!vendor || !dest || vendor.props.alive === false) return deny("sell.novendor", { subject: p.goods, reason: "眼下没人收这货。" });
+						if (isNight(q) && vendor.props.closesNight === true) return deny("sell.closed", { subject: vendorId, reason: `夜色已深，${q.name(vendorId)}已经歇下了。` });
+						const price = num(g.props.resale);
+						return grant([D.set(p.goods, "in", dest), D.inc(q.actor, "coins", price), D.inc(vendorId, "coins", -price)], `你把${q.name(p.goods)}卖回给了${q.name(vendorId)}。`);
+					},
 				},
-			}],
-		}),
-		buyGrain: defineVerb({
-			label: "买谷物",
-			description: "从老农处买一捧谷物（价格随麦田存粮波动：存粮越少越贵；老农信任 >= 2 减价），入夜歇业。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "buygrain.take",
-				judge: (q) => {
-					if (isNight(q)) return deny("buygrain.night", { reason: "夜色已深，老农已经回屋睡了。" });
-					const field = entity(q.world, "wheatfield");
-					const reachable = field ? q.canReach("wheatfield") : false;
-					if (!field || !reachable || num(field.props.grain) < 1) {
-						if (reachable && field && num(field.props.grain) < 1) return deny("buygrain.empty", { subject: "wheatfield", reason: `${q.name("wheatfield")}已经空了，没有谷物可卖。` });
-						return deny("denyAll.buygrain", { subject: "wheatfield", reason: `你没能从${q.name("wheatfield")}买到谷物。`, fallback: true });
-					}
-					const price = grainPrice(q);
-					if (num(q.entity(q.actor)?.props.coins) < price) return deny("buygrain.broke", { reason: "你的钱不够买这捧谷物。" });
-					return grant([D.inc("wheatfield", "grain", -1), D.inc(q.actor, "grain", 1), D.inc(q.actor, "coins", -price), D.inc("farmer", "coins", price)], `你花${price}铜币从老农手里买了一捧谷物。`);
-				},
-			}],
+				fallback("denyAll.sell", () => "你手里没有可出卖的货品。"),
+			],
 		}),
 		eatGrain: defineVerb({
 			label: "吃谷物",
@@ -214,18 +232,22 @@ export const village: GameDef = {
 		}),
 		draw: defineVerb({
 			label: "汲水",
-			description: "从封好底的井里打上一桶清水（井水有限，约 10 桶）。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "draw.water",
-				judge: (q) => {
-					const well = entity(q.world, "well");
-					if (!well || !q.canReach("well")) return deny("denyAll.draw", { subject: "well", reason: `你没能从${q.name("well")}里打出水。`, fallback: true });
-					if (well.props.supply !== true) return deny("draw.dry", { subject: "well", reason: `${q.name("well")}还是枯的，打不出水。` });
-					if (num(well.props.water) < 1) return deny("draw.empty", { subject: "well", reason: `${q.name("well")}的井水已经见底了。` });
-					return grant([D.inc("well", "water", -1), D.inc(q.actor, "water", 1)], "你从井口提上一桶清水。");
+			description: "从出水的水源（supply）打上一桶水；水源的存水有限。",
+			schema: Type.Object({ source: Type.String({ description: "水源实体 id" }) }),
+			entityParams: ["source"],
+			candidates: (sim) => ({ source: sim.world.entities.filter((e) => e.props.supply === true).map((e) => e.id) }),
+			rules: [
+				{
+					id: "draw.water",
+					judge: (q, p) => {
+						if (!q.canReach(p.source)) return denyUnreachable(q, p.source);
+						const w = q.entity(p.source);
+						if (!w || w.props.supply !== true) return deny("draw.dry", { subject: p.source, reason: `${q.name(p.source)}还是枯的，打不出水。`, fallback: true });
+						if (num(w.props.water) < 1) return deny("draw.empty", { subject: p.source, reason: `${q.name(p.source)}的存水已经见底了。` });
+						return grant([D.inc(p.source, "water", -1), D.inc(q.actor, "water", 1)], `你从${q.name(p.source)}提上一桶清水。`);
+					},
 				},
-			}],
+			],
 		}),
 		drink: defineVerb({
 			label: "饮水",
@@ -254,51 +276,48 @@ export const village: GameDef = {
 				},
 			}],
 		}),
-		clear: defineVerb({
-			label: "清理枯井",
-			description: "清理枯井里的淤泥（阶段 0 → 1）。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "well.clear",
-				judge: (q) => {
-					if (num(entity(q.world, "well")?.props.phase) !== 0) return deny("well.order", { subject: "well", reason: `${q.name("well")}当前不需要这一步，顺序不对。` });
-					return grant([D.inc("well", "phase", 1)], "你清理了枯井里的淤泥。");
+		repair: defineVerb({
+			label: "修葺",
+			description: "对带阶段（phase）的损毁结构推进一步：清理 →（手持木料类东西）加固 → 封底完工领赏（bounty 由 patron 支付，出水 capacity 份）。",
+			schema: Type.Object({ structure: Type.String({ description: "损毁结构 id" }) }),
+			entityParams: ["structure"],
+			candidates: (sim) => ({ structure: sim.world.entities.filter((e) => typeof e.props.phase === "number").map((e) => e.id) }),
+			rules: [
+				{
+					id: "repair.step",
+					judge: (q, p) => {
+						const s = q.entity(p.structure);
+						const ph = fin(s?.props.phase);
+						if (!s || ph === null) return deny("repair.nostructure", { subject: p.structure, reason: `${q.name(p.structure)}不需要修葺。`, fallback: true });
+						if (ph === 0) return grant([D.inc(p.structure, "phase", 1)], `你清理了${q.name(p.structure)}里的淤泥。`);
+						if (ph === 1) {
+							const material = q.world.entities.find((e) => e.props.in === q.actor && e.tags.includes("wood"));
+							if (!material) return deny("repair.nomaterial", { subject: p.structure, reason: `你得先把木料拿到手，才修得了${q.name(p.structure)}。` });
+							return grant([D.inc(p.structure, "phase", 1)], `你用${material.name}加固了${q.name(p.structure)}。`);
+						}
+						if (ph === 2) {
+							const patronId = typeof s.props.patron === "string" ? s.props.patron : "";
+							if (!patronId || !q.entity(patronId)) return deny("repair.nopatron", { subject: p.structure, reason: `${q.name(p.structure)}修好了，却没有人来验收。` });
+							const bounty = Math.max(0, num(s.props.bounty));
+							return grant(
+								[D.inc(p.structure, "phase", 1), D.set(p.structure, "supply", true), D.set(p.structure, "water", num(s.props.capacity)), D.inc(q.actor, "coins", bounty), D.inc(patronId, "coins", -bounty)],
+								`你为${q.name(p.structure)}封好了底，清泉涌出！${q.name(patronId)}赏了你${bounty}枚铜币。`,
+							);
+						}
+						return deny("repair.done", { subject: p.structure, reason: `${q.name(p.structure)}不需要再修了。` });
+					},
 				},
-			}],
-		}),
-		fix: defineVerb({
-			label: "修葺枯井",
-			description: "手持木料时加固井壁（阶段 1 → 2）。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "well.fix",
-				judge: (q) => {
-					if (num(entity(q.world, "well")?.props.phase) !== 1) return deny("well.order", { subject: "well", reason: `${q.name("well")}当前不需要这一步，顺序不对。` });
-					if (entity(q.world, "timber")?.props.in !== q.actor) return deny("well.needtimber", { subject: "well", reason: "你得先把木料拿到手。" });
-					return grant([D.inc("well", "phase", 1)], "你用木料加固了井壁。");
-				},
-			}],
-		}),
-		seal: defineVerb({
-			label: "封底枯井",
-			description: "为枯井封底，清泉涌出，获 10 铜币（阶段 2 → 3）。",
-			schema: Type.Object({}),
-			rules: [{
-				id: "well.seal",
-				judge: (q) => {
-					if (num(entity(q.world, "well")?.props.phase) !== 2) return deny("well.order", { subject: "well", reason: `${q.name("well")}当前不需要这一步，顺序不对。` });
-					return grant([D.inc("well", "phase", 1), D.set("well", "supply", true), D.set("well", "water", 10), D.inc(q.actor, "coins", 10), D.inc("merchant", "coins", -10)], "你为枯井封好了底，清泉涌出！老店主赏了你十枚铜币。");
-				},
-			}],
+			],
 		}),
 		subdue: defineVerb({
-			label: "驱逐野狗",
-			description: "在不太疲惫时驱赶野狗，代价是被咬一口（骰子伤害，随时刻变化）。",
-			schema: Type.Object({ dog: Type.String({ description: "野狗 id" }) }),
+			label: "驱逐",
+			description: "在不太疲惫时赶走有攻击性的野兽，代价是被咬一口（骰子伤害，随时刻变化）。",
+			schema: Type.Object({ dog: Type.String({ description: "野兽 id" }) }),
 			entityParams: ["dog"],
 			candidates: (sim) => ({ dog: sim.world.entities.filter((e) => e.props.aggressive === true).map((e) => e.id) }),
 			rules: [{
 				id: "dog.chase",
+				// roll key 保持「dog.bite」：骰子是 World 纯函数，key 变更即变更历史判定值
 				judge: (q, p) => {
 					if (!q.canReach(p.dog)) return deny("denyAll.subdue", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
 					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { subject: p.dog, reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
@@ -310,14 +329,17 @@ export const village: GameDef = {
 		}),
 		scout: defineVerb({
 			label: "侦察",
-			description: "四处翻找：骰子运气 >= 3 时捡到 2 铜币（从店主账上扣，守恒），否则一无所获。",
+			description: "四处翻找脚下这片地方的犄角旮旯：骰子运气 >= 3 时捡到 2 枚铜币（散落的铜币有限，守恒）。",
 			schema: Type.Object({}),
 			rules: [{
 				id: "scout.luck",
 				judge: (q) => {
-					if (!q.canReach("merchant")) return deny("denyAll.scout", { reason: "这里没什么可找的。", fallback: true });
+					const cur = q.entity(q.actor)?.props["in"];
+					const spot = typeof cur === "string" ? q.entity(cur) : null;
+					if (!spot) return deny("denyAll.scout", { reason: "这里没什么可翻找的。", fallback: true });
 					if (q.roll("find.coin", 4) < 3) return deny("scout.unlucky", { reason: "你翻找了一圈，一无所获。" });
-					return grant([D.inc(q.actor, "coins", 2), D.inc("merchant", "coins", -2)], "你四处翻了翻，在墙角捡到了两枚铜币。");
+					if (num(spot.props.coins) < 2) return deny("scout.picked", { subject: spot.id, reason: "能捡的都被人捡干净了。" });
+					return grant([D.inc(spot.id, "coins", -2), D.inc(q.actor, "coins", 2)], "你四处翻了翻，在墙角捡到了两枚铜币。");
 				},
 			}],
 		}),
@@ -325,15 +347,15 @@ export const village: GameDef = {
 	world: {
 		time: 0,
 		entities: [
-			{ id: "village", name: "河畔村", kind: "space", tags: ["room"], props: { space: true } },
+			{ id: "village", name: "河畔村", kind: "space", tags: ["room"], props: { space: true, coins: 4 } },
 			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "village", hp: 50, fatigue: 0, satiety: 60, coins: 40, berries: 2, grain: 0, water: 0, down: false } },
-			{ id: "merchant", name: "老店主", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 80 } },
-			{ id: "farmer", name: "老农", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 60 } },
-			{ id: "flour", name: "一袋米", kind: "item", tags: ["goods"], props: { in: "village", grabbable: true, price: 10 } },
+			{ id: "merchant", name: "老店主", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 80, closesNight: true, dealTrust: 2, dealCut: 2 } },
+			{ id: "farmer", name: "老农", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 60, closesNight: true, dealTrust: 2, dealCut: 2 } },
+			{ id: "flour", name: "一袋米", kind: "item", tags: ["goods"], props: { in: "village", grabbable: true, price: 10, resale: 5, vendor: "merchant" } },
 			{ id: "timber", name: "木料", kind: "item", tags: ["wood"], props: { in: "village", grabbable: true } },
 			{ id: "bush", name: "浆果丛", kind: "plant", tags: [], props: { in: "village", ripe: true } },
-			{ id: "well", name: "枯井", kind: "structure", tags: ["quest"], props: { in: "village", phase: 0, supply: false, water: 0 } },
-			{ id: "wheatfield", name: "麦田", kind: "plant", tags: ["farm"], props: { in: "village", wheat: true, grain: 10 } },
+			{ id: "well", name: "枯井", kind: "structure", tags: ["quest"], props: { in: "village", phase: 0, supply: false, water: 0, patron: "merchant", bounty: 10, capacity: 10 } },
+			{ id: "wheatfield", name: "麦田", kind: "plant", tags: ["farm"], props: { in: "village", grain: 10, priceBase: 13, yields: "grain", vendor: "farmer" } },
 			{ id: "dog", name: "野狗", kind: "creature", tags: ["beast"], props: { in: "village", alive: true, aggressive: true, hp: 10 } },
 		],
 		relations: [
@@ -344,7 +366,7 @@ export const village: GameDef = {
 	systems: [
 		{
 			id: "dog.night",
-			// roll 在条件层只掷一次（与旧 when-外置骰子一致）；每只野兽各扣 1 体力。
+			// roll 在条件层只掷一次；每只野兽各扣 1 体力。
 			run: (q) => {
 				if (q.time % 4 !== 3 || q.roll("dog.night", 4) !== 1) return null;
 				if (q.entity(q.actor)?.props.down === true) return null;
@@ -388,9 +410,14 @@ export const village: GameDef = {
 		},
 		{
 			id: "field.grow",
+			// 泛化到一切声明了 yields 的田：产出键控于属性，不再依赖内部标记
 			run: (q) => {
 				if (q.time % 4 !== 0) return null;
-				return { deltas: q.world.entities.filter((e) => e.props.wheat === true && num(e.props.grain) < 10).map((w) => D.inc(w.id, "grain", 1)) };
+				return {
+					deltas: q.world.entities
+						.filter((e) => typeof e.props.yields === "string" && num(e.props[e.props.yields]) < 10)
+						.map((w) => D.inc(w.id, String(w.props.yields), 1)),
+				};
 			},
 		},
 	] satisfies SystemRule[],
@@ -398,7 +425,7 @@ export const village: GameDef = {
 	invariants: [
 		{
 			id: "coins.conserved",
-			// era/DoL 守恒模式：铜币总量 == 种子值。任何提交凭空铸币/灭币都被回滚。
+			// era/DoL 守恒模式：铜币总量 == 种子值（含村里散落的铜币）。任何提交凭空铸币/灭币都被回滚。
 			check: (world, ctx) => {
 				const seed = sumProp(ctx.def.world, "coins");
 				const now = sumProp(world, "coins");
@@ -408,16 +435,17 @@ export const village: GameDef = {
 	],
 	grounding: (world, actor) => [...inTreeVisible(world, actor)],
 	...reachFor(),
-	// 可持握语义由游戏声明（core 不假定属性名）：河畔村同样只有 grabbable 的东西可被拿起。
+	// 可持握语义由游戏声明（core 不假定属性名）：河畔村只有 grabbable 的东西可被拿起。
 	holdable: (world, _actor, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeVillage,
 	digest: digestVillage,
 	hint: `世界法则（模拟层强制执行）：
 1. 每个时刻（tick）：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来。
-2. 入夜（时刻 % 4 == 3）时：老店主与老农歇业，买卖谷米一律被拒；野狗有 1/4 概率偷袭（骰子判定，确定性）。
-3. 浆果可采集（成熟时）可进食；米可买卖：买入 10 铜币（店主信任 >= 2 后 8 铜币）、卖出 5 铜币；侦察掷骰子运气 >= 3 可得 2 铜币。
-4. 与村民交谈提升对方对你的信任（关系边），信任到顶（>= 5）后对方没了新鲜话；各自物价有折扣。
-5. 谷物经济：从老农处买谷物（价格 = 13 - 麦田存粮，存粮越少越贵，每 4 个时段麦田补 1 单位）；吃谷物补饱腹与体力。
-6. 枯井修缮是顺序过程：清理 →（手持木料）修葺 → 封底，不得跳步；封底后井里有约 10 桶清水，可汲水（draw）再饮用（drink）恢复疲劳。
-7. 铜币总量守恒；结构性属性（体力/钱币/位置等）只能由世界法则变更。`,
+2. 入夜（时刻 % 4 == 3）：挂着「夜歇」的摊子歇业，买卖一律被拒；野狗有 1/4 概率偷袭（骰子判定，确定性）。
+3. 买卖各有其主：每样货品由它的卖家出卖——米从老店主处 10 铜币买入、5 铜币卖回；谷物向老农买，价随麦田存量浮动（存粮越少越贵）。卖家信任 >= 2 时一律减 2 铜币。
+4. 与村民交谈提升对方对你的信任（关系边），信任到顶（>= 5）后对方没了新鲜话。
+5. 浆果可采集（成熟时）可进食；吃浆果/谷物、饮水各有效果；麦田每 4 个时段补 1 单位谷物。
+6. 枯井按阶段修葺：清理 →（手持木料）加固 → 封底，不得跳步；封底后井里有约 10 桶清水，可汲水（draw）饮用（drink）恢复疲劳；完工赏金 10 铜币由老店主支付。
+7. 侦察掷骰子运气 >= 3 可在脚下这片地方捡到 2 枚铜币；散落的铜币有限。
+8. 铜币总量守恒（含村里散落的）；结构性属性（体力/钱币/位置等）只能由世界法则变更。`,
 };
