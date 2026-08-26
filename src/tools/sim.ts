@@ -365,6 +365,53 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 	for (const r of sim.log) console.log(`  ${JSON.stringify(r.action)} → ${r.reason}`);
 }
 
+// ---------- 词汇 lint（CRITIQUE C3-c）：静态扫描 GameDef 各闭包读取的属性键，对照 props 注册表 ----------
+
+/** 收集 def 内全部函数闭包（路径 → 源码字符串）。 */
+function collectClosures(v: unknown, path: string, out: Map<string, string>, seen: WeakSet<object>): void {
+	if (typeof v === "function") {
+		out.set(path.replace(/^\./, ""), String(v));
+		return;
+	}
+	if (v === null || typeof v !== "object" || seen.has(v)) return;
+	seen.add(v);
+	for (const [k, sub] of Object.entries(v as Record<string, unknown>)) collectClosures(sub, `${path}.${k}`, out, seen);
+}
+
+/** 提取源码中静态可见的属性键：`.props.x` 与 `.props["x"]`；动态索引（props[var]）无法静态发现，属盲区。 */
+function propKeysIn(src: string): Set<string> {
+	const keys = new Set<string>();
+	for (const m of src.matchAll(/\.props\s*\.\s*([A-Za-z_$][\w$]*)/g)) keys.add(m[1]!);
+	for (const m of src.matchAll(/\.props\s*\[\s*(["'`])([^"'`]+)\1\s*\]/g)) keys.add(m[2]!);
+	return keys;
+}
+
+async function cmdLint(gameId: string): Promise<void> {
+	const def = getGame(gameId);
+	const declared = new Set(Object.keys(def.props ?? {}));
+	const closures = new Map<string, string>();
+	collectClosures(def, "", closures, new WeakSet());
+	const unknownSites = new Map<string, string[]>();
+	for (const [path, src] of closures) {
+		for (const key of propKeysIn(src)) {
+			if (!declared.has(key)) {
+				const sites = unknownSites.get(key);
+				if (sites) sites.push(path);
+				else unknownSites.set(key, [path]);
+			}
+		}
+	}
+	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${closures.size} 个闭包 ===`);
+	if (!unknownSites.size) {
+		console.log("规则代码读取的全部属性键均已在 props 注册表声明。");
+		return;
+	}
+	for (const [key, sites] of [...unknownSites].sort()) {
+		console.log(`  ⚠ 未声明属性「${key}」读自：${sites.join("、")}`);
+	}
+	console.log("未声明属性照常工作（视为普通可见属性），但失去 label/internal/stylistic 控制且不受注册表约束；建议登记进 GameDef.props。");
+}
+
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
@@ -375,6 +422,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
+  sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键（advisory）
 `);
 		return;
 	}
@@ -398,6 +446,10 @@ async function main(): Promise<void> {
 		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
 		const max = Number(flagStr(a, "max") ?? 10000);
 		await cmdProbe(gameId, Number.isFinite(max) && max > 0 ? max : 10000);
+		return;
+	}
+	if (cmd === "lint") {
+		await cmdLint(requireFlag(a, "game", "用 --game <id> 指定游戏"));
 		return;
 	}
 	throw new Error(`未知命令: ${cmd}`);

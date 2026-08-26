@@ -22,6 +22,9 @@ const YUME_PROPS: Record<string, PropDef> = {
 	takable: { type: "boolean", label: "可拾取" },
 	vended: { type: "boolean", internal: true },
 	desc: { type: "string", label: "样子", stylistic: true },
+	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册，词汇 lint 据此把关
+	openable: { type: "boolean", label: "可开" },
+	open: { type: "boolean", label: "已开" },
 };
 
 const num = (v: unknown): number => Number(v ?? 0);
@@ -308,8 +311,8 @@ export const yume: GameDef = {
 		],
 	},
 	systems: [
+		// 纯氛围系统：世界之言（utterance）——不进声明契约 touched，模型只许转述不许据以断言状态
 		{
-			// 纯氛围系统（fact-only）：梦中低语，无状态含义——runSystems 对 fact-only 输出的放行即为此类通道。
 			id: "dream.air",
 			run: (q) => {
 				if (q.entity(q.actor)?.props.awake !== false) return null;
@@ -319,7 +322,7 @@ export const yume: GameDef = {
 					"水滴声。找不到来源。",
 					"有什么东西在你身后站了一会儿，又走了。",
 				];
-				return { deltas: [], facts: [{ text: whispers[num(q.time) % whispers.length]!, entities: [q.actor] }] };
+				return { deltas: [], facts: [{ kind: "utterance", text: whispers[num(q.time) % whispers.length]!, entities: [q.actor] }] };
 			},
 		},
 		{

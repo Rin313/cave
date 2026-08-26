@@ -89,6 +89,9 @@ export interface Fact {
 	text: string;
 	/** 陈述涉及的实体 id（声明校验的集合成员依据）。 */
 	entities: string[];
+	/** 认识论身份：percept（缺省）＝对世界状态的知觉，实体进声明契约 touched 集；
+	 *  utterance＝世界之言（氛围话语/低语），实体不进 touched——话语只许被转述，不许据以断言状态。 */
+	kind?: "percept" | "utterance";
 }
 
 /** 属性类型。 */
@@ -289,10 +292,12 @@ export interface GameDef {
 	messages: Messages;
 }
 
-/** 不变式检查上下文：世界 + 游戏定义（注册表等）。 */
+/** 不变式检查上下文：世界 + 游戏定义（注册表等）+ 本实例的实际起点世界（守恒类种子的正确锚点）。 */
 export interface InvariantCtx {
 	def: GameDef;
 	actor: string;
+	/** 创世快照：本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
+	genesis: World;
 }
 
 /** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。 */
@@ -422,6 +427,12 @@ export class Simulation {
 	readonly log: StepResult[] = [];
 	/** 探测模式：跳过施动工具前提（instrumentParams）检查，仅 probeGrant 临时开启，审计「规则本身是否会在不可持握工具上授予」。 */
 	private probeSkipInstruments = false;
+	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
+	private genesisCache?: World;
+	/** 骰子键碰撞追踪：仅 apply/tick 提交链开启；check 的只读重估不追踪——同一动作复现同值是公理 4，不是碰撞。 */
+	private tracingRolls = false;
+	private rollEpoch = -1;
+	private readonly rollKeys = new Set<string>();
 	/** 动词参数严格校验器（additionalProperties:false），构造期从动词 schema 编译——所有入口（act 工具/场景/CLI/probe）共用同一裁决瓶颈。 */
 	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
 
@@ -521,11 +532,30 @@ export class Simulation {
 				const n = Number(v);
 				return Number.isFinite(n) ? n : dflt;
 			},
-			roll: (key, sides) => rollDice(world, key, sides),
+			roll: (key, sides) => {
+				this.traceRollKey(key);
+				return rollDice(world, key, sides);
+			},
 			canReach: (id) => (this.def.reach ? this.def.reach(world, actor, id) : true),
 			reachWhy: (id) => (this.def.reachReason ? this.def.reachReason(world, actor, id) : null),
 			visible: () => this.visible(),
 		};
+	}
+
+	/** 同一时刻内骰子键应唯一：重复即两个不同判定共享同一随机值（隐性相关 bug）。 */
+	private traceRollKey(key: string): void {
+		if (!this.tracingRolls) return;
+		if (this.world.time !== this.rollEpoch) {
+			this.rollEpoch = this.world.time;
+			this.rollKeys.clear();
+		}
+		if (this.rollKeys.has(key)) console.warn(`[sim] t${this.world.time} 骰子键重复：「${key}」——同一时刻两个判定共享同一随机值，应把实体 id 等并入 key`);
+		else this.rollKeys.add(key);
+	}
+
+	/** 实际起点世界：首个提交前的冻结快照（一切变异都经 commitChecked，此刻必为未变异状态）。 */
+	private genesis(): World {
+		return (this.genesisCache ??= this.snapshot());
 	}
 
 	/** 协议性 schema 错误的机器诊断（进 Denial.debug，不进玩家文案）。 */
@@ -556,9 +586,10 @@ export class Simulation {
 	/** 提交 + 不变式硬墙：先快照，提交后校验；违反则回滚整个提交并拒绝（原子）。
 	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案。 */
 	private commitChecked(deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
+		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
 		const before = this.snapshot();
 		const changes = this.commit(deltas, src);
-		const inv = this.checkInvariants();
+		const inv = this.checkInvariants(genesis);
 		if (inv) {
 			// 回滚：先删掉提交期间新建的键（relations 等快照中不存在的），再整体恢复。
 			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
@@ -572,17 +603,26 @@ export class Simulation {
 	}
 
 	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者（authored 标记产出方）。 */
-	private checkInvariants(): { id: string; message: string; authored: boolean } | null {
-		const integrity = integrityInvariant().check(this.world, { def: this.def, actor: this.actor });
+	private checkInvariants(genesis: World): { id: string; message: string; authored: boolean } | null {
+		const integrity = integrityInvariant().check(this.world, { def: this.def, actor: this.actor, genesis });
 		if (integrity) return { id: "integrity", message: integrity, authored: false };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(this.world, { def: this.def, actor: this.actor });
+			const msg = inv.check(this.world, { def: this.def, actor: this.actor, genesis });
 			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
 	}
 
 	apply(action: Action): StepResult {
+		this.tracingRolls = true;
+		try {
+			return this.applyTraced(action);
+		} finally {
+			this.tracingRolls = false;
+		}
+	}
+
+	private applyTraced(action: Action): StepResult {
 		const beforeVisible = this.visible();
 		const r = this.adjudicateRaw(action);
 		let sr: StepResult;
@@ -740,12 +780,17 @@ export class Simulation {
 	}
 
 	tick(n = 1): StepResult[] {
-		const out: StepResult[] = [];
-		for (let i = 0; i < n; i++) {
-			this.world.time += 1;
-			out.push(...this.runSystems());
+		this.tracingRolls = true;
+		try {
+			const out: StepResult[] = [];
+			for (let i = 0; i < n; i++) {
+				this.world.time += 1;
+				out.push(...this.runSystems());
+			}
+			return out;
+		} finally {
+			this.tracingRolls = false;
 		}
-		return out;
 	}
 
 	/** 按注册顺序运行全部系统一次，产出并提交 deltas（tick 与 reactive 共用）。

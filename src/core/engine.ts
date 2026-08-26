@@ -280,7 +280,7 @@ export class Engine {
 	}
 
 	/** 本回合声明校验的合法实体集（结构推导）：
-	 *   actor + 法则 facts 实体 + 本回合新可见实体 + 变更/即将发生实体（declare.ts 的 touchedFrom 从 changes/pending 补齐）
+	 *   actor + 法则 facts 实体（utterance 世界之言除外——话语不授权状态断言）+ 本回合新可见实体 + 变更/即将发生实体（declare.ts 的 touchedFrom 从 changes/pending 补齐）
 	 *   + **授予动作的实体参数与 involved**。
 	 *   **被拒动作的参数实体不进入**——被拒动作未改变任何状态，其参数（如「把朽木放进关着的陶罐」的陶罐）只应出现在散文里，
 	 *   否则 `[pot]: 陶罐燃起来` 这类状态矛盾声明会因 pot 是动作参数而漏网。授予动作的参数确已参与状态变更（如 use 的施动工具 torch）。 */
@@ -289,6 +289,7 @@ export class Engine {
 		const involved = new Set<string>([this.sim.actor]);
 		for (const r of results) {
 			for (const f of r.facts ?? []) {
+				if (f.kind === "utterance") continue; // 世界之言只许转述，不进声明契约 touched
 				for (const id of f.entities) involved.add(id);
 			}
 			if (!r.ok) continue;

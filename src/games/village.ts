@@ -17,6 +17,9 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	"in": { type: "id", label: "位置" },
 	actor: { type: "boolean", internal: true },
 	space: { type: "boolean", label: "场景" },
+	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册，词汇 lint 据此把关
+	openable: { type: "boolean", label: "可开" },
+	open: { type: "boolean", label: "已开" },
 	grabbable: { type: "boolean", label: "可持握" },
 	alive: { type: "boolean", label: "存活" },
 	hp: { type: "number", label: "体力" },
@@ -25,6 +28,8 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	down: { type: "boolean", label: "状态" },
 	coins: { type: "number", label: "铜币" },
 	berries: { type: "number", label: "浆果" },
+	grain: { type: "number", label: "谷物" },
+	water: { type: "number", label: "清水" },
 	ripe: { type: "boolean", label: "成熟" },
 	price: { type: "number", label: "价钱" },
 	resale: { type: "number", label: "回收价" },
@@ -317,12 +322,12 @@ export const village: GameDef = {
 			candidates: (sim) => ({ dog: sim.world.entities.filter((e) => e.props.aggressive === true).map((e) => e.id) }),
 			rules: [{
 				id: "dog.chase",
-				// roll key 保持「dog.bite」：骰子是 World 纯函数，key 变更即变更历史判定值
+				// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 				judge: (q, p) => {
 					if (!q.canReach(p.dog)) return deny("denyAll.subdue", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
 					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { subject: p.dog, reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
 					if (num(q.entity(q.actor)?.props.fatigue) >= 40) return deny("dog.tired", { subject: p.dog, reason: `你太疲惫了，挥不动手，${q.name(p.dog)}只是远远地龇牙。` });
-					const bite = -(2 + q.roll("dog.bite", 3));
+					const bite = -(2 + q.roll(`dog.bite#${p.dog}`, 3));
 					return grant([D.set(p.dog, "alive", false), D.inc(q.actor, "hp", bite)], `你抄起家伙赶跑了${q.name(p.dog)}，被它咬了一口。`);
 				},
 			}],
@@ -425,9 +430,10 @@ export const village: GameDef = {
 	invariants: [
 		{
 			id: "coins.conserved",
-			// era/DoL 守恒模式：铜币总量 == 种子值（含村里散落的铜币）。任何提交凭空铸币/灭币都被回滚。
+			// era/DoL 守恒模式：铜币总量 == 种子值（含村里散落的铜币），任何提交凭空铸币/灭币都被回滚；
+			// 种子读 genesis（实际起点世界）而非 def.world——存档恢复/变体开局时两者不同
 			check: (world, ctx) => {
-				const seed = sumProp(ctx.def.world, "coins");
+				const seed = sumProp(ctx.genesis, "coins");
 				const now = sumProp(world, "coins");
 				return now === seed ? null : `铜币总量 ${now} ≠ 种子值 ${seed}，经济被打破。`;
 			},

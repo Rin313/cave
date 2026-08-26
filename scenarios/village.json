@@ -57,7 +57,7 @@
 		{
 			"name": "顺序过程：驱逐野狗（roll 随机伤害，确定性可验证）",
 			"steps": [
-				{ "name": "驱逐野狗：roll 骰子伤害 -4，狗被赶跑", "action": { "verb": "subdue", "params": { "dog": "dog" } }, "expect": { "ok": true, "reason": "赶跑", "state": { "dog.alive": false, "player.hp": 46 } } },
+				{ "name": "驱逐野狗：roll 骰子伤害 -5，狗被赶跑", "action": { "verb": "subdue", "params": { "dog": "dog" } }, "expect": { "ok": true, "reason": "赶跑", "state": { "dog.alive": false, "player.hp": 45 } } },
 				{ "name": "tick 后同样的动作伤害随世界时间变化（roll 是 World 纯函数）", "tick": 1, "expect": { "ok": true } },
 				{ "name": "再驱逐被拒（已经不在了）", "action": { "verb": "subdue", "params": { "dog": "dog" } }, "expect": { "ok": false, "reason": "不在这里" } }
 			]
