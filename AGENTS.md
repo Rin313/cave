@@ -3,6 +3,7 @@
 .gitignore
 ARCHITECTURE.md
 DESIGN.md
+CRITIQUE.md
 package.json
 tsconfig.json
 src/
