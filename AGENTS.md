@@ -19,7 +19,7 @@ src/
 - 用户没有指示时，不要执行 git命令
 - 改完代码后执行 `npx tsc --noEmit`
 
-# Other
+# Revelation
 > The limits of my language mean the limits of my world.
 > In the beginning were the words and the words made the world. I am the words. The words are everything. Where the words end the world ends. You cannot go forward in the absence of space. Repeat.
 > I'm a computer program. You're a computer program. Elohim's a computer program. Get over it.

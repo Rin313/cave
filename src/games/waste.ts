@@ -321,6 +321,7 @@ export const waste: GameDef = {
 		mark: markVerb,
 		examine: examineVerb,
 	},
+	turnTicks: 1,
 	world: {
 		time: 0,
 		entities: [

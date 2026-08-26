@@ -31,6 +31,8 @@ const ACT_TOOL = "act";
 export interface ActOutcome {
 	kind: "applied" | "rejected" | "refused" | "partial";
 	results: StepResult[];
+	/** 本回合时间流逝产出（GameDef.turnTicks 驱动），独立于玩家动作裁决，不计入 kind。 */
+	elapsed: StepResult[];
 	refusal?: { label: string; reason?: string };
 }
 
@@ -72,7 +74,7 @@ export class Engine {
 	private readonly declState: DeclToolState;
 	private readonly textBuf: string[];
 	private readonly channel: ActChannel;
-	private outcome: ActOutcome = { kind: "refused", results: [] };
+	private outcome: ActOutcome = { kind: "refused", results: [], elapsed: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
@@ -205,7 +207,7 @@ export class Engine {
 	}
 
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
-		this.outcome = { kind: "refused", results: [] };
+		this.outcome = { kind: "refused", results: [], elapsed: [] };
 		this.gate.active = true;
 		const state = this.sim.digest();
 		const affordances = this.sim.affordances();
@@ -222,31 +224,35 @@ export class Engine {
 		}
 
 		const results = this.outcome.results;
-		const changes = results.flatMap((r) => r.changes);
+		// 回合时间流逝（turnTicks）：动作裁决后、表达前推进——无论动作成败世界都继续走；事件并入表达与声明契约
+		const elapsed = (this.def.turnTicks ?? 0) > 0 ? this.sim.tick(this.def.turnTicks!) : [];
+		this.outcome.elapsed = elapsed;
+		const changes = [...results, ...elapsed].flatMap((r) => r.changes);
 		const stateAfter = this.sim.digest();
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		const visibleAfter = this.sim.visible();
 		const revealed = [...visibleAfter].filter((id) => !visibleBefore.has(id));
-		const involved = this.involvedEntities(results, revealed);
+		const involved = this.involvedEntities([...results, ...elapsed], revealed);
 		const narration = await this.expressionPass(
-			buildExpressionPrompt(this.sim, stateAfter, results, this.outcome.refusal, undefined, [...internalPropsOf(this.def)], pending, action.intent, revealed),
+			buildExpressionPrompt(this.sim, stateAfter, [...results, ...elapsed], this.outcome.refusal, undefined, [...internalPropsOf(this.def)], pending, action.intent, revealed),
 			changes,
 			involved,
 			pending,
 		);
-		this.recordTurn(action.intent);
+		this.recordTurn(action.intent, elapsed);
 		this.emit({ type: "text_delta", delta: narration });
 		return this.outcome;
 	}
 
 	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。 */
-	private recordTurn(intent: string): void {
+	private recordTurn(intent: string, elapsed: StepResult[]): void {
 		const o = this.outcome;
+		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || this.sim.describeAction(r.action)}`);
 		this.memory.push({
 			time: this.sim.world.time,
 			intent: intent.slice(0, 80),
 			kind: o.kind,
-			moves: o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`),
+			moves: [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves],
 			refusal: o.refusal?.label,
 		});
 		if (this.memory.length > MEMORY_LIMIT) this.memory.splice(0, this.memory.length - MEMORY_LIMIT);
@@ -457,9 +463,18 @@ export function buildExpressionPrompt(
 		if (e) lines.push(`[焦点] ${e.name} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。叙述可围绕它展开，也可如实描写场景中其他可见实体；不得因此虚构该实体的任何状态。`, "");
 	}
 	const narratable = results.filter((r) => r.deniedBy !== "protocol"); // 协议性拒绝是引擎↔模型通道流量，不是世界事件，不进玩家叙述
+	if (refusal) {
+		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
+	}
 	if (narratable.length) {
 		lines.push("本回合尝试：");
 		for (const r of narratable) {
+			if (r.action.verb === TICK_VERB) {
+				// 时间流逝行：世界事件的变更/事实直陈，不是玩家的尝试
+				const bits = [r.changes.filter((c) => !internal.has(c.prop)).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
+				lines.push(bits.length ? `- ${sim.describeAction(r.action)}：${bits.join("。")}` : `- ${sim.describeAction(r.action)}。`);
+				continue;
+			}
 			const visible = r.changes.filter((c) => !internal.has(c.prop));
 			const changes = visible.length
 				? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}`
@@ -469,9 +484,7 @@ export function buildExpressionPrompt(
 			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
 			lines.push(`- 尝试「${sim.describeAction(r.action)}」→ ${verdict}${changes}${facts}${involved}`);
 		}
-	} else if (refusal) {
-		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
-	} else {
+	} else if (!refusal) {
 		lines.push("没有任何改变。");
 	}
 	const pendingVisible = pending.filter((c) => !internal.has(c.prop));

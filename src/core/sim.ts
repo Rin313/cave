@@ -263,6 +263,8 @@ export interface GameDef {
 	probeScope?: (world: World, actor: string) => string[];
 	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
 	reactiveSystems?: boolean;
+	/** 回合级时间驱动：引擎每回合动作裁决后、表达前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
+	turnTicks?: number;
 	/** 序列化投影：决定状态以什么形态进映射/表达 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;

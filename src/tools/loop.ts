@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { Engine, type ActOutcome } from "../core/engine.ts";
+import { Engine, fmtChange, type ActOutcome } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
 import type { Change, GameDef, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
@@ -181,6 +181,10 @@ function printAct(sim: Simulation, o: {
 	console.log(`\n【#${o.turn} act】${o.intent}${sel} → ${o.outcome.kind}${ref}`);
 	for (const l of proposalLines(o.toolCalls)) console.log(l);
 	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action)}：${r.reason}`);
+	for (const r of o.outcome.elapsed) {
+		const bits = [r.changes.map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
+		console.log(`  ⏱ ${bits.join("；") || r.reason}`);
+	}
 	warnValidations(o.validations);
 	const u = usageLine(o.usages);
 	if (u) console.log(u);
@@ -273,6 +277,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			kind: outcome.kind,
 			refusal: outcome.refusal ?? null,
 			results: outcome.results,
+			elapsed: outcome.elapsed,
 			narration,
 			validations,
 			usage: usages,
@@ -283,7 +288,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 				run: runId, game: meta.game, turn: meta.turn, phase: "act",
 				intent, selection: selection ?? null, toolCalls,
 				kind: outcome.kind, refusal: outcome.refusal ?? null,
-				results: outcome.results, narration, validations, usage: usages,
+				results: outcome.results, elapsed: outcome.elapsed, narration, validations, usage: usages,
 				world: sim.snapshot(),
 			});
 		} else {
@@ -316,7 +321,7 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined,
 				const narration = texts.join("");
 				const entry = {
 					turn: meta.turn, phase: "act", intent: line, selection: null, toolCalls,
-					kind: outcome.kind, refusal: outcome.refusal ?? null, results: outcome.results,
+					kind: outcome.kind, refusal: outcome.refusal ?? null, results: outcome.results, elapsed: outcome.elapsed,
 					narration, validations, usage: usages,
 				};
 				appendTranscript(dir, entry);
