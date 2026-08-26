@@ -7,7 +7,6 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 桌面壳 | **Electron** | |
-| 前端框架 | Vite | |
 | LLM 编排 | **pi coding-agent SDK**（进程内） | `@earendil-works/pi-coding-agent`，非 RPC mode，进程内集成；已发布 npm 包，直接依赖 registry 版本；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/`（SDK API 见 `sdk.md`） |
 | 持久化 | **SQLite** | 存档 + 回合审计，存什么见 §3 |
 | Node 运行时 | **Node 26** | 开发环境工具链；主进程实际运行在 Electron 内嵌 Node 上（Electron 43 内嵌 Node 24.18 ≥ pi SDK 的 `engines.node >= 22.19`；系统 Node 与内嵌 Node 相互独立，不冲突） |
@@ -59,6 +58,7 @@
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`props`（属性注册表：type/label/internal/stylistic）。
 - **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性（`integrityInvariant`：实体 id 唯一、id 型属性/关系端点/焦点指向存在的实体），游戏可追加领域不变式（如「燃着必须明火」）。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式（如 village 的 `coins.conserved`：铜币总量 == 初始世界总量），凭空铸币/灭币一律被回滚。
 - **core 只提供通用工具，不耦合游戏**：状态化 rng 已移除——随机由 games 层以 World 状态自持（纯函数派生），`World` 即完整真相源，check/apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`roll`（确定性骰子，`hashStr(time#key)` 派生 [1,sides]，key 需同 tick 唯一——规则经 `Q.roll(key, sides)` 调用，check/apply/dryTick 天然一致）、`sumProp`（聚合助手，守恒不变式用）、`reach`/`reachReason`（可达性空槽，空间构件由游戏自选，如 `src/games/space.ts`）、`holdable`（可持握空槽，游戏必须声明，core 不提供缺省，可持握语义由游戏自定）、`integrityInvariant`（引用完整性硬墙）。引擎隐式语义经只读上下文 `Q` 具名入口收口（`q.time` 读时刻、`q.roll` 骰子等）。多时间尺度（回合/日/月）由游戏自持（`world.day` 等计数器，systems 内按 `q.time` 判定），core 不内置历法。
+- **games 层怎么写都没有问题，且永不耦合进 core**：games 代码允许任意写法与重复样板（含按实体键控的特判、逐游戏重复的 digest/summarize/label 派生）——这是创作者的自由，不是待修的债；即便多个游戏收敛出相同形态，也不得「提升为 core 工具」——core 吸收游戏侧形态即开始耦合游戏、挤压其余游戏的写法空间。共享的游戏侧语义只走 games/ 内自愿接入的构件（先例：`src/games/space.ts`）。
 
 ## 3. 持久化边界
 
