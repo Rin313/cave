@@ -718,9 +718,11 @@ export class Simulation {
 		return out;
 	}
 
-	/** 动作的世界腔描述（表达层「本回合尝试」与动作空间兜底描述共用）。 */
+	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）；tick 伪动词无游戏词可连，走 Messages.timePassed。 */
 	describeAction(action: Action): string {
 		const verb = this.def.verbs[action.verb];
+		if (action.verb === TICK_VERB) return messagesFor(this.def).timePassed;
+		if (!verb) return action.verb;
 		const name = (v: PropValue): string => {
 			if (typeof v === "string") {
 				const hit = entity(this.world, v);
@@ -728,15 +730,13 @@ export class Simulation {
 			}
 			return String(v);
 		};
-		if (action.verb === TICK_VERB) return messagesFor(this.def).timePassed;
-		if (!verb) return `「${action.verb}」`;
 		const entityParams = new Set(verb.entityParams ?? []);
 		const parts = Object.entries(action.params).map(([k, v]) => {
 			if (entityParams.has(k)) return name(v);
 			if (typeof v === "string") return name(v);
 			return String(v);
 		});
-		return parts.length ? `${verb.label} ${parts.join("，")}` : verb.label;
+		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
 	tick(n = 1): StepResult[] {
