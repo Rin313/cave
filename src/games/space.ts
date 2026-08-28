@@ -22,19 +22,19 @@ export interface SpaceOpts {
 }
 
 /** 容器包含树语义（space / openable / open / in）的可达性。 */
-export function inTreeReach(world: World, actor: string, id: string, opts: SpaceOpts = {}): { ok: boolean; reason: string } {
+export function inTreeReach(world: World, player: string, id: string, opts: SpaceOpts = {}): { ok: boolean; reason: string } {
 	const msgs = { ...REACH_MSGS, ...opts.msgs };
 	const e = entity(world, id);
 	if (!e) return { ok: false, reason: msgs.reachMissing };
 	let cur = e.props["in"] as string | null;
 	const seen = new Set<string>();
-	while (cur != null && cur !== actor) {
+	while (cur != null && cur !== player) {
 		if (seen.has(cur)) return { ok: false, reason: msgs.reachCycle };
 		seen.add(cur);
 		const parent = entity(world, cur);
 		if (!parent) return { ok: false, reason: msgs.reachNotHere };
 		if (parent.props.space === true) {
-			return parent.id === (entity(world, actor)?.props["in"] as string)
+			return parent.id === (entity(world, player)?.props["in"] as string)
 				? { ok: true, reason: "" }
 				: { ok: false, reason: msgs.reachNotHere };
 		}
@@ -48,24 +48,24 @@ export function inTreeReach(world: World, actor: string, id: string, opts: Space
 }
 
 /** 容器包含树语义下的可见性：玩家可达的全部实体 + 场景（space）实体。 */
-export function inTreeVisible(world: World, actor: string, opts: SpaceOpts = {}): Set<string> {
-	const vis = new Set<string>([actor]);
+export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}): Set<string> {
+	const vis = new Set<string>([player]);
 	for (const e of world.entities) {
 		if (e.props.space === true) vis.add(e.id);
-		if (inTreeReach(world, actor, e.id, opts).ok) vis.add(e.id);
+		if (inTreeReach(world, player, e.id, opts).ok) vis.add(e.id);
 	}
 	return vis;
 }
 
 /** 由 inTreeReach 派生的 GameDef.reach / reachReason 槽位（不可达时的世界腔理由）。 */
 export function reachFor(opts: SpaceOpts = {}): {
-	reach: (world: World, actor: string, id: string) => boolean;
-	reachReason: (world: World, actor: string, id: string) => string | null;
+	reach: (world: World, player: string, id: string) => boolean;
+	reachReason: (world: World, player: string, id: string) => string | null;
 } {
 	return {
-		reach: (world, actor, id) => inTreeReach(world, actor, id, opts).ok,
-		reachReason: (world, actor, id) => {
-			const r = inTreeReach(world, actor, id, opts);
+		reach: (world, player, id) => inTreeReach(world, player, id, opts).ok,
+		reachReason: (world, player, id) => {
+			const r = inTreeReach(world, player, id, opts);
 			return r.ok ? null : (r.reason || null);
 		},
 	};

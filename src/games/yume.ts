@@ -13,7 +13,6 @@ import { Type } from "typebox";
 
 const YUME_PROPS: Record<string, PropDef> = {
 	"in": { type: "id", label: "所在" },
-	actor: { type: "boolean", internal: true },
 	space: { type: "boolean", label: "地点" },
 	awake: { type: "boolean", label: "清醒" },
 	ended: { type: "boolean", internal: true },
@@ -32,18 +31,18 @@ const num = (v: unknown): number => Number(v ?? 0);
 /** 效果清单：收齐四枚是唯一的隐藏完成度（世界自己知道，从不告诉玩家）。 */
 const EFFECTS = ["knife_effect", "lamp_effect", "cat_effect", "bike_effect"] as const;
 
-const hasEffect = (q: Q, id: string): boolean => entity(q.world, id)?.props.in === q.actor;
+const hasEffect = (q: Q, id: string): boolean => entity(q.world, id)?.props.in === q.player;
 const hasAllEffects = (q: Q): boolean => EFFECTS.every((e) => hasEffect(q, e));
-const hereOf = (q: Q): string => String(q.entity(q.actor)?.props["in"] ?? "");
+const hereOf = (q: Q): string => String(q.entity(q.player)?.props["in"] ?? "");
 
-function summarizeYume(input: { world: World; changes: Change[]; actor: string }): string {
-	const { world, changes, actor } = input;
-	const me = entity(world, actor);
+function summarizeYume(input: { world: World; changes: Change[]; player: string }): string {
+	const { world, changes, player } = input;
+	const me = entity(world, player);
 	const cur = me?.props["in"] as string | null;
 	const lines = [`你在${entity(world, cur ?? "")?.name ?? "一片空白"}。`];
-	const around = world.entities.filter((e) => e.id !== actor && e.props.space !== true && e.props["in"] === cur);
+	const around = world.entities.filter((e) => e.id !== player && e.props.space !== true && e.props["in"] === cur);
 	if (around.length) lines.push(`附近有：${around.map((e) => e.name).join("、")}。`);
-	const carried = world.entities.filter((e) => e.id !== actor && e.props["in"] === actor);
+	const carried = world.entities.filter((e) => e.id !== player && e.props["in"] === player);
 	if (carried.length) lines.push(`带着：${carried.map((e) => e.name).join("、")}。`);
 	for (const c of changes) {
 		if (c.op === "spawn") lines.push(`出现了：${c.name ?? c.entity}。`);
@@ -55,7 +54,7 @@ function summarizeYume(input: { world: World; changes: Change[]; actor: string }
 function digestYume(sim: Simulation): string {
 	const vis = sim.visible();
 	const internal = internalPropsOf(sim.def);
-	const me = sim.world.entities.find((e) => e.id === sim.actor);
+	const me = sim.world.entities.find((e) => e.id === sim.player);
 	const cur = me?.props["in"] as string | null;
 	const exits = (sim.world.relations ?? [])
 		.filter((r) => r.type === "path" && r.from === cur)
@@ -66,7 +65,7 @@ function digestYume(sim: Simulation): string {
 		kind: e.kind,
 		props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 	}));
-	const carried = sim.world.entities.filter((e) => e.kind === "effect" && e.props["in"] === sim.actor).map((e) => e.name);
+	const carried = sim.world.entities.filter((e) => e.kind === "effect" && e.props["in"] === sim.player).map((e) => e.name);
 	return JSON.stringify({ time: sim.world.time, awake: me?.props.awake !== false, here: cur ? (entity(sim.world, cur)?.name ?? cur) : null, exits, carried, entities: items });
 }
 
@@ -79,14 +78,14 @@ const sleepVerb = defineVerb({
 		{
 			id: "sleep.dream",
 			judge: (q) => {
-				if (q.entity(q.actor)?.props.awake === false) return null;
+				if (q.entity(q.player)?.props.awake === false) return null;
 				if (hereOf(q) !== "room") return deny("sleep.place", { reason: "这里是梦。想回去的话，得在梦里再睡一次。" });
-				return grant([D.set(q.actor, "awake", false), D.set(q.actor, "in", "nexus")], "你闭上眼。黑暗涌上来，退去时，你已经站在门厅里。");
+				return grant([D.set(q.player, "awake", false), D.set(q.player, "in", "nexus")], "你闭上眼。黑暗涌上来，退去时，你已经站在门厅里。");
 			},
 		},
 		{
 			id: "sleep.wake",
-			judge: (q) => grant([D.set(q.actor, "awake", true), D.set(q.actor, "in", "room")], "你掐了一下自己。天花板、床垫、雪花屏的电视——你回到了房间里。"),
+			judge: (q) => grant([D.set(q.player, "awake", true), D.set(q.player, "in", "room")], "你掐了一下自己。天花板、床垫、雪花屏的电视——你回到了房间里。"),
 		},
 	],
 });
@@ -98,7 +97,7 @@ const goVerb = defineVerb({
 	description: "沿路前往相邻的地点（dest 是地点实体 id，见出口列表）。",
 	schema: Type.Object({ dest: Type.String({ description: "目的地实体 id" }) }),
 	candidates: (sim) => {
-		const cur = sim.world.entities.find((e) => e.id === sim.actor)?.props["in"] as string | null;
+		const cur = sim.world.entities.find((e) => e.id === sim.player)?.props["in"] as string | null;
 		return { dest: (sim.world.relations ?? []).filter((r) => r.type === "path" && r.from === cur).map((r) => r.to) };
 	},
 	rules: [
@@ -117,7 +116,7 @@ const goVerb = defineVerb({
 				const d = q.entity(p.dest);
 				if (!d || d.props.space !== true) return deny("go.noplace", { object: p.dest, reason: `${q.name(p.dest)}？这里没有这个地方。` });
 				if (q.rel(hereOf(q), p.dest, "path") === null) return deny("go.noway", { subject: hereOf(q), object: p.dest, reason: `从这里没有路通往${q.name(p.dest)}。` });
-				return grant([D.set(q.actor, "in", p.dest)], `你走进了${q.name(p.dest)}。`);
+				return grant([D.set(q.player, "in", p.dest)], `你走进了${q.name(p.dest)}。`);
 			},
 		},
 	],
@@ -139,8 +138,8 @@ const takeVerb = defineVerb({
 				if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
 				const t = q.entity(p.entity);
 				if (t?.props.takable !== true) return deny("take.heavy", { subject: p.entity, reason: `${q.name(p.entity)}带不走。` });
-				if (t.props["in"] === q.actor) return deny("take.held", { subject: p.entity, reason: `${q.name(p.entity)}已经收好了。` });
-				return grant([D.set(p.entity, "in", q.actor)], t.kind === "effect"
+				if (t.props["in"] === q.player) return deny("take.held", { subject: p.entity, reason: `${q.name(p.entity)}已经收好了。` });
+				return grant([D.set(p.entity, "in", q.player)], t.kind === "effect"
 					? `你收下了${q.name(p.entity)}。说不清为什么，世界的质地变了一点。`
 					: `你把${q.name(p.entity)}收好了。`);
 			},
@@ -159,7 +158,7 @@ const interactVerb = defineVerb({
 	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
 	entityParams: ["entity"],
 	candidates: (sim) => ({
-		entity: [...sim.visible()].filter((id) => id !== sim.actor && sim.world.entities.find((e) => e.id === id)?.props.space !== true),
+		entity: [...sim.visible()].filter((id) => id !== sim.player && sim.world.entities.find((e) => e.id === id)?.props.space !== true),
 	}),
 	rules: [
 		{ id: "int.futon", judge: (q, p) => (p.entity !== "futon" ? null : grant([], "床垫陷下去一个你的形状，好像一直在等你回来。")) },
@@ -183,7 +182,7 @@ const interactVerb = defineVerb({
 			judge: (q, p) => {
 				if (p.entity !== "window") return null;
 				if (!hasAllEffects(q) || !entity(q.world, "shadow")) return grant([], "窗外是寻常的黄昏。晾着床单。");
-				return grant([D.set(q.actor, "ending", true)], "你隔着玻璃，拉住了那只手。手心很凉，回握的力气却很轻。");
+				return grant([D.set(q.player, "ending", true)], "你隔着玻璃，拉住了那只手。手心很凉，回握的力气却很轻。");
 			},
 		},
 		{ id: "int.door.warm", judge: (q, p) => (p.entity !== "door_warm" ? null : grant([], "门把手是温的，像谁刚刚才松开。")) },
@@ -234,7 +233,7 @@ const interactVerb = defineVerb({
 				if (p.entity !== "wheel_man") return null;
 				const dests = ["forest", "neon", "desert", "snow"];
 				const dest = dests[q.roll("wheel.teleport", dests.length) - 1]!;
-				return grant([D.set(q.actor, "in", dest)], `独轮车人转了半圈。你再眨眼时，脚下已经是${q.name(dest)}。`);
+				return grant([D.set(q.player, "in", dest)], `独轮车人转了半圈。你再眨眼时，脚下已经是${q.name(dest)}。`);
 			},
 		},
 		{ id: "int.snowman", judge: (q, p) => (p.entity !== "snowman" ? null : grant([], "雪人的两张脸都在笑。你又数了一遍，还是两张。")) },
@@ -293,7 +292,7 @@ export const yume: GameDef = {
 			{ id: "snow", name: "雪原", kind: "space", tags: [], props: { space: true, desc: "雪停了。安静得耳朵发胀。" } },
 			{ id: "snowman", name: "双脸雪人", kind: "structure", tags: [], props: { "in": "snow", desc: "一个雪堆，前后各有一张脸。" } },
 			{ id: "lake", name: "冻湖", kind: "structure", tags: [], props: { "in": "snow", desc: "整片湖冻成了哑光的镜子。" } },
-			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, "in": "room", awake: true } },
+			{ id: "player", name: "你", kind: "actor", tags: [], props: { "in": "room", awake: true } },
 		],
 		relations: [
 			{ from: "nexus", to: "forest", type: "path", value: true },
@@ -315,41 +314,41 @@ export const yume: GameDef = {
 		{
 			id: "dream.air",
 			run: (q) => {
-				if (q.entity(q.actor)?.props.awake !== false) return null;
+				if (q.entity(q.player)?.props.awake !== false) return null;
 				if (q.roll("dream.air", 7) !== 1) return null;
 				const whispers = [
 					"很远的地方有一扇门开了，又关上。",
 					"水滴声。找不到来源。",
 					"有什么东西在你身后站了一会儿，又走了。",
 				];
-				return { deltas: [], facts: [{ kind: "utterance", text: whispers[num(q.time) % whispers.length]!, entities: [q.actor] }] };
+				return { deltas: [], facts: [{ kind: "utterance", text: whispers[num(q.time) % whispers.length]!, entities: [q.player] }] };
 			},
 		},
 		{
 			// 终局观测：收齐四枚效果后醒来待在房间，阳台上的人影出现（spawn）。世界从不解释条件。
 			id: "ending.watch",
 			run: (q) => {
-				const me = q.entity(q.actor);
+				const me = q.entity(q.player);
 				if (me?.props.awake !== true || me.props.ended === true || hereOf(q) !== "room") return null;
 				if (!hasAllEffects(q)) return null;
 				return {
 					deltas: [
-						D.set(q.actor, "ended", true),
+						D.set(q.player, "ended", true),
 						D.spawn({ id: "shadow", name: "阳台上的人影", kind: "figure", tags: [], props: { "in": "room", desc: "隔着玻璃看不清脸。它抬起了一只手。" } }),
 					],
-					facts: [{ text: "阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。", entities: [q.actor, "shadow"] }],
+					facts: [{ text: "阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。", entities: [q.player, "shadow"] }],
 				};
 			},
 		},
 	],
 	props: YUME_PROPS,
-	grounding: (world, actor) => {
+	grounding: (world, player) => {
 		// 视野 = 自己 + 所在地 + 同地存在 + 随身携带（in 指向自己）+ 相邻地点（路径另一端）；其余世界藏在雾里。
-		const cur = entity(world, actor)?.props["in"] as string | null;
-		const out = new Set<string>([actor]);
+		const cur = entity(world, player)?.props["in"] as string | null;
+		const out = new Set<string>([player]);
 		if (cur) out.add(cur);
 		for (const e of world.entities) {
-			if (e.props["in"] === cur || e.props["in"] === actor) out.add(e.id);
+			if (e.props["in"] === cur || e.props["in"] === player) out.add(e.id);
 			if (e.props.space === true) {
 				for (const r of world.relations ?? []) {
 					if (r.type === "path" && r.from === cur && r.to === e.id) {

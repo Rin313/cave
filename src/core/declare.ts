@@ -38,7 +38,7 @@ export interface StructuredFact {
 }
 
 /** 声明契约核心校验：事实实体必须可见且属本回合涉及集
- *  （touched：actor + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数，被拒动作参数排除）；无名字回退。
+ *  （touched：player——体验者角色的缺省 + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数，被拒动作参数排除）；无名字回退。
  *  返回逐条错误列表（null = 通过）。 */
 export function validateFactIds(facts: StructuredFact[], ctx: DeclCtx): string[] | null {
 	if (!facts.length) return null;

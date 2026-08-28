@@ -134,10 +134,11 @@ export const TICK_VERB = "tick";
  *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
 export interface Q {
 	readonly world: World;
-	/** 意志锚点（def.playerId，名义宿主）：无主语动词的缺省主语、感知钩子的锚点参数。
-	 *  不是「动作施事」的强制来源——显式主语动词的语义主语从参数取（上帝视角的主语全在参数里，后果落在被指令者）；
-	 *  附身/换躯等「现宿主」语义由游戏从世界态推导（钩子与规则可读全量 world，可见性门自动跟随视角）。 */
-	readonly actor: string;
+	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值。
+	 *  对规则它只承担一个缺省角色——无主语动词的缺省主语；显式主语动词的语义主语从参数取
+	 *  （上帝视角的主语全在参数里，后果落在被指令者）。现宿主（附身/换躯的器皿）由游戏从世界态推导，
+	 *  不在此字段——第一人称游戏里居所=现宿主，二者同一。 */
+	readonly player: string;
 	readonly time: number;
 	readonly params: Record<string, PropValue>;
 	entity(id: string): Entity | undefined;
@@ -254,9 +255,10 @@ export interface VerbDef {
 export interface GameDef {
 	id: string;
 	title: string;
-	/** 意志锚点：act 通道意图的归属实体（意图属于玩家，此实体是它在世界的住址）——无主语动词的缺省主语、
-	 *  叙述的受话人、integrity 墙保护的存在。主体性在 core 只有意志与视角两个概念：本字段只钉死意志的住址，
-	 *  不钉死身体与视角——身体（现宿主）由游戏从世界态推导（附身时名义宿主退为空壳，可 despawn），
+	/** 意志的居所：def 指向世界的唯一数据引用。意志（act 通道的说话人，每回合恰好一个）不在世界里——账本里只有这根引用；
+	 *  它同时是五个缺省角色的缺省值：无主语动词的缺省主语、感知谓词的缺省视点、声明契约的常任成员、叙述「你」的缺省指称、
+	 *  integrity 墙的保护对象。前四者是「现宿主」角色的缺省（体验者一侧，附身时属器皿；附身游戏在钩子与规则内从世界态推导
+	 *  现宿主并无视本引用，居所退为空壳），只有墙保护属引用自身的必要性。居所上的状态全是身体态，意志自身无状态。
 	 *  视角是感知面钩子的现值（缺省全见全达即上帝视角；第一人称是游戏声明，非引擎立场）。 */
 	playerId: string;
 	verbs: Record<string, VerbDef>;
@@ -267,22 +269,22 @@ export interface GameDef {
 	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 与表达校验读 internal，
 	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
 	props?: Record<string, PropDef>;
-	/** 确定性回退摘要钩子。 */
-	summarize?: (input: { world: World; changes: Change[]; actor: string }) => string;
+	/** 确定性回退摘要钩子（player = 意志居所）。 */
+	summarize?: (input: { world: World; changes: Change[]; player: string }) => string;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
-	grounding?: (world: World, actor: string) => string[];
+	grounding?: (world: World, player: string) => string[];
 	/** 可达性槽位（游戏声明）：实体是否够得着。core 不内嵌任何空间模型——容器包含树等由游戏自选
 	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / 施动工具前提共用此谓词。 */
-	reach?: (world: World, actor: string, id: string) => boolean;
+	reach?: (world: World, player: string, id: string) => boolean;
 	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
-	reachReason?: (world: World, actor: string, id: string) => string | null;
+	reachReason?: (world: World, player: string, id: string) => string | null;
 	/** 可持握槽位（游戏必须声明）：实体能否被拿起/当施动工具。core 不内嵌任何属性名、不提供缺省——
 	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
 	 *  wieldable（= holdable + reach）与施动工具前提共用。 */
-	holdable?: (world: World, actor: string, id: string) => boolean;
+	holdable?: (world: World, player: string, id: string) => boolean;
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
 	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
-	probeScope?: (world: World, actor: string) => string[];
+	probeScope?: (world: World, player: string) => string[];
 	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
 	reactiveSystems?: boolean;
 	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
@@ -299,7 +301,6 @@ export interface GameDef {
 /** 不变式检查上下文：世界 + 游戏定义（注册表等）+ 本实例的实际起点世界（守恒类种子的正确锚点）+ 本次提交的变更。 */
 export interface InvariantCtx {
 	def: GameDef;
-	actor: string;
 	/** 创世快照：本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
 	genesis: World;
 	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）：过渡不变式据此审计 provenance（DESIGN §3.3）。
@@ -323,7 +324,7 @@ export function integrityInvariant(): Invariant {
 		check: (world, ctx) => {
 			const ids = new Set(world.entities.map((e) => e.id));
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
-			// playerId 是 def 指向世界的唯一数据引用（动作归属与感知面投影的原点），每次裁决都被解引用，
+			// playerId 是 def 指向世界的唯一数据引用（无主语动词与感知钩子的解引用原点），每次裁决都被解引用，
 			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
 			const idProps = new Set<string>();
@@ -459,12 +460,12 @@ export class Simulation {
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
 	}
 
-	get actor(): string {
+	get player(): string {
 		return this.def.playerId;
 	}
 
 	visible(): Set<string> {
-		if (this.def.grounding) return new Set(this.def.grounding(this.world, this.actor));
+		if (this.def.grounding) return new Set(this.def.grounding(this.world, this.player));
 		return new Set(this.world.entities.map((e) => e.id));
 	}
 
@@ -513,7 +514,7 @@ export class Simulation {
 			const first = invalid[0]!;
 			const hit = entity(this.world, first);
 			const reason =
-				(hit ? (this.def.reachReason?.(this.world, this.actor, first) ?? msgs.invisibleEntity?.([hit.name])) : msgs.invisibleEntity?.([])) ?? msgs.noResponse;
+				(hit ? (this.def.reachReason?.(this.world, this.player, first) ?? msgs.invisibleEntity?.([hit.name])) : msgs.invisibleEntity?.([])) ?? msgs.noResponse;
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", subject: first, reason, debug: invalid.join(",") } };
 		}
 		const q = this.query(action.params);
@@ -531,10 +532,10 @@ export class Simulation {
 	/** 构造规则判定上下文：引擎隐式语义在此唯一收口。 */
 	private query(params: Record<string, PropValue>): Q {
 		const world = this.world;
-		const actor = this.actor;
+		const player = this.player;
 		return {
 			world,
-			actor,
+			player,
 			time: world.time,
 			params,
 			entity: (id) => entity(world, id),
@@ -550,8 +551,8 @@ export class Simulation {
 				this.traceRollKey(key);
 				return rollDice(world, key, sides);
 			},
-			canReach: (id) => (this.def.reach ? this.def.reach(world, actor, id) : true),
-			reachWhy: (id) => (this.def.reachReason ? this.def.reachReason(world, actor, id) : null),
+			canReach: (id) => (this.def.reach ? this.def.reach(world, player, id) : true),
+			reachWhy: (id) => (this.def.reachReason ? this.def.reachReason(world, player, id) : null),
 			visible: () => this.visible(),
 		};
 	}
@@ -618,10 +619,10 @@ export class Simulation {
 
 	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者（authored 标记产出方）。 */
 	private checkInvariants(genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
-		const integrity = integrityInvariant().check(this.world, { def: this.def, actor: this.actor, genesis, changes });
+		const integrity = integrityInvariant().check(this.world, { def: this.def, genesis, changes });
 		if (integrity) return { id: "integrity", message: integrity, authored: false };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(this.world, { def: this.def, actor: this.actor, genesis, changes });
+			const msg = inv.check(this.world, { def: this.def, genesis, changes });
 			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
@@ -672,14 +673,14 @@ export class Simulation {
 	/** 实体是否可持握（游戏声明的 GameDef.holdable 槽位，core 不内嵌任何属性名）。
 	 *  未声明的游戏一律不可持握（无缺省属性假设）。 */
 	holdable(id: string): boolean {
-		return this.def.holdable ? this.def.holdable(this.world, this.actor, id) : false;
+		return this.def.holdable ? this.def.holdable(this.world, this.player, id) : false;
 	}
 
 	/** 实体是否可作为施动工具（可持握 + 可达）：施动工具前提门（instrumentViolation）的共享谓词。
 	 *  可持握走 holdable 槽位，可达性走 GameDef.reach 槽位（core 不内嵌空间模型）。 */
 	wieldable(id: string): boolean {
 		if (!this.holdable(id)) return false;
-		return this.def.reach ? this.def.reach(this.world, this.actor, id) : true;
+		return this.def.reach ? this.def.reach(this.world, this.player, id) : true;
 	}
 
 	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）；tick 伪动词无游戏词可连，走 Messages.timePassed。 */
