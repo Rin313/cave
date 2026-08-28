@@ -1,4 +1,4 @@
-import type { PropValue, World } from "./sim.ts";
+import type { GameDef, PropValue, World } from "./sim.ts";
 
 /** 未知值递归规约为 PropValue（LLM 参数与场景文件共用的宽松入口）：字符串 "true"/"false"/"null" 转字面量，其余原样保留。 */
 export function coerceValue(v: unknown): PropValue {
@@ -34,6 +34,21 @@ export function sumProp(world: World, prop: string): number {
 		if (typeof v === "number" && Number.isFinite(v)) total += v;
 	}
 	return total;
+}
+
+/** 引用清点原语（生长与收缩对称，DESIGN §3.4）：按注册表 type:"id" 枚举指向该实体的 (entity, prop)。
+ *  语义无关的机械清点——despawn 前的悬空引用盘点（容器级 despawn 先迁散子女同理）；
+ *  清理策略（置空/转移/级联生灭）是游戏语义，由规则决定；关系边由 despawn 自动级联，不在此列。 */
+export function refsTo(def: GameDef, world: World, id: string): { entity: string; prop: string }[] {
+	const idProps = Object.entries(def.props ?? {}).filter(([, p]) => p.type === "id").map(([k]) => k);
+	const out: { entity: string; prop: string }[] = [];
+	for (const e of world.entities) {
+		if (e.id === id) continue;
+		for (const p of idProps) {
+			if (e.props[p] === id) out.push({ entity: e.id, prop: p });
+		}
+	}
+	return out;
 }
 
 /** 确定性骰子：hashStr(`${world.time}#${key}`) 派生的 [1, sides] 整数。

@@ -367,15 +367,22 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 
 // ---------- 词汇 lint（CRITIQUE C3-c）：静态扫描 GameDef 各闭包读取的属性键，对照 props 注册表 ----------
 
-/** 收集 def 内全部函数闭包（路径 → 源码字符串）。 */
+/** 收集 def 内全部函数闭包（路径 → 可见源码字符串）。 */
 function collectClosures(v: unknown, path: string, out: Map<string, string>, seen: WeakSet<object>): void {
 	if (typeof v === "function") {
-		out.set(path.replace(/^\./, ""), String(v));
+		out.set(path.replace(/^\./, ""), closureSource(v));
 		return;
 	}
 	if (v === null || typeof v !== "object" || seen.has(v)) return;
 	seen.add(v);
 	for (const [k, sub] of Object.entries(v as Record<string, unknown>)) collectClosures(sub, `${path}.${k}`, out, seen);
+}
+
+/** 函数闭包的可见源码：defineVerb/fallback 包装的 judge 在自身上挂了原始闭包源码（source），优先取用——
+ *  String(wrapper) 看不见闭包体内的属性键读取，会使词汇闭包检查对规则体整体失明。 */
+function closureSource(v: unknown): string {
+	const src = (v as { source?: unknown }).source;
+	return typeof src === "string" ? src : String(v);
 }
 
 /** 提取源码中静态可见的属性键：`.props.x` 与 `.props["x"]`；动态索引（props[var]）无法静态发现，属盲区。 */
@@ -384,6 +391,18 @@ function propKeysIn(src: string): Set<string> {
 	for (const m of src.matchAll(/\.props\s*\.\s*([A-Za-z_$][\w$]*)/g)) keys.add(m[1]!);
 	for (const m of src.matchAll(/\.props\s*\[\s*(["'`])([^"'`]+)\1\s*\]/g)) keys.add(m[2]!);
 	return keys;
+}
+
+/** 身份卡封闭键集（DESIGN 公理 1）：引擎固定的第二词表，恒可被规则键控、无需注册。 */
+const IDENTITY_KEYS = ["id", "name", "kind", "tags"] as const;
+
+/** 提取源码中静态可见的身份卡直读：`.id/.name/.kind/.tags`（排除方法调用位置；`.props.x` 由属性扫描单独处理）。
+ *  返回 键 → 出现次数。 */
+function identityKeysIn(src: string): Map<string, number> {
+	const counts = new Map<string, number>();
+	const re = new RegExp(`\\.\\s*(${IDENTITY_KEYS.join("|")})\\b(?!\\s*\\()`, "g");
+	for (const m of src.matchAll(re)) counts.set(m[1]!, (counts.get(m[1]!) ?? 0) + 1);
+	return counts;
 }
 
 async function cmdLint(gameId: string): Promise<void> {
@@ -403,6 +422,13 @@ async function cmdLint(gameId: string): Promise<void> {
 	}
 	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${closures.size} 个闭包 ===`);
 	console.log("注：只扫 GameDef 对象图内可达的闭包；模块级 helper 与动态索引（props[var]）不在扫描面内。");
+	// 身份卡直读盘点（C12）：封闭词表，恒合法、无需注册——扫描面覆盖它只为词汇全景可见，为后续纪律（C8 id 特判审计）留位。
+	const identitySites = new Map<string, number>();
+	for (const [, src] of closures) {
+		for (const [key, n] of identityKeysIn(src)) identitySites.set(key, (identitySites.get(key) ?? 0) + n);
+	}
+	const identityLine = IDENTITY_KEYS.filter((k) => identitySites.has(k)).map((k) => `${k}（${identitySites.get(k)} 处）`).join("、");
+	console.log(identityLine ? `身份卡直读（封闭词表，无需注册）：${identityLine}` : "身份卡直读：无。");
 	if (!unknownSites.size) {
 		console.log("规则代码读取的全部属性键均已在 props 注册表声明。");
 		return;
@@ -423,7 +449,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
-  sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键（advisory）
+  sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键；身份卡（id/name/kind/tags）直读为封闭词表，一并盘点（advisory）
 `);
 		return;
 	}

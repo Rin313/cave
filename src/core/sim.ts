@@ -177,7 +177,8 @@ export function deny(law: string, o: { subject?: string; object?: string; prop?:
 
 /** 终局兜底规则：无条件拒绝并带 fallback 标记（probe 据此报告法则缺口）。 */
 export function fallback(id: string, text: (q: Q) => string): Rule {
-	return { id, judge: (q) => deny(id, { reason: text(q), fallback: true }) };
+	// 同 defineVerb：包装 judge 挂原始文案闭包源码，兑底文案里的属性键读取对 lint 可见
+	return { id, judge: Object.assign((q: Q) => deny(id, { reason: text(q), fallback: true }), { source: String(text) }) };
 }
 
 /** Delta 构造糖。 */
@@ -208,7 +209,9 @@ export function defineVerb<S extends TObject>(spec: {
 		entityParams: spec.entityParams,
 		instrumentParams: spec.instrumentParams,
 		candidates: spec.candidates,
-		rules: spec.rules.map((r) => ({ id: r.id, judge: (q) => r.judge(q, q.params as Static<S>) })),
+		// 包装为单参 judge（引擎口径）保留类型化二参 DX；原始 judge 源码挂在 wrapper.source 供静态扫描——
+		// String(wrapper) 看不见闭包体内的属性键读取，丢失原始源码会使词汇闭包检查对规则体整体失明。
+		rules: spec.rules.map((r) => ({ id: r.id, judge: Object.assign((q: Q) => r.judge(q, q.params as Static<S>), { source: String(r.judge) }) })),
 	};
 }
 
@@ -289,15 +292,20 @@ export interface GameDef {
 	messages: Messages;
 }
 
-/** 不变式检查上下文：世界 + 游戏定义（注册表等）+ 本实例的实际起点世界（守恒类种子的正确锚点）。 */
+/** 不变式检查上下文：世界 + 游戏定义（注册表等）+ 本实例的实际起点世界（守恒类种子的正确锚点）+ 本次提交的变更。 */
 export interface InvariantCtx {
 	def: GameDef;
 	actor: string;
 	/** 创世快照：本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
 	genesis: World;
+	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）：过渡不变式据此审计 provenance（DESIGN §3.3）。
+	 *  每条规则/系统的提交独立过墙，粒度即单次提交。 */
+	changes: Change[];
 }
 
-/** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。 */
+/** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。
+ *  两种形态共用本接口（DESIGN §3.3）：状态不变式只读 world（守恒类，防总量漂移）；
+ *  过渡不变式经 ctx.changes 读提交（provenance 类，防错误再分配）。 */
 export interface Invariant {
 	id: string;
 	check: (world: World, ctx: InvariantCtx) => string | null;
@@ -356,8 +364,9 @@ export interface StepResult {
 	reason: string;
 	changes: Change[];
 	action: Action;
-	/** 否决来源：具体法则给了世界性理由（rule）、通用兜底（denyAll），还是映射层形态错误的协议性拒绝（protocol，引擎↔模型通道流量，表达层整体过滤）。 */
-	deniedBy?: "rule" | "denyAll" | "protocol";
+	/** 否决来源：具体法则给了世界性理由（rule）、通用兜底（denyAll）、映射层形态错误的协议性拒绝（protocol，引擎↔模型通道流量，表达层整体过滤），
+	 *  或不变式硬墙的必要性拦截（invariant——规格违反信号或戏剧性必然，与法则否决是不同语义来源，审计应可区分）。 */
+	deniedBy?: "rule" | "denyAll" | "protocol" | "invariant";
 	/** 结构化拒绝（deniedBy=rule 时给出），供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
@@ -583,7 +592,7 @@ export class Simulation {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
 		const before = this.snapshot();
 		const changes = this.commit(deltas, src);
-		const inv = this.checkInvariants(genesis);
+		const inv = this.checkInvariants(genesis, changes);
 		if (inv) {
 			// 回滚：先删掉提交期间新建的键（relations 等快照中不存在的），再整体恢复。
 			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
@@ -597,11 +606,11 @@ export class Simulation {
 	}
 
 	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者（authored 标记产出方）。 */
-	private checkInvariants(genesis: World): { id: string; message: string; authored: boolean } | null {
-		const integrity = integrityInvariant().check(this.world, { def: this.def, actor: this.actor, genesis });
+	private checkInvariants(genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
+		const integrity = integrityInvariant().check(this.world, { def: this.def, actor: this.actor, genesis, changes });
 		if (integrity) return { id: "integrity", message: integrity, authored: false };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(this.world, { def: this.def, actor: this.actor, genesis });
+			const msg = inv.check(this.world, { def: this.def, actor: this.actor, genesis, changes });
 			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
@@ -623,7 +632,7 @@ export class Simulation {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(r.deltas, src);
 			if (!cc.ok) {
-				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "rule", denial: cc.denial };
+				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial };
 				this.log.push(sr);
 				return sr;
 			}
@@ -771,7 +780,7 @@ export class Simulation {
 					reason: cc.reason ?? messagesFor(this.def).noResponse,
 					changes: [],
 					action: { verb: TICK_VERB, params: { n: this.world.time } },
-					deniedBy: "rule",
+					deniedBy: "invariant",
 					denial: cc.denial,
 					src,
 				});

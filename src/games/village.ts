@@ -448,6 +448,17 @@ export const village: GameDef = {
 				return now === seed ? null : `铜币总量 ${now} ≠ 种子值 ${seed}，经济被打破。`;
 			},
 		},
+		{
+			id: "coins.provenance",
+			// 过渡不变式（DESIGN §3.3）：守恒防总量漂移，本条防错误再分配——coins 的每次变更必须
+			// 来自合法经济规则的 src（C10 反例：把玩家的铜币改判给浆果丛，总量守恒而再分配非法）。
+			// 新增移动铜币的规则时须同步扩展此白名单——铜币流向由此显式化。
+			check: (_world, ctx) => {
+				const allowed = new Set(["rule:buy.goods", "rule:sell.goods", "rule:scout.luck", "rule:repair.step"]);
+				const bad = ctx.changes.filter((c) => c.prop === "coins" && !allowed.has(c.src ?? ""));
+				return bad.length ? "铜币的来路对不上账。" : null;
+			},
+		},
 	],
 	grounding: (world, actor) => [...inTreeVisible(world, actor)],
 	...reachFor(),
