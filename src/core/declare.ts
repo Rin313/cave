@@ -12,16 +12,21 @@ export interface DeclCtx {
 	vanished?: Set<string>;
 }
 
-/** 本回合涉及集 ∪ 变更/即将发生实体（rel 变更按字符串编码解析对端 id，见 sim.ts 的 rel:type@to）。 */
+/** 本回合涉及集 ∪ 变更/即将发生实体：rel 变更的完整边端点双向进集；
+ *  prop 变更的字符串值（id 型属性引用，如 in 的旧值/新值）同进——边值等非引用值不是实体，不进。 */
 function touchedFrom(ctx: DeclCtx): Set<string> {
 	const touched = new Set<string>(ctx.involved);
-	const relTo = (prop: string): string | null => /^rel:([^@]+)@(.+)$/.exec(prop)?.[2] ?? null;
 	for (const c of [...ctx.changes, ...ctx.pending]) {
+		if (c.kind === "rel") {
+			touched.add(c.from);
+			touched.add(c.to);
+			continue;
+		}
 		touched.add(c.entity);
-		const relT = relTo(c.prop);
-		if (relT && ctx.world.entities.some((e) => e.id === relT)) touched.add(relT);
-		if (typeof c.from === "string") touched.add(c.from);
-		if (typeof c.to === "string") touched.add(c.to);
+		if (c.kind === "prop") {
+			if (typeof c.prev === "string") touched.add(c.prev);
+			if (typeof c.next === "string") touched.add(c.next);
+		}
 	}
 	return touched;
 }
@@ -38,7 +43,8 @@ export interface StructuredFact {
 }
 
 /** 声明契约核心校验：事实实体必须可见且属本回合涉及集
- *  （touched：player——体验者角色的缺省 + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数，被拒动作参数排除）；无名字回退。
+ *  （touched：player——体验者角色的缺省 + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数
+ *  + 被拒动作中被结构化亲证的实体（Denial.subject/object，仅可见者——被拒 ≠ 不亲证）；其余被拒参数排除——映射层的猜测未获亲证）；无名字回退。
  *  返回逐条错误列表（null = 通过）。 */
 export function validateFactIds(facts: StructuredFact[], ctx: DeclCtx): string[] | null {
 	if (!facts.length) return null;

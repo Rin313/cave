@@ -253,7 +253,7 @@ export class Engine {
 		const results: StepResult[] = changes.length
 			? [{ ok: true, reason: messagesFor(this.def).timeChanged, changes, action: { verb: TICK_VERB, params: { n: this.sim.world.time } } }]
 			: [];
-		const visibleChanges = changes.filter((c) => !internalPropsOf(this.def).has(c.prop));
+		const visibleChanges = narratableChanges(this.def, changes);
 		this.turn.decl = declCtxOf(this.sim, results, []);
 		this.turn.lastDecl = undefined;
 		this.turn.textBuf.length = 0;
@@ -343,27 +343,28 @@ function fmtValue(sim: Simulation, v: PropValue): string {
 	return String(v);
 }
 
-/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接）：
- *  普通变更 `<name>.<label>: <from> → <to>`；rel 变更 `<from>.<type>.<to>: <from值> → <to值>`；生灭 `+ name` / `- name`。
+/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）：
+ *  普通变更 `<name>.<label>: <prev> → <next>`；rel 变更 `<from>.<type>.<to>: <prev> → <next>`；生灭 `+ name` / `- name`。
  *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
 export function fmtChange(sim: Simulation, c: Change): string {
-	if (c.op === "spawn") return `+ ${c.name ?? fmtValue(sim, c.entity)}`;
-	if (c.op === "despawn") return `- ${c.name ?? c.entity}`;
-	const m = /^rel:([^@]+)@(.+)$/.exec(c.prop);
-	if (m) {
-		const [type, to] = [m[1]!, m[2]!];
-		return `${fmtValue(sim, c.entity)}.${type}.${fmtValue(sim, to)}: ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
-	}
+	if (c.kind === "spawn") return `+ ${c.name}`;
+	if (c.kind === "despawn") return `- ${c.name}`;
+	if (c.kind === "rel") return `${fmtValue(sim, c.from)}.${c.type}.${fmtValue(sim, c.to)}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
 	const e = sim.world.entities.find((x) => x.id === c.entity);
 	const name = e?.name ?? c.entity;
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	return `${name}.${label}: ${fmtValue(sim, c.from)} → ${fmtValue(sim, c.to)}`;
+	return `${name}.${label}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
+}
+
+/** 表达可见变更：internal 属性不进表达输入（公理 1 逃生舱）。只有 prop 变更携带 prop，rel/生灭恒可见。 */
+function narratableChanges(def: GameDef, changes: Change[]): Change[] {
+	const internal = internalPropsOf(def);
+	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
 /** 回合事件的世界腔策展（act 工具结果与独立渲染共用）：
  *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、即将发生、新见。core 只做符号连接。 */
 function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[]): string[] {
-	const internal = internalPropsOf(sim.def);
 	const lines: string[] = [];
 	if (refusal) {
 		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
@@ -374,11 +375,11 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 		for (const r of narratable) {
 			if (r.action.verb === TICK_VERB) {
 				// 时间流逝行：世界事件的变更/事实直陈，不是玩家的尝试
-				const bits = [r.changes.filter((c) => !internal.has(c.prop)).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
+				const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
 				lines.push(bits.length ? `- ${sim.describeAction(r.action)}：${bits.join("。")}` : `- ${sim.describeAction(r.action)}。`);
 				continue;
 			}
-			const visible = r.changes.filter((c) => !internal.has(c.prop));
+			const visible = narratableChanges(sim.def, r.changes);
 			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}` : "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
 			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
@@ -388,7 +389,7 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 	} else if (!refusal) {
 		lines.push("没有任何改变。");
 	}
-	const pendingVisible = pending.filter((c) => !internal.has(c.prop));
+	const pendingVisible = narratableChanges(sim.def, pending);
 	if (pendingVisible.length) {
 		lines.push("即将发生（下一时刻）：");
 		for (const c of pendingVisible) {
@@ -408,7 +409,7 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 /** 声明契约允许实体的 id↔name 词汇表：模型据它把世界腔叙述锚回可声明的 id；
  *  消逝实体用 despawn 变更自带的展示名。 */
 function declarableList(sim: Simulation, ctx: DeclCtx): string {
-	const vanished = new Map(ctx.changes.filter((c) => c.op === "despawn").map((c) => [c.entity, c.name]));
+	const vanished = new Map(ctx.changes.filter((c) => c.kind === "despawn").map((c) => [c.entity, c.name]));
 	const items = touchedIds(ctx).map((id) => {
 		const name = sim.world.entities.find((e) => e.id === id)?.name ?? vanished.get(id) ?? id;
 		return `${id}（${name}）`;
@@ -433,11 +434,12 @@ function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, results: StepResult[],
 	return lines.join("\n");
 }
 
-/** 本回合声明校验的合法实体集（结构推导）：
+/** 本回合声明校验的合法实体集（touched 推导）。原则：touched = 内核能为「本回合记录」背书的实体（世界亲证）：
  *   player（意志居所——体验者角色的缺省，叙述「你」的指称）+ 法则 facts 实体（utterance 世界之言除外——话语不授权状态断言）+ 本回合新可见实体
- *   + **授予动作的实体参数与 involved**。
- *   **被拒动作的参数实体不进入**——被拒动作未改变任何状态，其参数（如「把朽木放进关着的陶罐」的陶罐）只应出现在散文里，
- *   否则 `[pot]: 陶罐燃起来` 这类状态矛盾声明会因 pot 是动作参数而漏网。授予动作的参数确已参与状态变更（如 use 的施动工具 torch）。 */
+ *   + **授予动作的实体参数与 involved**（授予＝世界处理了这次交互，参数即被亲证）
+ *   + **拒绝的结构化亲证**（Denial.subject/object 与 systemDenied 同名字段，仅可见者）——被拒 ≠ 不亲证：规则在拒绝里结构化点名谁
+ *   亲证不放宽可见性：不可见/不存在的亲证对象（action.invisible 的 subject、对隐藏实体的点名）被可见性过滤自然排除，消逝豁免在 declare.ts。
+ *   谓词级假话不归本契约管。 */
 function involvedEntities(sim: Simulation, results: StepResult[], revealed: string[]): Set<string> {
 	const vis = sim.visible();
 	const involved = new Set<string>([sim.player]);
@@ -445,6 +447,13 @@ function involvedEntities(sim: Simulation, results: StepResult[], revealed: stri
 		for (const f of r.facts ?? []) {
 			if (f.kind === "utterance") continue; // 世界之言只许转述，不进声明契约 touched
 			for (const id of f.entities) involved.add(id);
+		}
+		// 被拒不等于不亲证：拒绝的结构化字段是规则/前提门对实体的亲证，与 facts 同权威，进 touched。
+		const denials = r.ok ? (r.systemDenied ?? []) : (r.denial ? [r.denial] : []);
+		for (const d of denials) {
+			for (const id of [d.subject, d.object]) {
+				if (typeof id === "string" && vis.has(id)) involved.add(id);
+			}
 		}
 		if (!r.ok) continue;
 		for (const v of Object.values(r.action.params)) {
@@ -458,15 +467,14 @@ function involvedEntities(sim: Simulation, results: StepResult[], revealed: stri
 
 /** 装配声明校验上下文（core/declare.ts 的 DeclCtx）：裁决 + 时间流逝之后的世界，按游戏视角收窄。 */
 function declCtxOf(sim: Simulation, results: StepResult[], revealed: string[]): DeclCtx {
-	const internal = internalPropsOf(sim.def);
 	const changes = results.flatMap((r) => r.changes);
 	return {
 		world: sim.world,
 		visible: sim.visible(),
 		involved: involvedEntities(sim, results, revealed),
-		changes: changes.filter((c) => !internal.has(c.prop)),
+		changes: narratableChanges(sim.def, changes),
 		pending: sim.dryTick(1).flatMap((r) => r.changes),
-		vanished: new Set(changes.filter((c) => c.op === "despawn").map((c) => c.entity)),
+		vanished: new Set(changes.filter((c) => c.kind === "despawn").map((c) => c.entity)),
 	};
 }
 

@@ -45,8 +45,8 @@ function summarizeYume(input: { world: World; changes: Change[]; player: string 
 	const carried = world.entities.filter((e) => e.id !== player && e.props["in"] === player);
 	if (carried.length) lines.push(`带着：${carried.map((e) => e.name).join("、")}。`);
 	for (const c of changes) {
-		if (c.op === "spawn") lines.push(`出现了：${c.name ?? c.entity}。`);
-		else if (c.op === "despawn") lines.push(`消失了：${c.name ?? c.entity}。`);
+		if (c.kind === "spawn") lines.push(`出现了：${c.name}。`);
+		else if (c.kind === "despawn") lines.push(`消失了：${c.name}。`);
 	}
 	return lines.join("\n");
 }

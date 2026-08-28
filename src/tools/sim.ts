@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
+import { fmtChange } from "../core/engine.ts";
 import { getGame } from "../games/registry.ts";
 import { coerceValue } from "../core/util.ts";
 import { flagBool, flagStr, out, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -344,7 +345,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 			steps.push({ action: actionDesc, result: r });
 			console.log(`\n>>> ${actionDesc}`);
 			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}`);
-			for (const ch of r.changes) console.log(`     ${ch.entity}.${ch.prop}: ${JSON.stringify(ch.from)} → ${JSON.stringify(ch.to)}`);
+			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
 			for (const d of r.systemDenied ?? []) console.log(`     ⚠ 系统事件被硬墙拒绝：${d.law}（${d.debug ?? d.reason ?? ""}）`);
 		}
 	}

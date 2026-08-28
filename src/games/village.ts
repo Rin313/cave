@@ -70,11 +70,11 @@ const loyalCut = (q: Q, vendorId: string): number => {
 };
 
 function summarizeChange(world: World, c: Change): string {
-	if (c.op === "spawn") return `出现了：${c.name ?? c.entity}。`;
-	if (c.op === "despawn") return `消失了：${c.name ?? c.entity}。`;
-	const rel = /^rel:([^@]+)@(.+)$/.exec(c.prop);
-	const label = rel ? `${PROP_LABELS[rel[1]!] ?? rel[1]}（对${name(world, rel[2]!)}）` : (PROP_LABELS[c.prop] ?? c.prop);
-	return `变更：${name(world, c.entity)}的${label} ${String(c.from)} → ${String(c.to)}。`;
+	if (c.kind === "spawn") return `出现了：${c.name}。`;
+	if (c.kind === "despawn") return `消失了：${c.name}。`;
+	if (c.kind === "rel") return `${name(world, c.from)}对${name(world, c.to)}的${c.type}：${String(c.prev)} → ${String(c.next)}。`;
+	const label = PROP_LABELS[c.prop] ?? c.prop;
+	return `变更：${name(world, c.entity)}的${label} ${String(c.prev)} → ${String(c.next)}。`;
 }
 
 function summarizeVillage(input: { world: World; changes: Change[]; player: string }): string {
@@ -456,7 +456,7 @@ export const village: GameDef = {
 			// 新增移动铜币的规则时须同步扩展此白名单——铜币流向由此显式化。
 			check: (_world, ctx) => {
 				const allowed = new Set(["rule:buy.goods", "rule:sell.goods", "rule:scout.luck", "rule:repair.step"]);
-				const bad = ctx.changes.filter((c) => c.prop === "coins" && !allowed.has(c.src ?? ""));
+				const bad = ctx.changes.filter((c) => c.kind === "prop" && c.prop === "coins" && !allowed.has(c.src));
 				return bad.length ? "铜币的来路对不上账。" : null;
 			},
 		},

@@ -28,7 +28,7 @@ export interface World {
 }
 
 /** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
- *  关系变更 prop 编码为 `rel:<type>@<to>`（entity 为 from 端点），表达层据此格式化。
+ *  提交产出按基底类别同构分形的 Change（kind: prop/rel/spawn/despawn）
  *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 本就可建边，配合 spawn 可让世界生长）。
  *  despawn 只级联清理核心结构（关系边）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
 export type Delta =
@@ -39,18 +39,14 @@ export type Delta =
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-export interface Change {
-	entity: string;
-	prop: string;
-	from: PropValue;
-	to: PropValue;
-	/** 实体生灭标记（spawn/despawn；普通属性变更缺省）。 */
-	op?: "spawn" | "despawn";
-	/** 生灭实体的展示名（实体已离开状态，变更是唯一载体；普通属性变更缺省）。 */
-	name?: string;
-	/** 变更来源（law:spread / rule:move / system:burnout），审计与回滚依据。 */
-	src?: string;
-}
+/** 世界变更记录（快照线以下的数据协议，commit 的唯一产出）：与 Delta 按基底类别同构——属性写 / 关系边写 / 实体生灭。
+ *  set/inc 合流为 prop（提交后不区分操作形态，prev/next 即差异）；rel 携带完整边端点（from/to）与边值（prev/next）——
+ *  spawn/despawn 的 name 是生灭实体的展示名（实体已离开状态，变更是唯一载体）。*/
+export type Change =
+	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue; src: string }
+	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue; src: string }
+	| { kind: "spawn"; entity: string; name: string; src: string }
+	| { kind: "despawn"; entity: string; name: string; src: string };
 
 /** 动作提案：由游戏声明的动词表（verb）驱动，参数由动词 schema 约束。 */
 export interface Action {
@@ -110,9 +106,9 @@ export interface PropDef {
 export interface Denial {
 	/** 法则标识，如 "move.reach"（审计与探测依据）。 */
 	law: string;
-	/** 施动实体 id。 */
+	/** 施动实体 id。结构化亲证：进声明契约 touched（engine 的 involvedEntities）。 */
 	subject?: string;
-	/** 受动实体 id。 */
+	/** 受动实体 id。结构化亲证：进声明契约 touched（engine 的 involvedEntities）。 */
 	object?: string;
 	/** 涉及属性（denyAll 等按属性兜底的模板用）。 */
 	prop?: string;
@@ -790,7 +786,7 @@ export class Simulation {
 			if (d.op === "spawn") {
 				if (entity(this.world, d.entity.id)) continue;
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
-				changes.push({ entity: d.entity.id, prop: "", from: null, to: null, op: "spawn", name: d.entity.name, src });
+				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name, src });
 				continue;
 			}
 			if (d.op === "despawn") {
@@ -799,37 +795,37 @@ export class Simulation {
 				const gone = this.world.entities[i]!;
 				this.world.entities.splice(i, 1);
 				this.world.relations = (this.world.relations ?? []).filter((r) => r.from !== d.entity && r.to !== d.entity);
-				changes.push({ entity: d.entity, prop: "", from: null, to: null, op: "despawn", name: gone.name, src });
+				changes.push({ kind: "despawn", entity: d.entity, name: gone.name, src });
 				continue;
 			}
 			if (d.op === "relSet") {
-				const from = relVal(this.world, d.from, d.to, d.type);
-				if (from === d.value) continue;
+				const prev = relVal(this.world, d.from, d.to, d.type);
+				if (prev === d.value) continue;
 				upsertRel(d.from, d.to, d.type, d.value);
-				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from, to: d.value, src });
+				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value, src });
 				continue;
 			}
 			if (d.op === "relInc") {
 				const prev = Number(relVal(this.world, d.from, d.to, d.type) ?? 0);
 				if (!Number.isFinite(prev)) continue;
-				const to = prev + d.by;
-				upsertRel(d.from, d.to, d.type, to);
-				changes.push({ entity: d.from, prop: `rel:${d.type}@${d.to}`, from: prev, to, src });
+				const next = prev + d.by;
+				upsertRel(d.from, d.to, d.type, next);
+				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next, src });
 				continue;
 			}
 			const e = entity(this.world, d.entity);
 			if (!e) continue;
 			if (d.op === "set") {
-				const from = e.props[d.prop] ?? null;
-				if (from === d.value) continue;
+				const prev = e.props[d.prop] ?? null;
+				if (prev === d.value) continue;
 				e.props[d.prop] = d.value;
-				changes.push({ entity: d.entity, prop: d.prop, from, to: d.value, src });
+				changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value, src });
 			} else {
-				const from = Number(e.props[d.prop] ?? 0);
-				if (!Number.isFinite(from)) continue;
-				const to = from + d.by;
-				e.props[d.prop] = to;
-				changes.push({ entity: d.entity, prop: d.prop, from, to, src });
+				const prev = Number(e.props[d.prop] ?? 0);
+				if (!Number.isFinite(prev)) continue;
+				const next = prev + d.by;
+				e.props[d.prop] = next;
+				changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next, src });
 			}
 		}
 		return changes;
