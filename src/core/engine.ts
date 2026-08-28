@@ -435,10 +435,11 @@ function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, results: StepResult[],
 }
 
 /** 本回合声明校验的合法实体集（touched 推导）。原则：touched = 内核能为「本回合记录」背书的实体（世界亲证）：
- *   player（意志居所——体验者角色的缺省，叙述「你」的指称）+ 法则 facts 实体（utterance 世界之言除外——话语不授权状态断言）+ 本回合新可见实体
+ *   player（意志居所——体验者角色的缺省，叙述「你」的指称）+ 法则 facts 实体（utterance 世界之言除外——话语不授权状态断言；
+ *   仅可见者——percept 是对世界状态的知觉，不可见即未被知觉：事实文本照常进结果视图供转述，实体不获断言授权）+ 本回合新可见实体
  *   + **授予动作的实体参数与 involved**（授予＝世界处理了这次交互，参数即被亲证）
  *   + **拒绝的结构化亲证**（Denial.subject/object，仅可见者）——被拒 ≠ 不亲证：规则在拒绝里结构化点名谁
- *   亲证不放宽可见性：不可见/不存在的亲证对象（action.invisible 的 subject、对隐藏实体的点名）被可见性过滤自然排除，消逝豁免在 declare.ts。
+ *   亲证不放宽可见性：不可见/不存在的亲证对象（facts 点名、action.invisible 的 subject、对隐藏实体的点名）被可见性过滤自然排除，消逝豁免在 declare.ts。
  *   谓词级假话不归本契约管。 */
 function involvedEntities(sim: Simulation, results: StepResult[], revealed: string[]): Set<string> {
 	const vis = sim.visible();
@@ -446,7 +447,7 @@ function involvedEntities(sim: Simulation, results: StepResult[], revealed: stri
 	for (const r of results) {
 		for (const f of r.facts ?? []) {
 			if (f.kind === "utterance") continue; // 世界之言只许转述，不进声明契约 touched
-			for (const id of f.entities) involved.add(id);
+			for (const id of f.entities) if (vis.has(id)) involved.add(id); // 亲证不放宽可见性
 		}
 		// 被拒不等于不亲证：拒绝的结构化字段是规则/前提门对实体的亲证，与 facts 同权威，进 touched。
 		const denials = r.denial ? [r.denial] : [];

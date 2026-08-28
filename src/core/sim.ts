@@ -12,7 +12,7 @@ export interface Entity {
 	props: Record<string, PropValue>;
 }
 
-/** 关系边：社会/叙事状态的原子原语 */
+/** 关系边：社会/叙事状态的原子原语（存储边永不持 null——「无边」由数组缺席表达，relVal 以 null 回答） */
 export interface Rel {
 	from: string;
 	to: string;
@@ -29,18 +29,18 @@ export interface World {
 
 /** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
  *  提交产出按基底类别同构分形的 Change（kind: prop/rel/spawn/despawn）
- *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 本就可建边，配合 spawn 可让世界生长）。
+ *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 建边/删边（值 null），配合生灭原语让拓扑生长与收缩对称）。
  *  despawn 只级联清理核心结构（关系边）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "inc"; entity: string; prop: string; by: number }
-	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean }
+	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean | null }
 	| { op: "relInc"; from: string; to: string; type: string; by: number }
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
 /** 世界变更记录（快照线以下的数据协议，commit 的唯一产出）：与 Delta 按基底类别同构——属性写 / 关系边写 / 实体生灭。
- *  set/inc 合流为 prop（提交后不区分操作形态，prev/next 即差异）；rel 携带完整边端点（from/to）与边值（prev/next）——
+ *  set/inc 合流为 prop（提交后不区分操作形态，prev/next 即差异）；rel 携带完整边端点（from/to）与边值（prev/next，next null 即删边）——
  *  spawn/despawn 的 name 是生灭实体的展示名（实体已离开状态，变更是唯一载体）。*/
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue; src: string }
@@ -185,7 +185,7 @@ export function fallback(id: string, text: (q: Q) => string): Rule {
 export const D = {
 	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
 	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
-	relSet: (from: string, to: string, type: string, value: number | string | boolean): Delta => ({ op: "relSet", from, to, type, value }),
+	relSet: (from: string, to: string, type: string, value: number | string | boolean | null): Delta => ({ op: "relSet", from, to, type, value }),
 	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
@@ -782,7 +782,13 @@ export class Simulation {
 			if (d.op === "relSet") {
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (prev === d.value) continue;
-				upsertRel(d.from, d.to, d.type, d.value);
+				if (d.value === null) {
+					// 值 null 即删边（拓扑收缩与生长对称）；原地删——rels 是本次提交共享的数组，不可整体替换
+					const i = rels.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
+					if (i >= 0) rels.splice(i, 1);
+				} else {
+					upsertRel(d.from, d.to, d.type, d.value);
+				}
 				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value, src });
 				continue;
 			}

@@ -31,9 +31,11 @@ function touchedFrom(ctx: DeclCtx): Set<string> {
 	return touched;
 }
 
-/** 本回合声明契约允许的实体 id 全集（touched 集推导，供表达侧展示可声明词汇表）。 */
+/** 本回合声明契约允许的实体 id 全集：touched ∩（可见 ∪ 本回合消逝）。
+ *  亲证不放宽可见性——不可见实体即使被 facts/变更/即将发生携带，也不可声明、不进可声明词汇表
+ *  （validateFactIds 同样拦，此处收口展示面） */
 export function touchedIds(ctx: DeclCtx): string[] {
-	return [...touchedFrom(ctx)];
+	return [...touchedFrom(ctx)].filter((id) => ctx.visible.has(id) || ctx.vanished?.has(id));
 }
 
 /** 结构化事实：declare 工具提交的形态（实体 id 列表 + 世界腔陈述）。 */
@@ -43,7 +45,7 @@ export interface StructuredFact {
 }
 
 /** 声明契约核心校验：事实实体必须可见且属本回合涉及集
- *  （touched：player——体验者角色的缺省 + 法则 facts + 新见 + 变更/即将发生 + 授予动作参数
+ *  （touched：player——体验者角色的缺省 + 法则 facts（仅可见者）+ 新见 + 变更/即将发生 + 授予动作参数
  *  + 被拒动作中被结构化亲证的实体（Denial.subject/object，仅可见者——被拒 ≠ 不亲证）；其余被拒参数排除——映射层的猜测未获亲证）；无名字回退。
  *  返回逐条错误列表（null = 通过）。 */
 export function validateFactIds(facts: StructuredFact[], ctx: DeclCtx): string[] | null {
