@@ -134,6 +134,9 @@ export const TICK_VERB = "tick";
  *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
 export interface Q {
 	readonly world: World;
+	/** 意志锚点（def.playerId，名义宿主）：无主语动词的缺省主语、感知钩子的锚点参数。
+	 *  不是「动作施事」的强制来源——显式主语动词的语义主语从参数取（上帝视角的主语全在参数里，后果落在被指令者）；
+	 *  附身/换躯等「现宿主」语义由游戏从世界态推导（钩子与规则可读全量 world，可见性门自动跟随视角）。 */
 	readonly actor: string;
 	readonly time: number;
 	readonly params: Record<string, PropValue>;
@@ -251,6 +254,10 @@ export interface VerbDef {
 export interface GameDef {
 	id: string;
 	title: string;
+	/** 意志锚点：act 通道意图的归属实体（意图属于玩家，此实体是它在世界的住址）——无主语动词的缺省主语、
+	 *  叙述的受话人、integrity 墙保护的存在。主体性在 core 只有意志与视角两个概念：本字段只钉死意志的住址，
+	 *  不钉死身体与视角——身体（现宿主）由游戏从世界态推导（附身时名义宿主退为空壳，可 despawn），
+	 *  视角是感知面钩子的现值（缺省全见全达即上帝视角；第一人称是游戏声明，非引擎立场）。 */
 	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
@@ -316,6 +323,9 @@ export function integrityInvariant(): Invariant {
 		check: (world, ctx) => {
 			const ids = new Set(world.entities.map((e) => e.id));
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
+			// playerId 是 def 指向世界的唯一数据引用（动作归属与感知面投影的原点），每次裁决都被解引用，
+			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
+			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
 			const idProps = new Set<string>();
 			for (const [k, p] of Object.entries(ctx.def.props ?? {})) if (p.type === "id") idProps.add(k);
 			for (const e of world.entities) {
@@ -443,6 +453,10 @@ export class Simulation {
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 		}
+		// 公理 6「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
+		// 否则 t=0 是必要性自由区，def 结构错误与损坏存档要到首次提交才以全量拒绝的形式显形。
+		const broken = this.checkInvariants(this.world, []);
+		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
 	}
 
 	get actor(): string {
