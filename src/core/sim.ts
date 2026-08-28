@@ -177,7 +177,7 @@ export function deny(law: string, o: { subject?: string; object?: string; prop?:
 
 /** 终局兜底规则：无条件拒绝并带 fallback 标记（probe 据此报告法则缺口）。 */
 export function fallback(id: string, text: (q: Q) => string): Rule {
-	// 同 defineVerb：包装 judge 挂原始文案闭包源码，兑底文案里的属性键读取对 lint 可见
+	// 同 defineVerb：包装 judge 挂原始文案闭包源码，兜底文案里的属性键读取对 lint 可见
 	return { id, judge: Object.assign((q: Q) => deny(id, { reason: text(q), fallback: true }), { source: String(text) }) };
 }
 
@@ -242,7 +242,9 @@ export interface VerbDef {
 	 *  核心在规则前跑共享前提检查：必须可持握（holdable 槽位）且在可达范围；不满足直接拒绝，不进入规则。
 	 *  probe 依此审计「规则授予但前提不满足」的潜在洞。 */
 	instrumentParams?: string[];
-	/** 非实体参数的候选值：法则探测（probe）的枚举域声明。不提供则跳过该参数。 */
+	/** 参数的动态值域（动作空间第三轴：动词 × 实体 × 候选）。动态域进不了静态 schema，也不可进工具 schema
+	 *  （逐回合变化的工具块击穿字节级稳定前缀），故由 def 携带。当前消费者是 sim probe（逐参数收窄枚举域）；
+	 *  预期消费者：意图菜单（快捷方式的原料）、act 工具参数提示。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为 fallback 兜底。 */
 	rules: Rule[];
@@ -278,12 +280,7 @@ export interface GameDef {
 	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
 	 *  wieldable（= holdable + reach）与施动工具前提共用。 */
 	holdable?: (world: World, player: string, id: string) => boolean;
-	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
-	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
-	probeScope?: (world: World, player: string) => string[];
-	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
-	reactiveSystems?: boolean;
-	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
+	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）。 */
 	turnTicks?: number;
 	/** 序列化投影：决定状态以什么形态进回合 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
@@ -377,8 +374,6 @@ export interface StepResult {
 	involved?: string[];
 	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
 	src?: string;
-	/** reactive 系统产出被不变式硬墙拒绝的事件（动作本身成立；记于此防静默丢失）。 */
-	systemDenied?: Denial[];
 }
 
 export function entity(world: World, id: string): Entity | undefined {
@@ -649,19 +644,6 @@ export class Simulation {
 			sr = { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial };
 		}
 
-		if (r.ok && this.def.reactiveSystems === true) {
-			const reactive = this.runSystems(true);
-			if (reactive.length) {
-				sr = {
-					...sr,
-					changes: [...sr.changes, ...reactive.flatMap((x) => x.changes)],
-					facts: [...(sr.facts ?? []), ...reactive.flatMap((x) => x.facts ?? [])],
-					involved: [...new Set([...(sr.involved ?? []), ...reactive.flatMap((x) => x.involved ?? [])])],
-					systemDenied: [...(sr.systemDenied ?? []), ...reactive.filter((x) => !x.ok && x.denial).map((x) => x.denial!)],
-				};
-			}
-		}
-
 		this.log.push(sr);
 		return sr;
 	}
@@ -714,12 +696,11 @@ export class Simulation {
 		}
 	}
 
-	/** 按注册顺序运行全部系统一次，产出并提交 deltas（tick 与 reactive 共用）。
-	 *  silent=true 时不写日志（reactive 场景：事件已并入动作的 sr，避免重复记录）。 */
-	private runSystems(silent = false): StepResult[] {
+	/** 按注册顺序运行全部系统一次，产出并提交 deltas。 */
+	private runSystems(): StepResult[] {
 		const out: StepResult[] = [];
 		const emit = (sr: StepResult): void => {
-			if (!silent) this.log.push(sr);
+			this.log.push(sr);
 			out.push(sr);
 		};
 		for (const sys of this.def.systems ?? []) {

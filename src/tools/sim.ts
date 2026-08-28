@@ -4,6 +4,7 @@ import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
 import { fmtChange } from "../core/engine.ts";
 import { getGame } from "../games/registry.ts";
+import { probeScope } from "../games/space.ts";
 import { coerceValue } from "../core/util.ts";
 import { flagBool, flagStr, out, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
@@ -232,11 +233,8 @@ function describeAction(action: Action, def: GameDef): string {
 
 function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; latent: { verb: string; op: string; ruleGranted: string }[]; seen: number; truncated: boolean } {
 	const sim = new Simulation(def);
-	const ids = [...sim.visible()].filter((id) => id !== def.playerId);
-	/** 动作参数候选域：游戏可经 GameDef.probeScope 裁剪；缺省 = 可见实体 - 玩家 - space 标记的场景实体。 */
-	const scope = def.probeScope
-		? new Set(def.probeScope(sim.world, def.playerId))
-		: new Set(ids.filter((id) => sim.world.entities.find((e) => e.id === id)?.props.space !== true));
+	/** 候选域缺省 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数收窄走 verbs.candidates，全局裁剪走 tools 层 per-game 配置。 */
+	const scope = new Set(probeScope(sim.world, def.playerId, sim.visible()));
 	const gaps: { verb: string; op: string; reason: string; law?: string }[] = [];
 	/** 规则会在不可持握工具上授予的潜在洞（作者漏声明 instrumentParams）。 */
 	const latent: { verb: string; op: string; ruleGranted: string }[] = [];
@@ -314,7 +312,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	console.log(`规则未自行检查施动工具（运行时被动词级 instrument 前提拦截）: ${latent.length}`);
 	for (const l of latent) console.log(`  [LATENT] ${l.op} → 规则本身会授予「${l.ruleGranted}」`);
 	if (latent.length) console.log("  建议：在规则内部自行检查施动工具前提（或保持 instrumentParams 声明），否则一旦 instrument 拦截被绕开规则会开出荒谬授予。");
-	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或用 GameDef.probeScope 收窄候选域。");
+	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或经 verbs 的 candidates 收窄候选域。");
 	console.log(gaps.length === 0 && latent.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
 	console.log("注：probe 只覆盖已声明 instrumentParams 的动词；若某动词漏声明施动工具前提且规则也未自检，此洞不会出现在报告（如 use 的 source 不可持握仍被授予）。请对 use 类动词逐一确认 instrumentParams 已声明。");
 }
@@ -346,7 +344,6 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 			console.log(`\n>>> ${actionDesc}`);
 			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}`);
 			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
-			for (const d of r.systemDenied ?? []) console.log(`     ⚠ 系统事件被硬墙拒绝：${d.law}（${d.debug ?? d.reason ?? ""}）`);
 		}
 	}
 
