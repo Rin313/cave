@@ -47,7 +47,7 @@ export function renderMemory(memory: readonly MemoryTurn[]): string {
 		const moves = m.moves.length ? m.moves.join("；") : `未解析（${m.refusal ?? "?"}）`;
 		return `- t${m.time} 「${m.intent}」→ ${moves}`;
 	});
-	return ["[近况] 最近几步的世界结果（供指代与续接，勿复述为当前叙述）：", ...lines].join("\n");
+	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");
 }
 
 /** 裁剪：只保留最后一条 user 消息起的当前运行后缀（toolCall/toolResult 配对天然完整），近况并入该消息头部。

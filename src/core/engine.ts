@@ -306,7 +306,7 @@ function buildTurnPrompt(state: string, intent: string, selection: string | unde
 		? `[动作空间] 世界法则当前会授予这些动作（也可提出动作空间之外的动作，世界将逐一裁决，可能被拒绝）：\n${affordances.map((a) => `- ${a}`).join("\n")}\n\n`
 		: "";
 	const focusLine = focusName
-		? `[焦点] ${focusName} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。解析指代（「它/那个」）与叙述展开可优先考虑它，但以玩家显式提到的实体为准；不得因此虚构其任何状态。\n\n`
+		? `[焦点] ${focusName} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。解析指代（「它/那个」）与叙述展开可优先考虑它，但以玩家显式提到的实体为准。\n\n`
 		: "";
 	const intentLine = selection
 		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
@@ -321,7 +321,7 @@ function buildSystemPrompt(def: GameDef): string {
 		.join("\n");
 	const stylistic = stylisticPropsOf(def);
 	const stylisticLine = stylistic.size
-		? `\n可润饰属性：${[...stylistic].map((p) => `${p}（${propLabelOf(def, p) ?? p}）`).join("、")}——描述这些属性时允许合理的文学润饰（如「刻痕斑驳」），但不得虚构其他状态、属性或后果。`
+		? `\n可润饰属性：${[...stylistic].map((p) => `${p}（${propLabelOf(def, p) ?? p}）`).join("、")}——描述这些属性时允许合理的文学润饰（如「刻痕斑驳」）。`
 		: "";
 	return `你是文字游戏引擎。每个回合依次两步：
 
@@ -430,18 +430,17 @@ function buildResultView(sim: Simulation, ctx: DeclCtx, results: StepResult[], r
 	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed);
 	const decl = declarableList(sim, ctx);
 	if (decl) lines.push("", decl);
-	lines.push("", "现在写面向玩家的散文：新事实先用 declare 工具声明（无新事实则跳过），然后输出散文正文。");
 	return lines.join("\n");
 }
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
 function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, results: StepResult[], instruction: string, pending: Change[]): string {
 	const focus = sim.focus ? sim.world.entities.find((e) => e.id === sim.focus) : undefined;
-	const focusLine = focus ? `[焦点] ${focus.name} 是显著实体，叙述可围绕它展开；不得因此虚构其任何状态。\n\n` : "";
+	const focusLine = focus ? `[焦点] ${focus.name} 是显著实体，叙述可围绕它展开。\n\n` : "";
 	const lines = [`[当前状态]（唯一真相源）：`, sim.digest(), "", focusLine, ...formatTurnEvents(sim, results, undefined, undefined, pending, [])];
 	const decl = declarableList(sim, ctx);
 	if (decl) lines.push("", decl);
-	lines.push("", `${instruction} 新事实先用 declare 工具声明（可选），然后输出散文正文；只叙述状态中真实存在的事物，用实体名称叙述。`);
+	lines.push("", `${instruction} 新事实先用 declare 工具声明（可选），然后输出散文正文。`);
 	return lines.join("\n");
 }
 
