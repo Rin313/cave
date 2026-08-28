@@ -19,7 +19,6 @@
    | 表达层 §4.3 | 第二个自定义 tool `declare` + session 的普通文本输出（`text_delta` 流式）；与映射同一回合运行（单 pass），输入 = 回合 prompt 的状态 + act 工具结果的世界腔策展 |
    | 模拟层 §4.1 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 §9 | AgentSession 自带：messages + compact() + SessionManager；叙述不回流（幻觉不固化） |
-   | 拒绝 §4.2 | 结构化拒绝（仅 label）+ `considered` 交规则裁决：理由由规则/denyAll 给出，映射 pass 不产散文 |
 
 3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给 act + declare 两个 tool，每回合一次 `session.prompt()` 内先后发生：模型先 `act`（一次性提交动作提案或结构化拒绝，one-shot 门闩封闭变异窗口），工具结果承载裁决的世界腔策展；随后模型用 `declare` 声明新事实（可选，可多次调用、回合内逐条校验反馈）、输出散文正文；`execute()` 内部就是规则裁决/校验边界。
 4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给前端。
@@ -48,7 +47,7 @@
 - **`digest`**：序列化投影钩子（GameDef 可选），决定状态以什么形态进映射/表达 prompt；缺省 = `serialize()` 全量 JSON。游戏可裁剪冗余字段、格式化关系边，以控制 prompt 体积。
 - **`deniedBy: "rule" | "denyAll" | "protocol" | "invariant"`**：否决来源语义标记；`sim probe` 依此报告规则缺口（只认 denyAll），不依赖理由字符串匹配；protocol（映射层形态错误）不进玩家叙述；invariant（不变式硬墙的必要性拦截，规格违反信号或戏剧性必然）与法则否决是不同语义来源，审计可区分。
 - **关系边表**：`world.relations` 为 `{ from, to, type, value }` 边表，表达社会/叙事状态（信任、记忆、派系）。规则以 `relSet/relInc` 变更，核心提供 `relVal/relAll` 查询。变更记录为 sum-typed `Change`（kind: prop/rel/spawn/despawn，与 Delta 同构）。变更在表达层格式化为「from 对 to 的 type」的世界腔文本，快照/克隆/序列化完整保留。
-- **refusal 契约**：act 工具 `refusal` 只含 `label`。**理由一律由规则层产出，模型不撰写拒绝理由**：模型直接提交 action 由规则层裁决（否认 → 规则 denyReason，授予 → 执行）；纯拒绝（label）进审计，表达层自然回应。`refusal.considered`（模型预判被拒的动作交规则裁决以纠正误判）为**未实现的未来优化**。`sim probe` 可把 refusal 标签纳入覆盖报告。
+- **refusal 契约**：act 工具 `refusal` 只含 `label`。**理由一律由规则层产出，模型不撰写拒绝理由**：模型直接提交 action 由规则层裁决（否认 → 规则 denyReason，授予 → 执行）；纯拒绝（label）进审计，表达层自然回应。`sim probe` 可把 refusal 标签纳入覆盖报告。
 - **引擎保留伪动词 `TICK_VERB`**：`"tick"` 是引擎级时间流逝动作标识（`systems` 产出的 StepResult 与 `loop wait` 用），非游戏声明的动词；游戏不应声明同名动词。`sim run` 的 `tick N` 关键字在游戏声明同名动词时优先走游戏动词。
 - **游戏挂载点**：`hint`（世界法则提示注入映射系统提示）、`props`（属性注册表：type/label/internal/stylistic）。
 - **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性（`integrityInvariant`：实体 id 唯一、id 型属性与关系端点指向存在的实体），游戏可追加领域不变式（如「燃着必须明火」）。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。**两种形态同一接口（DESIGN §3.3）**：`InvariantCtx` 除 `genesis` 外携带 `changes`（本提交全部变更，含 spawn/despawn 与 src）——状态不变式只读 world（守恒类），过渡不变式读提交（provenance 类，如 village 的 `coins.provenance` src 白名单）；每条规则/系统的提交独立过墙。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式（如 village 的 `coins.conserved`：铜币总量 == 初始世界总量），凭空铸币/灭币一律被回滚。**种子锚点是 `InvariantCtx.genesis`**——本 Simulation 实际起点世界的冻结快照（首提交前情性捕获），存档恢复/变体开局时 ≠ def.world，守恒不错锚。**引用清点原语 `refsTo(def, world, id)`**（core/util.ts）：despawn 前的悬空引用盘点（按注册表 type:"id" 枚举指向实体的 (entity, prop)），清理策略留规则；关系边由 despawn 自动级联。**defineVerb/fallback 的包装 judge 在自身上挂原始闭包源码（source），collectClosures 优先取用**——否则 String(wrapper) 对规则体失明，词汇闭包检查（属性键 + 身份卡直读，`sim lint`）形同虚设。
