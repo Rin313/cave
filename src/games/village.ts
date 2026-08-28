@@ -68,6 +68,14 @@ const loyalCut = (q: Q, vendorId: string): number => {
 	return trust(q, vendorId) >= num(v.props.dealTrust) ? num(v.props.dealCut) : 0;
 };
 
+function summarizeChange(world: World, c: Change): string {
+	if (c.op === "spawn") return `出现了：${c.name ?? c.entity}。`;
+	if (c.op === "despawn") return `消失了：${c.name ?? c.entity}。`;
+	const rel = /^rel:([^@]+)@(.+)$/.exec(c.prop);
+	const label = rel ? `${PROP_LABELS[rel[1]!] ?? rel[1]}（对${name(world, rel[2]!)}）` : (PROP_LABELS[c.prop] ?? c.prop);
+	return `变更：${name(world, c.entity)}的${label} ${String(c.from)} → ${String(c.to)}。`;
+}
+
 function summarizeVillage(input: { world: World; changes: Change[]; actor: string }): string {
 	const { world, changes, actor } = input;
 	const player = entity(world, actor);
@@ -78,7 +86,7 @@ function summarizeVillage(input: { world: World; changes: Change[]; actor: strin
 		if (Number(player.props.water ?? 0) > 0) bits.push(`清水 ${player.props.water}`);
 		if (player.props.down === true) bits.push("你昏迷着。");
 	}
-	return ["你站在河畔村。"].concat(bits, changes.map((c) => `变更：${name(world, c.entity)}的${PROP_LABELS[c.prop] ?? c.prop} ${String(c.from)} → ${String(c.to)}`)).join("\n");
+	return ["你站在河畔村。"].concat(bits, changes.map((c) => summarizeChange(world, c))).join("\n");
 }
 
 function digestVillage(sim: Simulation): string {
@@ -349,6 +357,8 @@ export const village: GameDef = {
 			}],
 		}),
 	},
+	// 回合级时间驱动：每回合动作后推进一刻——疲劳/饥饿/夜袭/打烊/麦田等 per-tick 法则才能在游玩中成立
+	turnTicks: 1,
 	world: {
 		time: 0,
 		entities: [

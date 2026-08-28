@@ -12,7 +12,7 @@ export interface Entity {
 	props: Record<string, PropValue>;
 }
 
-/** 关系边：社会/叙事状态的原子原语（如"守卫 信任 玩家 10"、"她 记得 你 取走了戒指"）。 */
+/** 关系边：社会/叙事状态的原子原语 */
 export interface Rel {
 	from: string;
 	to: string;
@@ -207,7 +207,8 @@ export function defineVerb<S extends TObject>(spec: {
 	return {
 		label: spec.label,
 		description: spec.description,
-		schema: spec.schema,
+		// 工具边界与裁决瓶颈同一严格度：多余参数在工具层被拒，而非到 sim 才成协议性拒绝（反馈只剩 noResponse）
+		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
 		instrumentParams: spec.instrumentParams,
 		candidates: spec.candidates,
@@ -382,7 +383,7 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return messagesFor(def).noResponse;
 }
 
-/** 属性读取（平铺键；点路径机制随 Expr 解释器一并移除）。 */
+/** 属性读取 */
 export function propGet(e: Entity, prop: string): PropValue {
 	return e.props[prop] ?? null;
 }

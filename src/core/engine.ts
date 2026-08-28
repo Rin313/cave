@@ -107,18 +107,23 @@ export class Engine {
 		this.channel = channel;
 		channel.onResults = (results, refusal) => {
 			if (refusal) {
-				this.outcome.kind = "refused";
-				this.outcome.refusal = refusal;
 				this.emit({ type: "tool_result", results: [] });
+				// 拒绝只在尚无已裁决动作时成立：动作一旦入账后果已发生，迟到的 refusal 不覆盖裁决
+				if (this.outcome.results.length === 0) {
+					this.outcome.kind = "refused";
+					this.outcome.refusal = refusal;
+				}
 				return;
 			}
 			this.outcome.results.push(...results);
 			this.emit({ type: "tool_result", results });
-			const anyApplied = results.some((r) => r.ok);
-			const anyRejected = results.some((r) => !r.ok);
+			// kind 从累计结果重算：映射 pass 多次调用 act 时不被最后一批的分布覆写
+			const anyApplied = this.outcome.results.some((r) => r.ok);
+			const anyRejected = this.outcome.results.some((r) => !r.ok);
 			if (anyApplied && anyRejected) this.outcome.kind = "partial";
 			else if (anyApplied) this.outcome.kind = "applied";
 			else if (anyRejected) this.outcome.kind = "rejected";
+			else this.outcome.kind = "refused";
 		};
 		session.subscribe((event) => {
 			switch (event.type) {

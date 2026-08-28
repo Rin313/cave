@@ -402,6 +402,7 @@ async function cmdLint(gameId: string): Promise<void> {
 		}
 	}
 	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${closures.size} 个闭包 ===`);
+	console.log("注：只扫 GameDef 对象图内可达的闭包；模块级 helper 与动态索引（props[var]）不在扫描面内。");
 	if (!unknownSites.size) {
 		console.log("规则代码读取的全部属性键均已在 props 注册表声明。");
 		return;
