@@ -26,6 +26,11 @@ function touchedFrom(ctx: DeclCtx): Set<string> {
 	return touched;
 }
 
+/** 本回合声明契约允许的实体 id 全集（touched 集推导，供表达侧展示可声明词汇表）。 */
+export function touchedIds(ctx: DeclCtx): string[] {
+	return [...touchedFrom(ctx)];
+}
+
 /** 结构化事实：declare 工具提交的形态（实体 id 列表 + 世界腔陈述）。 */
 export interface StructuredFact {
 	entities: string[];

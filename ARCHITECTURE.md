@@ -15,19 +15,19 @@
 
    | DESIGN.md 层 | pi SDK 落点 |
    |---|---|
-   | 映射层 §4.2 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；映射 pass 只产结构化结果 |
-   | 表达层 §4.3 | 第二个自定义 tool `declare` + session 的普通文本输出（`text_delta` 流式）；在状态变更后的独立 prompt（双 pass），输入 = 当前状态 + changes + 法则 facts |
+   | 映射层 §4.2 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；one-shot 门闩内一次性提交，只产结构化结果 |
+   | 表达层 §4.3 | 第二个自定义 tool `declare` + session 的普通文本输出（`text_delta` 流式）；与映射同一回合运行（单 pass），输入 = 回合 prompt 的状态 + act 工具结果的世界腔策展 |
    | 模拟层 §4.1 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 §9 | AgentSession 自带：messages + compact() + SessionManager；叙述不回流（幻觉不固化） |
    | 拒绝 §4.2 | 结构化拒绝（仅 label）+ `considered` 交规则裁决：理由由规则/denyAll 给出，映射 pass 不产散文 |
 
-3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给 act + declare 两个 tool：映射阶段模型 `act`（提案 actions）或写文字；表达阶段模型先用 `declare` 声明本回合新事实（可选，可多次调用、回合内逐条校验反馈）、随后输出散文正文；`execute()` 内部就是规则裁决/校验边界。
+3. **"只有两个出口"是这个 SDK 的默认结构。** session 只给 act + declare 两个 tool，每回合一次 `session.prompt()` 内先后发生：模型先 `act`（一次性提交动作提案或结构化拒绝，one-shot 门闩封闭变异窗口），工具结果承载裁决的世界腔策展；随后模型用 `declare` 声明新事实（可选，可多次调用、回合内逐条校验反馈）、输出散文正文；`execute()` 内部就是规则裁决/校验边界。
 4. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给前端。
 5. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的（不再硬编码 apply/move/set）。
 
-6. **上下文裁剪（`context` 事件 + 近况记录）**：每次 LLM 调用前经内联扩展（`DefaultResourceLoader.extensionFactories` 的 `cave-context`，`core/context.ts` 为策略单一来源）把消息裁剪为「近况记录 + 当前运行后缀」——后缀 = 最后一条 user 消息起的原样保留（toolCall/toolResult 配对天然完整），近况 = 最近 6 回合的「意图 → 世界腔裁决行」，并入该 user 消息头部。会话文件仍累积全量消息作审计；近况另以 custom 条目持久化于同一文件（custom 不参与 LLM 上下文），进程重启由其重建窗口。**缓存代价是显式决策**：状态每回合重注入使消息前缀天然不稳定，跨调用前缀复用只剩 [tools+system] 头块——因此系统提示与工具数组必须字节级稳定（易变状态一律走 per-turn prompt，禁入系统提示），且不做 setActiveTools 相位切换（工具块位于序列化前缀头部，每次切换即整体前缀失效）。compaction 保持关闭：pi 缺省摘要是编码任务形状、且把旧叙述摘要重新注入，与「模拟层唯一真相源」相悖；长度兜底走显式新开会话。资源发现全部关闭（noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles）：cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt。
+6. **上下文裁剪（`context` 事件 + 近况记录）**：每次 LLM 调用前经内联扩展（`DefaultResourceLoader.extensionFactories` 的 `cave-context`，`core/context.ts` 为策略单一来源）把消息裁剪为「近况记录 + 当前运行后缀」——后缀 = 最后一条 user 消息起的原样保留（toolCall/toolResult 配对天然完整），近况 = 最近 6 回合的「意图 → 世界腔裁决行」，并入该 user 消息头部。会话文件仍累积全量消息作审计；近况另以 custom 条目持久化于同一文件（custom 不参与 LLM 上下文），进程重启由其重建窗口。**缓存代价是显式决策**：状态每回合重注入使消息前缀跨回合天然不稳定，跨回合前缀复用只剩 [tools+system] 头块——因此系统提示与工具数组必须字节级稳定（易变状态一律走 per-turn prompt，禁入系统提示），且不做 setActiveTools 相位切换（工具块位于序列化前缀头部，每次切换即整体前缀失效）。回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变），provider 缓存可全程复用——这是单 pass 相对双 pass 的额外收益（双 pass 的表达 prompt 是新 user 消息，只能复用头块）。compaction 保持关闭：pi 缺省摘要是编码任务形状、且把旧叙述摘要重新注入，与「模拟层唯一真相源」相悖；长度兜底走显式新开会话。资源发现全部关闭（noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles）：cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt。
 
-7. **双 pass 而非单 pass 工具序列流** 单 pass（模型一次 prompt 内 act → 见结果 → declare → 散文）同样能切断「叙述未发生的后果」（结果在上下文中），也可经裁剪维持叙述不回流，调用价格却只约一半。击杀理由是四项结构性收益：(a) **相位合约纯净**——两个相位的系统提示互不污染，映射期「禁散文」与表达期「禁工具」各自字节级稳定（§2-6 的缓存纪律依赖此稳定），单 pass 只能把矛盾合约塞进同一系统提示靠运行时劝说分离；(b) **变异窗口封闭**——gate 按相位开闭，act 只能在映射相位执行；单 pass 需要额外的「只许调一次」状态机，且模型续行中再调工具是 agent loop 的默认形态，更难拦；(c) **表达输入的策展权**——表达 prompt 由 core 策展（尝试行/facts/即将发生/新见，经 fmtChange 线性化、协议性拒绝过滤）；单 pass 的表达只能依赖工具结果原文，策展要么塞进工具结果（JSON 形态污染散文通道）要么丢失；(d) **拒绝路径形态**——refusal 在双 pass 是一等相位出口（不解析 → 表达期自然回应），单 pass 要求「拒绝也是一次工具调用」。代价明确：每回合约 2 次调用（映射 ≥1 + 表达 ≥1），是引擎最大的运营成本项；若未来需要按相位分模型（映射用廉价快模型），双 pass 是前提而非障碍。
+7. **单 pass 回合而非双 pass 双 prompt** 每回合一次 `session.prompt()`：模型先调 `act`（一次性提交，one-shot 门闩封闭变异窗口），工具结果即本回合世界回应的世界腔策展（尝试行/法则事实/即将发生/新见/可声明实体，经 fmtChange 线性化、协议性拒绝过滤），模型基于它 `declare` 新事实并输出散文；叙述只能跟随工具结果。曾以双 pass（映射、表达各一次独立调用）承载同一职责，已移除——其四条结构性收益经实现核对均不成立：**「相位合约纯净」与实现不符**（两相位本就共享同一系统提示，相位区分靠 per-turn prompt，单 pass 下同样字节级稳定）；**「变异窗口封闭」在两设计里是同一个布尔**（one-shot 门闩，翻转点不同）；**「表达输入的策展权」由 act 工具结果承载**（工具结果是引擎撰写的文本，策展非但不需要独立 prompt，还免去表达 pass 的状态重注入——pruneContext 裁掉映射 run 后表达 pass 必须重喂全量 digest，单 pass 只注入一次）；**「拒绝路径形态」无差异**（refusal 本就是一次 act 调用）。成本对比：双 pass 每回合 ≥2 次串行调用、状态全量注入 3 份（映射 prompt / act 工具结果 / 表达 prompt）、校验失败尾部再起整轮 prompt；单 pass 1 次调用、状态注入 1 份 + 工具结果策展、回合内续行复用 [tools+system+user] 前缀（§2-6）。保留的权衡：表达上下文不再与映射推理隔离（affordances 菜单与 act 参数在散文视野内），由声明契约与描写硬约束覆盖。
 
 ## 2.5 GameDef 表面契约
 

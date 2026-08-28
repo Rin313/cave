@@ -75,7 +75,7 @@ export interface Messages {
 	instrumentUnreachable?: (name: string) => string;
 	/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
 	defaultReason: string;
-	/** 行动阶段门闩拦截（表达 pass 中误调 act 工具时的防御性拒绝）。 */
+	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
 	notInActionPhase: string;
 	/** 时间流逝动作（TICK_VERB）的世界腔描述。 */
 	timePassed: string;
@@ -282,9 +282,9 @@ export interface GameDef {
 	affordances?: boolean;
 	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
 	reactiveSystems?: boolean;
-	/** 回合级时间驱动：引擎每回合动作裁决后、表达前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
+	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
 	turnTicks?: number;
-	/** 序列化投影：决定状态以什么形态进映射/表达 prompt。缺省 = serialize() 全量 JSON。
+	/** 序列化投影：决定状态以什么形态进回合 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
