@@ -23,10 +23,6 @@ export interface Rel {
 export interface World {
 	time: number;
 	entities: Entity[];
-	/** 显著性焦点：本回合动作/拒绝涉及的实体，跨回合指代锚点。 */
-	focus?: string | null;
-	/** 拒绝痕迹：实体 id → 累计被拒次数（带 subject 的法则/施动前提/不变式拒绝时累加）。 */
-	traces?: Record<string, number>;
 	/** 关系边表：from→to 的 type 关系（信任/记忆/派系等）。游戏声明，规则以 deltas 变更。 */
 	relations?: Rel[];
 }
@@ -34,7 +30,7 @@ export interface World {
 /** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
  *  关系变更 prop 编码为 `rel:<type>@<to>`（entity 为 from 端点），表达层据此格式化。
  *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 本就可建边，配合 spawn 可让世界生长）。
- *  despawn 只级联清理核心结构（关系边/焦点/痕迹）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
+ *  despawn 只级联清理核心结构（关系边）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "inc"; entity: string; prop: string; by: number }
@@ -285,7 +281,7 @@ export interface GameDef {
 	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
 	turnTicks?: number;
 	/** 序列化投影：决定状态以什么形态进回合 prompt。缺省 = serialize() 全量 JSON。
-	 *  游戏可声明精简/结构化的 digest（如焦点优先、关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
+	 *  游戏可声明精简/结构化的 digest（如关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
@@ -307,7 +303,7 @@ export interface Invariant {
 	check: (world: World, ctx: InvariantCtx) => string | null;
 }
 
-/** core 默认硬墙：引用完整性——实体 id 唯一、in/注册表 id 属性/关系端点/焦点指向存在的实体。
+/** core 默认硬墙：引用完整性——实体 id 唯一、in/注册表 id 属性/关系端点指向存在的实体。
  *  检测规则把世界改坏的 bug（悬空引用），任何提交都无法绕过。 */
 export function integrityInvariant(): Invariant {
 	return {
@@ -326,7 +322,6 @@ export function integrityInvariant(): Invariant {
 			for (const r of world.relations ?? []) {
 				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
 			}
-			if (world.focus && !ids.has(world.focus)) return "integrity: focus -> missing entity";
 			return null;
 		},
 	};
@@ -398,14 +393,12 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
 
-/** 序列化：可见实体 + 非内部属性 + 关系表（焦点优先）。 */
+/** 序列化：可见实体 + 非内部属性 + 关系表。 */
 export function serialize(world: World, visible: Iterable<string>, internalProps: readonly string[] = []): string {
 	const vis = new Set(visible);
 	const internal = new Set(internalProps);
-	const focus = world.focus ?? null;
 	const items = world.entities
 		.filter((e) => vis.has(e.id))
-		.sort((a, b) => (a.id === focus ? -1 : b.id === focus ? 1 : 0))
 		.map((e) => ({
 			id: e.id,
 			name: e.name,
@@ -414,7 +407,7 @@ export function serialize(world: World, visible: Iterable<string>, internalProps
 			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
 		}));
 	const rels = (world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
-	return JSON.stringify({ time: world.time, focus, traces: world.traces ?? {}, relations: rels, entities: items });
+	return JSON.stringify({ time: world.time, relations: rels, entities: items });
 }
 
 /** 裁决结果 + 未提交的 deltas（apply 用）；check 丢弃 deltas 作为只读裁决。 */
@@ -624,18 +617,13 @@ export class Simulation {
 	}
 
 	private applyTraced(action: Action): StepResult {
-		const beforeVisible = this.visible();
 		const r = this.adjudicateRaw(action);
 		let sr: StepResult;
 		if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(r.deltas, src);
 			if (!cc.ok) {
-				// 不变式硬墙拒绝同样维护焦点/拒绝痕迹（与普通拒绝一致）；subject 取动作首个实体参数。
-				// 返回的 sr.denial 与 updateFocus 用同一个带 subject 的 denial，保证两处口径一致。
-				const denial = cc.denial ? { ...cc.denial, subject: this.firstEntityParam(action) ?? undefined } : undefined;
-				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "rule", denial };
-				this.updateFocus({ ok: false, denial }, action, beforeVisible);
+				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "rule", denial: cc.denial };
 				this.log.push(sr);
 				return sr;
 			}
@@ -657,39 +645,8 @@ export class Simulation {
 			}
 		}
 
-		this.updateFocus(r, action, beforeVisible);
-
 		this.log.push(sr);
 		return sr;
-	}
-
-	/** 焦点与拒绝痕迹的确定性维护。 */
-	private updateFocus(r: { ok: boolean; denial?: Denial; involved?: string[] }, action: Action, beforeVisible: Set<string>): void {
-		if (r.ok) {
-			const revealed = [...this.visible()].filter((id) => id !== this.actor && !beforeVisible.has(id));
-			const id = revealed.length ? revealed[0] : (this.firstEntityParam(action) ?? r.involved?.find((x) => x !== this.actor && this.world.entities.some((e) => e.id === x)));
-			if (id) this.world.focus = id;
-		} else {
-			const subj = r.denial?.subject;
-			if (subj && this.world.entities.some((e) => e.id === subj)) {
-				this.world.focus = subj;
-				this.world.traces = this.world.traces ?? {};
-				this.world.traces[subj] = (this.world.traces[subj] ?? 0) + 1;
-			}
-		}
-	}
-
-	/** 取动作参数中第一个实体 id（作为焦点候选）。 */
-	private firstEntityParam(action: Action): string | null {
-		for (const v of Object.values(action.params)) {
-			if (typeof v === "string" && this.world.entities.some((e) => e.id === v)) return v;
-		}
-		return null;
-	}
-
-	/** 当前焦点实体（跨回合指代锚点）。 */
-	get focus(): string | null {
-		return this.world.focus ?? null;
 	}
 
 	/** 实体是否可持握（游戏声明的 GameDef.holdable 槽位，core 不内嵌任何属性名）。
@@ -875,8 +832,6 @@ export class Simulation {
 				const gone = this.world.entities[i]!;
 				this.world.entities.splice(i, 1);
 				this.world.relations = (this.world.relations ?? []).filter((r) => r.from !== d.entity && r.to !== d.entity);
-				if (this.world.focus === d.entity) this.world.focus = null;
-				delete this.world.traces?.[d.entity];
 				changes.push({ entity: d.entity, prop: "", from: null, to: null, op: "despawn", name: gone.name, src });
 				continue;
 			}

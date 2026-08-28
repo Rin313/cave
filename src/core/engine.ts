@@ -212,9 +212,8 @@ export class Engine {
 		const state = this.sim.digest();
 		// 动作空间接地可由游戏关闭（GameDef.affordances）：发现式世界不剧透菜单，试错即玩法
 		const affordances = this.def.affordances === false ? [] : this.sim.affordances();
-		const focusName = this.sim.focus ? (this.sim.world.entities.find((e) => e.id === this.sim.focus)?.name ?? null) : null;
 		try {
-			await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection, affordances, focusName));
+			await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection, affordances));
 		} finally {
 			this.turn.gateOpen = false;
 		}
@@ -301,17 +300,14 @@ function buildContextExtension(memory: () => readonly MemoryTurn[]): InlineExten
 	};
 }
 
-function buildTurnPrompt(state: string, intent: string, selection: string | undefined, affordances: string[] = [], focusName: string | null = null): string {
+function buildTurnPrompt(state: string, intent: string, selection: string | undefined, affordances: string[] = []): string {
 	const aff = affordances.length
 		? `[动作空间] 世界法则当前会授予这些动作（也可提出动作空间之外的动作，世界将逐一裁决，可能被拒绝）：\n${affordances.map((a) => `- ${a}`).join("\n")}\n\n`
-		: "";
-	const focusLine = focusName
-		? `[焦点] ${focusName} 是本回合的显著实体（最近被操作/新出现/被拒绝的对象）。解析指代（「它/那个」）与叙述展开可优先考虑它，但以玩家显式提到的实体为准。\n\n`
 		: "";
 	const intentLine = selection
 		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
 		: `玩家意图：「${intent}」`;
-	return `[当前状态]（唯一真相源）：\n${state}\n\n${aff}${focusLine}${intentLine}\n\n解析意图并调用 act 工具提交动作提案（或结构化拒绝）；世界裁决后基于返回的结果描写本回合。`;
+	return `[当前状态]（唯一真相源）：\n${state}\n\n${aff}${intentLine}\n\n解析意图并调用 act 工具提交动作提案（或结构化拒绝）；世界裁决后基于返回的结果描写本回合。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
@@ -435,9 +431,7 @@ function buildResultView(sim: Simulation, ctx: DeclCtx, results: StepResult[], r
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
 function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, results: StepResult[], instruction: string, pending: Change[]): string {
-	const focus = sim.focus ? sim.world.entities.find((e) => e.id === sim.focus) : undefined;
-	const focusLine = focus ? `[焦点] ${focus.name} 是显著实体，叙述可围绕它展开。\n\n` : "";
-	const lines = [`[当前状态]（唯一真相源）：`, sim.digest(), "", focusLine, ...formatTurnEvents(sim, results, undefined, undefined, pending, [])];
+	const lines = [`[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, results, undefined, undefined, pending, [])];
 	const decl = declarableList(sim, ctx);
 	if (decl) lines.push("", decl);
 	lines.push("", `${instruction} 新事实先用 declare 工具声明（可选），然后输出散文正文。`);
