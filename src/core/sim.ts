@@ -71,8 +71,6 @@ export interface Messages {
 	notInActionPhase: string;
 	/** 时间流逝动作（TICK_VERB）的世界腔描述。 */
 	timePassed: string;
-	/** 时间流逝产生变更时的 StepResult 理由。 */
-	timeChanged: string;
 }
 
 /** 法则背书的结构化新事实：表达层的合法新事实词汇，防止模型发明后果。 */

@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, TICK_VERB, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
 import { touchedIds, validateFactIds, type DeclCtx, type StructuredFact } from "./declare.ts";
 import { coerceValue } from "./util.ts";
 
@@ -40,6 +40,7 @@ export type EngineEvent =
 	| { type: "text_delta"; delta: string }
 	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
 	| { type: "tool_result"; results: StepResult[] }
+	| { type: "elapsed"; results: StepResult[] }
 	| { type: "validation"; round: number; error: string; attempt: string }
 	| { type: "usage"; input: number; output: number; cacheRead: number; cacheWrite: number };
 
@@ -108,7 +109,10 @@ export class Engine {
 					this.outcome.refusal = patch.refusal;
 				}
 			}
-			if (patch.elapsed) this.outcome.elapsed = patch.elapsed;
+			if (patch.elapsed?.length) {
+				this.outcome.elapsed = patch.elapsed;
+				this.emit({ type: "elapsed", results: patch.elapsed });
+			}
 		};
 		session.subscribe((event) => {
 			switch (event.type) {
@@ -249,16 +253,14 @@ export class Engine {
 		}
 	}
 
-	async render(instruction: string, changes: Change[] = []): Promise<void> {
-		const results: StepResult[] = changes.length
-			? [{ ok: true, reason: messagesFor(this.def).timeChanged, changes, action: { verb: TICK_VERB, params: { n: this.sim.world.time } } }]
-			: [];
-		const visibleChanges = narratableChanges(this.def, changes);
-		this.turn.decl = declCtxOf(this.sim, results, []);
+	/** 独立渲染（无动作裁决的叙述回合，如开场/等待后的场景描写）：elapsed 为本回合时间流逝的 systems 产出（含 facts）。 */
+	async render(instruction: string, elapsed: StepResult[] = []): Promise<void> {
+		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
+		this.turn.decl = declCtxOf(this.sim, elapsed, []);
 		this.turn.lastDecl = undefined;
 		this.turn.textBuf.length = 0;
 		try {
-			await this.session.prompt(buildRenderPrompt(this.sim, this.turn.decl, results, instruction, this.turn.decl.pending));
+			await this.session.prompt(buildRenderPrompt(this.sim, this.turn.decl, elapsed, instruction, this.turn.decl.pending));
 		} finally {
 			this.turn.decl = null;
 		}
@@ -363,9 +365,12 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 }
 
 /** 回合事件的世界腔策展（act 工具结果与独立渲染共用）：
- *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、即将发生、新见。core 只做符号连接。 */
-function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[]): string[] {
+ *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、即将发生、新见。core 只做符号连接。
+ *  时间流逝（turnTicks 的 systems 产出）不是玩家的尝试，是世界自己的因果——动作成败与否都照常发生；
+ *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
+function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[] = []): string[] {
 	const lines: string[] = [];
+	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
 	if (refusal) {
 		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	}
@@ -373,12 +378,6 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 	if (narratable.length) {
 		lines.push("本回合尝试：");
 		for (const r of narratable) {
-			if (r.action.verb === TICK_VERB) {
-				// 时间流逝行：世界事件的变更/事实直陈，不是玩家的尝试
-				const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
-				lines.push(bits.length ? `- ${sim.describeAction(r.action)}：${bits.join("。")}` : `- ${sim.describeAction(r.action)}。`);
-				continue;
-			}
 			const visible = narratableChanges(sim.def, r.changes);
 			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}` : "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
@@ -386,8 +385,16 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
 			lines.push(`- 尝试「${sim.describeAction(r.action)}」→ ${verdict}${changes}${facts}${involved}`);
 		}
-	} else if (!refusal) {
+	} else if (!refusal && !elapsedEvents.length) {
 		lines.push("没有任何改变。");
+	}
+	if (elapsedEvents.length) {
+		lines.push(`${messagesFor(sim.def).timePassed}：`);
+		for (const r of elapsedEvents) {
+			const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
+			const body = bits.length ? bits.join("。") : (r.reason ?? messagesFor(sim.def).defaultReason);
+			lines.push(`- ${r.ok ? body : `${body}（被拒绝）`}`);
+		}
 	}
 	const pendingVisible = narratableChanges(sim.def, pending);
 	if (pendingVisible.length) {
@@ -418,16 +425,16 @@ function declarableList(sim: Simulation, ctx: DeclCtx): string {
 }
 
 /** act 工具结果：本回合世界回应的世界腔策展——散文的唯一事件源（叙述只能跟随这里的内容）。 */
-function buildResultView(sim: Simulation, ctx: DeclCtx, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[]): string {
-	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed);
+function buildResultView(sim: Simulation, ctx: DeclCtx, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[]): string {
+	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed, elapsed);
 	const decl = declarableList(sim, ctx);
 	if (decl) lines.push("", decl);
 	return lines.join("\n");
 }
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
-function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, results: StepResult[], instruction: string, pending: Change[]): string {
-	const lines = [`[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, results, undefined, undefined, pending, [])];
+function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, elapsed: StepResult[], instruction: string, pending: Change[]): string {
+	const lines = [`[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], undefined, undefined, pending, [], elapsed)];
 	const decl = declarableList(sim, ctx);
 	if (decl) lines.push("", decl);
 	lines.push("", `${instruction} 新事实先用 declare 工具声明（可选），然后输出散文正文。`);
@@ -576,7 +583,7 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			const revealed = [...sim.visible()].filter((id) => !turn.visibleBefore.has(id));
 			turn.decl = declCtxOf(sim, [...results, ...elapsed], revealed);
 			return {
-				content: [{ type: "text", text: buildResultView(sim, turn.decl, results, refusal, turn.intent, turn.decl.pending, revealed) }],
+				content: [{ type: "text", text: buildResultView(sim, turn.decl, results, refusal, turn.intent, turn.decl.pending, revealed, elapsed) }],
 				details: {},
 			};
 		},

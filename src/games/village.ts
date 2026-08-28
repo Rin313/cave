@@ -115,7 +115,6 @@ export const village: GameDef = {
 		defaultReason: "……",
 		notInActionPhase: "当前不在行动阶段，无法执行操作。",
 		timePassed: "时间流逝",
-		timeChanged: "时间流逝，世界发生了变化。",
 	},
 	verbs: {
 		gather: defineVerb({

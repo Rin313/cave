@@ -255,7 +255,6 @@ export const yume: GameDef = {
 		defaultReason: "……",
 		notInActionPhase: "梦境此刻不接受操作。",
 		timePassed: "梦里的时间悄悄流走",
-		timeChanged: "不知何时，周围起了变化。",
 	},
 	verbs: {
 		sleep: sleepVerb,
