@@ -69,7 +69,7 @@ export interface Messages {
 	instrumentUnholdable?: (name: string) => string;
 	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具可达性不满足时渲染（name 为工具实体名）。 */
 	instrumentUnreachable?: (name: string) => string;
-	/** 规则授予但未提供世界腔理由时的占位文案（affordances 据此过滤无描述的动作）。 */
+	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
 	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
 	notInActionPhase: string;
@@ -240,9 +240,9 @@ export interface VerbDef {
 	entityParams?: string[];
 	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
 	 *  核心在规则前跑共享前提检查：必须可持握（holdable 槽位）且在可达范围；不满足直接拒绝，不进入规则。
-	 *  affordances 枚举自动跳过不可持握工具；probe 依此审计「规则授予但前提不满足」的潜在洞。 */
+	 *  probe 依此审计「规则授予但前提不满足」的潜在洞。 */
 	instrumentParams?: string[];
-	/** 非实体参数的候选值；动作空间接地与法则探测共用。不提供则跳过该参数。 */
+	/** 非实体参数的候选值：法则探测（probe）的枚举域声明。不提供则跳过该参数。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为 fallback 兜底。 */
 	rules: Rule[];
@@ -276,9 +276,6 @@ export interface GameDef {
 	/** 法则探测域：sim probe 枚举动作参数候选实体时使用的实体集。缺省 = 可见实体 - 玩家 - space 标记的场景实体。
 	 *  大实体量游戏可在此裁剪（如只给可交互实体），控制 probe 组合规模与信号质量。 */
 	probeScope?: (world: World, actor: string) => string[];
-	/** 动作空间接地开关：映射 prompt 是否注入 affordances 枚举（缺省 true）。
-	 *  发现式游戏应关闭——「世界会授予什么」的菜单会剧透世界，试错本身就是玩法。 */
-	affordances?: boolean;
 	/** 动作后因果反应：granted 动作提交后按注册顺序跑一次 systems（默认 false）。 */
 	reactiveSystems?: boolean;
 	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）；与 reactiveSystems 独立（reactive 是即时响应，不推进时刻）。 */
@@ -457,7 +454,7 @@ export class Simulation {
 		return new Set(this.world.entities.map((e) => e.id));
 	}
 
-	/** 只读裁决（不提交、不入日志）：动作空间接地与法则探测共用。
+	/** 只读裁决（不提交、不入日志）：法则探测的通道（probeGrant 唯一消费）。
 	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
 	check(action: Action): StepResult {
 		const r = this.adjudicateRaw(action);
@@ -664,65 +661,11 @@ export class Simulation {
 		return this.def.holdable ? this.def.holdable(this.world, this.actor, id) : false;
 	}
 
-	/** 实体是否可作为施动工具（可持握 + 可达）。affordances 枚举与 probe 审计共用。
+	/** 实体是否可作为施动工具（可持握 + 可达）：施动工具前提门（instrumentViolation）的共享谓词。
 	 *  可持握走 holdable 槽位，可达性走 GameDef.reach 槽位（core 不内嵌空间模型）。 */
 	wieldable(id: string): boolean {
 		if (!this.holdable(id)) return false;
 		return this.def.reach ? this.def.reach(this.world, this.actor, id) : true;
-	}
-
-	/** 动作空间接地：枚举 动词 × 可见实体 × 候选值，返回当前世界会授予的动作（世界腔理由，去重）。
-	 *  预算按动词均分（每个动词最多 maxChecks/动词数 次 check），避免组合量大的动词饿死后续动词。 */
-	affordances(maxChecks = 400, maxOut = 30): string[] {
-		const out: string[] = [];
-		let checks = 0;
-		const seen = new Set<string>();
-		const defaultReason = messagesFor(this.def).defaultReason;
-		const verbEntries = Object.entries(this.def.verbs);
-		const perVerbBudget = verbEntries.length ? Math.ceil(maxChecks / verbEntries.length) : maxChecks;
-		for (const [verbName, verb] of verbEntries) {
-			const entityParams = verb.entityParams ?? [];
-			const candidates = verb.candidates?.(this) ?? {};
-			const paramLists: Record<string, PropValue[]> = {};
-			const instruments = new Set(verb.instrumentParams ?? []);
-			for (const p of entityParams) {
-				let ids = [...this.visible()];
-				if (instruments.has(p)) ids = ids.filter((id) => this.wieldable(id));
-				paramLists[p] = ids;
-			}
-			for (const [p, vals] of Object.entries(candidates)) paramLists[p] = vals;
-			const keys = Object.keys(paramLists);
-			if (!keys.length) {
-				// 无参动词（era 触发器，如 eat/rest/buy）也进动作空间：单点 check，授予即入菜单，
-				// 否则「动作空间接地」对无参动词为主的游戏空转，映射层只能冷猜系统提示里的动词描述。
-				if (checks >= maxChecks || out.length >= maxOut) continue;
-				checks++;
-				const r = this.check({ verb: verbName, params: {} });
-				if (r.ok && r.reason !== defaultReason && !seen.has(r.reason)) {
-					seen.add(r.reason);
-					out.push(r.reason);
-				}
-				continue;
-			}
-			let verbChecks = 0;
-			const gen = (idx: number, acc: Record<string, PropValue>) => {
-				if (checks >= maxChecks || verbChecks >= perVerbBudget || out.length >= maxOut) return;
-				if (idx === keys.length) {
-					checks++;
-					verbChecks++;
-					const r = this.check({ verb: verbName, params: { ...acc } });
-					if (r.ok && r.reason !== defaultReason && !seen.has(r.reason)) {
-						seen.add(r.reason);
-						out.push(r.reason);
-					}
-					return;
-				}
-				const p = keys[idx]!;
-				for (const v of paramLists[p]!) gen(idx + 1, { ...acc, [p]: v });
-			};
-			gen(0, {});
-		}
-		return out;
 	}
 
 	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）；tick 伪动词无游戏词可连，走 Messages.timePassed。 */

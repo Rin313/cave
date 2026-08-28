@@ -5,7 +5,7 @@ import { Type } from "typebox";
 
 /**
  * 梦核极研究探针：梦日记（Yume Nikki 式）。
- * 极少法则 + 极高自由：四个动词、零领域不变式、两个纯氛围系统；affordances 关闭——菜单会剧透世界，试错即玩法。
+ * 极少法则 + 极高自由：四个动词、零领域不变式、两个纯氛围系统
  * authored 形态的实证场：互动按实体逐个书写（卫语句子句 + 兜底），效果（effect）不主动起作用、只是被带着而世界因此不同；
  * 实体可生灭（spawn/despawn）、拓扑可生长（relSet 建径）、持有物改写互动结果。
  * 验证目标：core 原语能否承载「发现即玩法」的世界，而不需要任何新机制。
@@ -364,8 +364,6 @@ export const yume: GameDef = {
 	...reachFor(),
 	summarize: summarizeYume,
 	digest: digestYume,
-	// 发现式世界：关闭动作空间接地，不向映射层剧透「世界会授予什么」。
-	affordances: false,
 	hint: `世界法则（模拟层强制执行）：
 1. 四个动词：sleep（房间里睡去坠入梦境；梦里再睡则醒来）、go（沿路径走向相邻地点）、interact（与眼前的存在互动）、take（收起可拾取的东西）。
 2. 世界由路径连通；有的地方很暗，没有光进不去。

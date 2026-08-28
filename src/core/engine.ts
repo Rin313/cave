@@ -210,10 +210,8 @@ export class Engine {
 		this.outcome = { kind: "refused", results: [], elapsed: [] };
 		this.openTurn(action.intent);
 		const state = this.sim.digest();
-		// 动作空间接地可由游戏关闭（GameDef.affordances）：发现式世界不剧透菜单，试错即玩法
-		const affordances = this.def.affordances === false ? [] : this.sim.affordances();
 		try {
-			await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection, affordances));
+			await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection));
 		} finally {
 			this.turn.gateOpen = false;
 		}
@@ -300,14 +298,11 @@ function buildContextExtension(memory: () => readonly MemoryTurn[]): InlineExten
 	};
 }
 
-function buildTurnPrompt(state: string, intent: string, selection: string | undefined, affordances: string[] = []): string {
-	const aff = affordances.length
-		? `[动作空间] 世界法则当前会授予这些动作（也可提出动作空间之外的动作，世界将逐一裁决，可能被拒绝）：\n${affordances.map((a) => `- ${a}`).join("\n")}\n\n`
-		: "";
+function buildTurnPrompt(state: string, intent: string, selection: string | undefined): string {
 	const intentLine = selection
 		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
 		: `玩家意图：「${intent}」`;
-	return `[当前状态]（唯一真相源）：\n${state}\n\n${aff}${intentLine}\n\n解析意图并调用 act 工具提交动作提案（或结构化拒绝）；世界裁决后基于返回的结果描写本回合。`;
+	return `[当前状态]（唯一真相源）：\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（或结构化拒绝）；世界裁决后基于返回的结果描写本回合。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
