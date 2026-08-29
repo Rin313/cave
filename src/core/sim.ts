@@ -426,7 +426,7 @@ export class Simulation {
 	readonly log: StepResult[] = [];
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
-	/** 骰子键碰撞追踪：仅 apply/tick 提交链开启；check 的只读重估不追踪——同一动作复现同值是公理 4，不是碰撞。 */
+	/** 骰子键碰撞追踪：仅 apply/tick 提交链开启；check 的只读重估不追踪——同一动作复现同值是随机推论的必然，不是碰撞。 */
 	private tracingRolls = false;
 	private rollEpoch = -1;
 	private readonly rollKeys = new Set<string>();
@@ -440,7 +440,7 @@ export class Simulation {
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 		}
-		// 公理 6「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
+		// 「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
 		// 否则 t=0 是必要性自由区，def 结构错误与损坏存档要到首次提交才以全量拒绝的形式显形。
 		const broken = this.checkInvariants(this.world, []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);

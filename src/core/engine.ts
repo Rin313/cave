@@ -350,7 +350,7 @@ export function fmtChange(sim: Simulation, c: Change): string {
 	return `${name}.${label}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
 }
 
-/** 表达可见变更：internal 属性不进表达输入（公理 1 逃生舱）。只有 prop 变更携带 prop，rel/生灭恒可见。 */
+/** 表达可见变更：internal 属性不进表达输入（公理一逃生舱）。只有 prop 变更携带 prop，rel/生灭恒可见。 */
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	const internal = internalPropsOf(def);
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));

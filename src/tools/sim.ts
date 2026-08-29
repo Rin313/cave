@@ -398,7 +398,7 @@ function propKeysIn(src: string): Set<string> {
 	return keys;
 }
 
-/** 身份卡封闭键集（DESIGN 公理 1）：引擎固定的第二词表，恒可被规则键控、无需注册。 */
+/** 身份卡封闭键集：引擎固定的第二词表，恒可被规则键控、无需注册。 */
 const IDENTITY_KEYS = ["id", "name", "kind", "tags"] as const;
 
 /** 提取源码中静态可见的身份卡直读：`.id/.name/.kind/.tags`（排除方法调用位置；`.props.x` 由属性扫描单独处理）。
