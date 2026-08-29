@@ -73,15 +73,12 @@ export interface Messages {
 	timePassed: string;
 }
 
-/** 法则背书的结构化新事实：表达层的合法新事实词汇，防止模型发明后果。 */
+/** 法则产出的世界腔事实：进结果视图，供叙述跟随。 */
 export interface Fact {
 	/** 世界腔陈述。 */
 	text: string;
-	/** 陈述涉及的实体 id（声明校验的集合成员依据）。 */
+	/** 陈述涉及的实体 id（结果视图「涉及」行与审计的依据）。 */
 	entities: string[];
-	/** 认识论身份：percept（缺省）＝对世界状态的知觉，实体进声明契约 touched 集；
-	 *  utterance＝世界之言（氛围话语/低语），实体不进 touched——话语只许被转述，不许据以断言状态。 */
-	kind?: "percept" | "utterance";
 }
 
 /** 属性类型。 */
@@ -93,7 +90,7 @@ export interface PropDef {
 	type: PropType;
 	/** 世界化说法（拒绝/变更文本里的属性名）。 */
 	label?: string;
-	/** 内部属性：不进 LLM 序列化、不进变更列表、不进表达校验（从源头杜绝泄漏）。 */
+	/** 内部属性：不进 LLM 序列化、不进变更线性化（从源头杜绝泄漏）。 */
 	internal?: boolean;
 	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性，如「刻痕斑驳」）。
 	 *  非润饰的物理属性须与状态严格一致 */
@@ -104,9 +101,9 @@ export interface PropDef {
 export interface Denial {
 	/** 法则标识，如 "move.reach"（审计与探测依据）。 */
 	law: string;
-	/** 施动实体 id。结构化亲证：进声明契约 touched（engine 的 involvedEntities）。 */
+	/** 施动实体 id（结构化亲证：进结果视图「涉及」行与审计）。 */
 	subject?: string;
-	/** 受动实体 id。结构化亲证：进声明契约 touched（engine 的 involvedEntities）。 */
+	/** 受动实体 id（结构化亲证：进结果视图「涉及」行与审计）。 */
 	object?: string;
 	/** 涉及属性（denyAll 等按属性兜底的模板用）。 */
 	prop?: string;
@@ -252,8 +249,8 @@ export interface GameDef {
 	id: string;
 	title: string;
 	/** 意志的居所：def 指向世界的唯一数据引用。意志（act 通道的说话人，每回合恰好一个）不在世界里——账本里只有这根引用；
-	 *  它同时是五个缺省角色的缺省值：无主语动词的缺省主语、感知谓词的缺省视点、声明契约的常任成员、叙述「你」的缺省指称、
-	 *  integrity 墙的保护对象。前四者是「现宿主」角色的缺省（体验者一侧，附身时属器皿；附身游戏在钩子与规则内从世界态推导
+	 *  它同时是四个缺省角色的缺省值：无主语动词的缺省主语、感知谓词的缺省视点、叙述「你」的缺省指称、
+	 *  integrity 墙的保护对象。前三者是「现宿主」角色的缺省（体验者一侧，附身时属器皿；附身游戏在钩子与规则内从世界态推导
 	 *  现宿主并无视本引用，居所退为空壳），只有墙保护属引用自身的必要性。居所上的状态全是身体态，意志自身无状态。
 	 *  视角是感知面钩子的现值（缺省全见全达即上帝视角；第一人称是游戏声明，非引擎立场）。 */
 	playerId: string;
@@ -262,7 +259,7 @@ export interface GameDef {
 	/** 时间系统：每 tick 按注册顺序运行的系统规则（world→deltas 的纯函数）。 */
 	systems?: SystemRule[];
 	hint?: string;
-	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 与表达校验读 internal，
+	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 读 internal，
 	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
 	props?: Record<string, PropDef>;
 	/** 确定性回退摘要钩子（player = 意志居所）。 */
@@ -342,7 +339,7 @@ export function messagesFor(def: GameDef): Messages {
 	return def.messages;
 }
 
-/** 从属性注册表计算内部属性集（不进序列化/变更/表达校验）。 */
+/** 从属性注册表计算内部属性集（不进序列化/变更线性化）。 */
 export function internalPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
 	for (const [k, p] of Object.entries(def.props ?? {})) if (p.internal) s.add(k);

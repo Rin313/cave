@@ -309,7 +309,7 @@ export const yume: GameDef = {
 		],
 	},
 	systems: [
-		// 纯氛围系统：世界之言（utterance）——不进声明契约 touched，模型只许转述不许据以断言状态
+		// 纯氛围系统：世界之言——低语没有机制含义，只许被转述
 		{
 			id: "dream.air",
 			run: (q) => {
@@ -320,7 +320,7 @@ export const yume: GameDef = {
 					"水滴声。找不到来源。",
 					"有什么东西在你身后站了一会儿，又走了。",
 				];
-				return { deltas: [], facts: [{ kind: "utterance", text: whispers[num(q.time) % whispers.length]!, entities: [q.player] }] };
+				return { deltas: [], facts: [{ text: whispers[num(q.time) % whispers.length]!, entities: [q.player] }] };
 			},
 		},
 		{

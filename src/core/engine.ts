@@ -12,7 +12,6 @@ import {
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
 import { Simulation, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
-import { touchedIds, validateFactIds, type DeclCtx, type StructuredFact } from "./declare.ts";
 import { coerceValue } from "./util.ts";
 
 export interface EngineOptions {
@@ -49,16 +48,14 @@ interface TurnChannel {
 	onAdjudication: ((patch: { results?: StepResult[]; refusal?: { label: string }; elapsed?: StepResult[] }) => void) | null;
 }
 
-/** 单回合通道状态：变异窗口门闩 + 声明契约上下文 + 散文缓冲。
- *  Engine.act() 开启门闩并复位其余字段；act 工具首次执行即翻转（本回合唯一裁决）并装配 decl；
- *  散文缓冲只在 decl 非 null（裁决后）收集，每次 declare 调用清空——正文 = 最后一次工具调用之后的文本。 */
+/** 单回合通道状态：变异窗口门闩 + 散文缓冲。
+ *  Engine.act() 开启门闩并复位其余字段；act 工具首次执行即翻转（本回合唯一裁决）。
+ *  散文缓冲只在门闩翻转后（裁决已发生）收集——叙述只能跟随裁决，正文 = 裁决之后的文本。 */
 interface TurnState {
 	gateOpen: boolean;
 	acted: boolean;
 	visibleBefore: Set<string>;
 	intent?: string;
-	decl: DeclCtx | null;
-	lastDecl: { ok: boolean; error?: string } | undefined;
 	textBuf: string[];
 }
 
@@ -117,7 +114,8 @@ export class Engine {
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
-					if (event.assistantMessageEvent.type === "text_delta" && this.turn.decl) {
+					// 散文缓冲只在裁决后（门闩已翻转；渲染回合恒为关）收集：叙述只能跟随裁决
+					if (event.assistantMessageEvent.type === "text_delta" && !this.turn.gateOpen) {
 						this.turn.textBuf.push(event.assistantMessageEvent.delta);
 					}
 					break;
@@ -153,7 +151,7 @@ export class Engine {
 
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
-		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), decl: null, lastDecl: undefined, textBuf: [] };
+		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), textBuf: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
@@ -177,7 +175,7 @@ export class Engine {
 		await loader.reload();
 
 		const channel: TurnChannel = { onAdjudication: null };
-		const customTools = [buildActTool(def, sim, turn, channel), buildDeclareTool(turn)];
+		const customTools = [buildActTool(def, sim, turn, channel)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
@@ -186,7 +184,7 @@ export class Engine {
 			resourceLoader: loader,
 			settingsManager,
 			sessionManager,
-			tools: [ACT_TOOL, "declare"],
+			tools: [ACT_TOOL],
 			customTools,
 		};
 
@@ -202,8 +200,6 @@ export class Engine {
 	private openTurn(intent: string): void {
 		this.turn.gateOpen = true;
 		this.turn.acted = false;
-		this.turn.decl = null;
-		this.turn.lastDecl = undefined;
 		this.turn.textBuf.length = 0;
 		this.turn.visibleBefore = this.sim.visible();
 		this.turn.intent = intent;
@@ -227,7 +223,8 @@ export class Engine {
 			this.emit({ type: "validation", round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: this.turn.textBuf.join("").trim() });
 			narration = this.summarize([]);
 		} else {
-			narration = this.settleNarration(this.turn.decl?.changes ?? []);
+			// 摘要兜底原料 = 本回合全部可见变更（玩家动作 + 时间流逝）
+			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed].flatMap((r) => narratableChanges(this.def, r.changes)));
 		}
 		this.recordTurn(action.intent, this.outcome.elapsed);
 		this.emit({ type: "text_delta", delta: narration });
@@ -256,24 +253,21 @@ export class Engine {
 	/** 独立渲染（无动作裁决的叙述回合，如开场/等待后的场景描写）：elapsed 为本回合时间流逝的 systems 产出（含 facts）。 */
 	async render(instruction: string, elapsed: StepResult[] = []): Promise<void> {
 		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
-		this.turn.decl = declCtxOf(this.sim, elapsed, []);
-		this.turn.lastDecl = undefined;
+		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		this.turn.textBuf.length = 0;
 		try {
-			await this.session.prompt(buildRenderPrompt(this.sim, this.turn.decl, elapsed, instruction, this.turn.decl.pending));
+			await this.session.prompt(buildRenderPrompt(this.sim, elapsed, instruction, pending));
 		} finally {
-			this.turn.decl = null;
+			this.turn.gateOpen = false;
 		}
 		this.emit({ type: "text_delta", delta: this.settleNarration(visibleChanges) });
 	}
 
-	/** 叙述收尾：正文为空或声明契约未通过 → 确定性摘要兜底（强接地，无幻觉面）。 */
+	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地，无幻觉面）。 */
 	private settleNarration(summaryChanges: Change[]): string {
 		const text = this.turn.textBuf.join("");
-		const last = this.turn.lastDecl;
-		const error = text.trim() === "" ? "散文为空。" : last && !last.ok ? (last.error ?? "事实声明未通过校验。") : null;
-		if (error) {
-			this.emit({ type: "validation", round: 1, error, attempt: text });
+		if (text.trim() === "") {
+			this.emit({ type: "validation", round: 1, error: "散文为空。", attempt: text });
 			return this.summarize(summaryChanges);
 		}
 		return text;
@@ -316,13 +310,9 @@ function buildSystemPrompt(def: GameDef): string {
 	const stylisticLine = stylistic.size
 		? `\n可润饰属性：${[...stylistic].map((p) => `${p}（${propLabelOf(def, p) ?? p}）`).join("、")}——描述这些属性时允许合理的文学润饰（如「刻痕斑驳」）。`
 		: "";
-	return `你是文字游戏引擎。每个回合依次两步：
+	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）：能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空 actions 与结构化 refusal（仅 label，不写理由）。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
 
-第一步（行动）：把玩家的操作意图解析为动作提案并调用 act 工具（本回合只能调用一次）。能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空 actions 与结构化 refusal（仅 label，不写理由）。act 返回世界裁决结果后进入第二步。
-
-第二步（描写）：基于 act 返回的裁决结果，把本回合写成面向玩家的文学散文。若有本回合的新事实需声明，先用 declare 工具提交（可选，可多次调用，以最后一次为准；无新事实则直接写散文），然后输出散文正文。
-
-部分回合没有行动窗口（渲染回合，如开场或纯时间流逝）：回合 prompt 顶部会标注「渲染回合」，此时不要调用 act，直接声明新事实（可选）并输出散文正文。
+部分回合没有行动窗口（渲染回合，如开场或纯时间流逝）：回合 prompt 顶部会标注「渲染回合」，此时不要调用 act，直接输出散文正文。
 
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名；实体属性由当前游戏的法则网络定义，见下方提示。
 
@@ -332,7 +322,7 @@ ${stylisticLine}
 
 ${hint}
 描写硬约束：
-- 叙述只能引用状态中真实存在的实体和属性，禁止发明不存在的物体、人物、现象或后果。
+- 叙述只能跟随 act 返回的裁决结果（尝试、变更、法则事实、新见）与世界状态中的实体和属性，禁止发明不存在的物体、人物、现象或后果——后果由世界法则产生，不由你创造。
 - 一律使用实体的名称（name），不得写出实体 id、属性名、工具调用或决策过程。
 - 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则；被拒绝的尝试只写尝试本身，不写其后果。
 - 「即将发生」只写征兆（用「将」「就要」），不得写成已发生。`;
@@ -415,116 +405,21 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 	return lines;
 }
 
-/** 声明契约允许实体的 id↔name 词汇表：模型据它把世界腔叙述锚回可声明的 id；
- *  消逝实体用 despawn 变更自带的展示名。 */
-function declarableList(sim: Simulation, ctx: DeclCtx): string {
-	const vanished = new Map(ctx.changes.filter((c) => c.kind === "despawn").map((c) => [c.entity, c.name]));
-	const items = touchedIds(ctx).map((id) => {
-		const name = sim.world.entities.find((e) => e.id === id)?.name ?? vanished.get(id) ?? id;
-		return `${id}（${name}）`;
-	});
-	return items.length ? `[可声明实体]（声明 facts 时 entities 用这里的 id）：${items.join("、")}` : "";
-}
-
 /** act 工具结果：本回合世界回应的世界腔策展——散文的唯一事件源（叙述只能跟随这里的内容）。 */
-function buildResultView(sim: Simulation, ctx: DeclCtx, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[]): string {
+function buildResultView(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[]): string {
 	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed, elapsed);
-	const decl = declarableList(sim, ctx);
-	if (decl) lines.push("", decl);
 	return lines.join("\n");
 }
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
-function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, elapsed: StepResult[], instruction: string, pending: Change[]): string {
+function buildRenderPrompt(sim: Simulation, elapsed: StepResult[], instruction: string, pending: Change[]): string {
 	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], undefined, undefined, pending, [], elapsed)];
-	const decl = declarableList(sim, ctx);
-	if (decl) lines.push("", decl);
-	lines.push("", `${instruction} 新事实先用 declare 工具声明（可选），然后输出散文正文。`);
+	lines.push("", `${instruction} 直接输出散文正文。`);
 	return lines.join("\n");
 }
 
-/** 本回合声明校验的合法实体集（touched 推导）。原则：touched = 内核能为「本回合记录」背书的实体（世界亲证）：
- *   player（意志居所——体验者角色的缺省，叙述「你」的指称）+ 法则 facts 实体（utterance 世界之言除外——话语不授权状态断言；
- *   仅可见者——percept 是对世界状态的知觉，不可见即未被知觉：事实文本照常进结果视图供转述，实体不获断言授权）+ 本回合新可见实体
- *   + **授予动作的实体参数与 involved**（授予＝世界处理了这次交互，参数即被亲证）
- *   + **拒绝的结构化亲证**（Denial.subject/object，仅可见者）——被拒 ≠ 不亲证：规则在拒绝里结构化点名谁
- *   亲证不放宽可见性：不可见/不存在的亲证对象（facts 点名、action.invisible 的 subject、对隐藏实体的点名）被可见性过滤自然排除，消逝豁免在 declare.ts。
- *   谓词级假话不归本契约管。 */
-function involvedEntities(sim: Simulation, results: StepResult[], revealed: string[]): Set<string> {
-	const vis = sim.visible();
-	const involved = new Set<string>([sim.player]);
-	for (const r of results) {
-		for (const f of r.facts ?? []) {
-			if (f.kind === "utterance") continue; // 世界之言只许转述，不进声明契约 touched
-			for (const id of f.entities) if (vis.has(id)) involved.add(id); // 亲证不放宽可见性
-		}
-		// 被拒不等于不亲证：拒绝的结构化字段是规则/前提门对实体的亲证，与 facts 同权威，进 touched。
-		const denials = r.denial ? [r.denial] : [];
-		for (const d of denials) {
-			for (const id of [d.subject, d.object]) {
-				if (typeof id === "string" && vis.has(id)) involved.add(id);
-			}
-		}
-		if (!r.ok) continue;
-		for (const v of Object.values(r.action.params)) {
-			if (typeof v === "string" && vis.has(v)) involved.add(v);
-		}
-		for (const id of r.involved ?? []) involved.add(id);
-	}
-	for (const id of revealed) involved.add(id);
-	return involved;
-}
-
-/** 装配声明校验上下文（core/declare.ts 的 DeclCtx）：裁决 + 时间流逝之后的世界，按游戏视角收窄。 */
-function declCtxOf(sim: Simulation, results: StepResult[], revealed: string[]): DeclCtx {
-	const changes = results.flatMap((r) => r.changes);
-	return {
-		world: sim.world,
-		visible: sim.visible(),
-		involved: involvedEntities(sim, results, revealed),
-		changes: narratableChanges(sim.def, changes),
-		pending: sim.dryTick(1).flatMap((r) => r.changes),
-		vanished: new Set(changes.filter((c) => c.kind === "despawn").map((c) => c.entity)),
-	};
-}
-
-/** declare 工具：新事实的结构化声明通道——事实以结构化参数提交，逐条校验并即时反馈（模型回合内自我纠正），散文正文即纯文本。
- *  校验核心复用 core/declare.ts 的 touched 集推导；上下文由 act 工具执行时装配（裁决 + 时间流逝之后）。 */
-function buildDeclareTool(turn: TurnState) {
-	return defineTool({
-		name: "declare",
-		label: "声明事实",
-		description: "在描写前声明本回合的新事实（可选，可多次调用，以最后一次为准）。无新事实则无需调用。参数错误会返回逐条修正意见。",
-		parameters: Type.Object({
-			facts: Type.Array(
-				Type.Object({
-					entities: Type.Array(Type.String({ description: "涉及的实体 id（必须可见且本回合涉及）" })),
-					statement: Type.String({ description: "世界腔陈述" }),
-				}),
-				{ description: "新事实列表" },
-			),
-		}),
-		execute: async (_toolCallId, params: { facts?: unknown[] }) => {
-			if (!turn.decl) {
-				return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "世界尚未裁决本回合，需先调用 act 工具。" }) }], details: {} };
-			}
-			turn.textBuf.length = 0;
-			const facts: StructuredFact[] = [];
-			for (const raw of Array.isArray(params?.facts) ? params.facts : []) {
-				const f = (raw ?? {}) as Record<string, unknown>;
-				const entities = Array.isArray(f.entities) ? f.entities.map(String).filter(Boolean) : [];
-				const statement = typeof f.statement === "string" ? f.statement : String(f.statement ?? "");
-				facts.push({ entities, statement });
-			}
-			const errors = validateFactIds(facts, turn.decl);
-			turn.lastDecl = errors === null ? { ok: true } : { ok: false, error: errors.join("；") };
-			return { content: [{ type: "text", text: JSON.stringify(errors === null ? { ok: true } : { ok: false, errors }) }], details: {} };
-		},
-	});
-}
-
 /** act 工具：本回合唯一的动作提交口（one-shot 门闩）。
- *  execute 内完成：裁决（单一瓶颈 adjudicateRaw 口径）→ 回合时间流逝 → 装配声明契约上下文 → 世界腔策展作为工具结果返回。 */
+ *  execute 内完成：裁决（单一瓶颈 adjudicateRaw 口径）→ 回合时间流逝 → 世界腔策展作为工具结果返回。 */
 function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: TurnChannel) {
 	const actionSchema = Type.Union(
 		Object.entries(def.verbs).map(([name, v]) =>
@@ -581,11 +476,11 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			// 回合时间流逝（turnTicks）：动作裁决后、描写前推进——无论动作成败世界都继续走
 			const elapsed = (def.turnTicks ?? 0) > 0 ? sim.tick(def.turnTicks!) : [];
 			channel.onAdjudication?.({ results: hasActions ? results : undefined, refusal, elapsed });
-			// 装配声明契约上下文（裁决 + 时间流逝之后的世界），并以世界腔策展作为工具结果
+			// 以世界腔策展作为工具结果：散文的唯一事件源（叙述只能跟随这里的内容）
 			const revealed = [...sim.visible()].filter((id) => !turn.visibleBefore.has(id));
-			turn.decl = declCtxOf(sim, [...results, ...elapsed], revealed);
+			const pending = sim.dryTick(1).flatMap((r) => r.changes);
 			return {
-				content: [{ type: "text", text: buildResultView(sim, turn.decl, results, refusal, turn.intent, turn.decl.pending, revealed, elapsed) }],
+				content: [{ type: "text", text: buildResultView(sim, results, refusal, turn.intent, pending, revealed, elapsed) }],
 				details: {},
 			};
 		},

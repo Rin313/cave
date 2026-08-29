@@ -159,7 +159,7 @@ function usageLine(rows: UsageRow[]): string {
 }
 
 function warnValidations(vs: ValidationFailure[]): void {
-	for (const v of vs) console.log(`  ⚠ 校验失败 round${v.round}：${v.error}`);
+	for (const v of vs) console.log(`  ⚠ 叙述兜底 round${v.round}：${v.error}`);
 }
 
 function proposalLines(toolCalls: unknown[]): string[] {
@@ -421,7 +421,7 @@ interface ReportRow {
 	lastIn: number | null;
 }
 
-/** 汇总 runs/ 下各 run 的回合数、裁决分布、表达校验失败与 token 用量（对照实验的一眼视图）。 */
+/** 汇总 runs/ 下各 run 的回合数、裁决分布、叙述兜底次数与 token 用量（对照实验的一眼视图）。 */
 function collectReport(gameId: string | undefined): ReportRow[] {
 	const rows: ReportRow[] = [];
 	if (!existsSync(RUNS_ROOT)) return rows;
@@ -473,7 +473,7 @@ function printReport(rows: ReportRow[], gameId: string | undefined): void {
 		const cache = r.tin + r.cread ? `${Math.round((r.cread / (r.tin + r.cread)) * 100)}%` : "-";
 		const trend = r.firstIn != null ? `${k(r.firstIn)}→${k(r.lastIn ?? 0)}` : "-";
 		console.log(
-			`${r.dir.padEnd(30)} act=${r.acts} wait=${r.waits}  ${(kindsStr(r) || "-").padEnd(44)} 校验失败=${r.fails}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
+			`${r.dir.padEnd(30)} act=${r.acts} wait=${r.waits}  ${(kindsStr(r) || "-").padEnd(44)} 兜底=${r.fails}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
 		);
 	}
 	if (rows.length > 1) {
@@ -507,9 +507,9 @@ async function main() {
   loop report [--game <id>]
   loop reset --run <id> [--game <id>]
 
-缺省为紧凑人类可读输出（含提案/裁决/校验警告/token 用量与叙述）；--json 输出完整结构化结果。
+缺省为紧凑人类可读输出（含提案/裁决/叙述兜底警告/token 用量与叙述）；--json 输出完整结构化结果。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
-report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、表达校验失败数与 token 用量（入列首→末展示裁剪后的输入趋势）。
+report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、叙述兜底次数（散文为空/未调 act 的摘要回落）与 token 用量（入列首→末展示裁剪后的输入趋势）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间，如 WASTE_PROVIDER；必填，无默认模型）
 `);
