@@ -234,12 +234,11 @@ export interface VerbDef {
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
 	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
-	 *  核心在规则前跑共享前提检查：必须可持握（holdable 槽位）且在可达范围；不满足直接拒绝，不进入规则。
-	 *  probe 依此审计「规则授予但前提不满足」的潜在洞。 */
+	 *  核心在规则前跑共享前提检查：必须可持握（holdable 槽位）且在可达范围；不满足直接拒绝，不进入规则。*/
 	instrumentParams?: string[];
-	/** 参数的动态值域（动作空间第三轴：动词 × 实体 × 候选）。动态域进不了静态 schema，也不可进工具 schema
-	 *  （逐回合变化的工具块击穿字节级稳定前缀），故由 def 携带。当前消费者是 sim probe（逐参数收窄枚举域）；
-	 *  预期消费者：意图菜单（快捷方式的原料）、act 工具参数提示。 */
+	/** 参数的动态值域：动作空间的声明式模型——作者写下的枚举域近似，收窄探测/意图菜单的枚举面；
+	 *  裁决从不消费它（真实边界是规则的授予面），漂移于规则 = 探测盲区（欠枚举 → 假阴性缺口报告），作者义务。
+	 *  动态域进不了静态 schema，也不可进工具 schema（逐回合变化的工具块击穿字节级稳定前缀），故由 def 携带。 */
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为 fallback 兜底。 */
 	rules: Rule[];
@@ -425,8 +424,6 @@ export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
 	readonly log: StepResult[] = [];
-	/** 探测模式：跳过施动工具前提（instrumentParams）检查，仅 probeGrant 临时开启，审计「规则本身是否会在不可持握工具上授予」。 */
-	private probeSkipInstruments = false;
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
 	/** 骰子键碰撞追踪：仅 apply/tick 提交链开启；check 的只读重估不追踪——同一动作复现同值是公理 4，不是碰撞。 */
@@ -458,24 +455,11 @@ export class Simulation {
 		return new Set(this.world.entities.map((e) => e.id));
 	}
 
-	/** 只读裁决（不提交、不入日志）：法则探测的通道（probeGrant 唯一消费）。
+	/** 只读裁决（不提交、不入日志）：研究工具的审计通道。
 	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
 	check(action: Action): StepResult {
 		const r = this.adjudicateRaw(action);
 		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src };
-	}
-
-	/** 探测专用：跳过施动工具前提（instrumentParams）检查的只读裁决。
-	 *  用于审计「规则本身是否会在不可持握/不可达工具上授予」（作者漏声明前提时的潜在洞）。
-	 *  只读、不入日志；probe 使用，游戏逻辑不得调用。 */
-	probeGrant(action: Action): StepResult {
-		const prev = this.probeSkipInstruments;
-		this.probeSkipInstruments = true;
-		try {
-			return this.check(action);
-		} finally {
-			this.probeSkipInstruments = prev;
-		}
 	}
 
 	private adjudicateRaw(action: Action): RawResult {
@@ -489,7 +473,7 @@ export class Simulation {
 		}
 		// 施动工具前提先于可见性：工具够不够得着是关于「手」的问题，能点名工具（比通用不可见文案更具体）；
 		// 不存在的 id 由 instrument 跳过、交给可见性门兜住。
-		const inst = this.probeSkipInstruments ? null : this.instrumentViolation(action, verb);
+		const inst = this.instrumentViolation(action, verb);
 		if (inst) {
 			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
 		}

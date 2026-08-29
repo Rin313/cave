@@ -236,8 +236,14 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	/** 候选域缺省 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数收窄走 verbs.candidates，全局裁剪走 tools 层 per-game 配置。 */
 	const scope = new Set(probeScope(sim.world, def.playerId, sim.visible()));
 	const gaps: { verb: string; op: string; reason: string; law?: string }[] = [];
-	/** 规则会在不可持握工具上授予的潜在洞（作者漏声明 instrumentParams）。 */
+	/** 规则会在不可持握工具上授予的潜在洞：剥门复审仍授予 = 规则无纵深防御，正确性完全依赖 instrument 声明。 */
 	const latent: { verb: string; op: string; ruleGranted: string }[] = [];
+	/** def 手术：剥除全部施动工具前提声明（instrumentParams）重建无门模拟——latent 审计不需要 core 配合。
+	 *  门即声明的迭代，剥声明与跳门语义逐点等价；其余 def（rules/schema/messages/不变式）原样保留。 */
+	const stripped: GameDef = {
+		...def,
+		verbs: Object.fromEntries(Object.entries(def.verbs).map(([n, v]) => [n, { ...v, instrumentParams: undefined }])),
+	};
 	const seen = new Set<string>();
 	let truncated = false;
 
@@ -248,7 +254,8 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
 		}
 		if (!r.ok && r.denial?.law?.startsWith("instrument.")) {
-			const rb = fresh.probeGrant(action);
+			// fresh.world 未被变更（门拒绝发生在提交前），可直接作为手术模拟的世界
+			const rb = new Simulation(stripped, fresh.world).check(action);
 			if (rb.ok) {
 				latent.push({ verb: action.verb, op: describeAction(action, def), ruleGranted: rb.reason });
 			}
