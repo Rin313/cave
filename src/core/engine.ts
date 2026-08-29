@@ -309,7 +309,7 @@ function buildSystemPrompt(def: GameDef): string {
 		.join("\n");
 	const stylistic = stylisticPropsOf(def);
 	const stylisticLine = stylistic.size
-		? `\n可润饰属性：${[...stylistic].map((p) => `${p}（${propLabelOf(def, p) ?? p}）`).join("、")}——描述这些属性时允许合理的文学润饰（如「刻痕斑驳」）。`
+		? `\n可润饰属性：${[...stylistic].map((p) => `${p}（${propLabelOf(def, p) ?? p}）`).join("、")}——描述这些属性时允许合理的文学润饰。`
 		: "";
 	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions 与结构化 refusal（仅 label：unparsed，不写理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
 

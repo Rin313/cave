@@ -87,14 +87,14 @@ export interface PropDef {
 	label?: string;
 	/** 内部属性：不进 LLM 序列化、不进变更线性化（从源头杜绝泄漏）。 */
 	internal?: boolean;
-	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性，如「刻痕斑驳」）。
+	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性）。
 	 *  非润饰的物理属性须与状态严格一致 */
 	stylistic?: boolean;
 }
 
 /** 结构化拒绝：非散文，散文由引擎按法则模板渲染。协议性标记由 StepResult.deniedBy:"protocol" 承担（单一事实源），Denial 只携带 referent 与诊断。 */
 export interface Denial {
-	/** 法则标识，如 "move.reach"（审计与探测依据）。 */
+	/** 法则标识 */
 	law: string;
 	/** 施动实体 id（结构化亲证：进结果视图「涉及」行与审计）。 */
 	subject?: string;
@@ -277,7 +277,7 @@ export interface GameDef {
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, player: string) => string[];
 	/** 可达性槽位（游戏声明）：实体是否够得着。core 不内嵌任何空间模型——容器包含树等由游戏自选
-	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / 规则的施动前提卫语句（Q.canReach）共用此谓词。 */
+	 *  构件提供，缺省全部可达。P.reach / 规则的施动前提卫语句（Q.canReach）共用此谓词。 */
 	reach?: (world: World, player: string, id: string) => boolean;
 	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
 	reachReason?: (world: World, player: string, id: string) => string | null;
@@ -338,7 +338,7 @@ export function integrityInvariant(): Invariant {
 					const v = e.props[p];
 					if (v === null || v === undefined || pd.type === "any") continue;
 					if (pd.type === "id") {
-						// id 型属性契约：标量引用或引用数组（如背包）；空串视为无引用，与标量规则一致；非字符串即违约
+						// id 型属性契约：标量引用或引用数组；空串视为无引用，与标量规则一致；非字符串即违约
 						for (const ref of Array.isArray(v) ? v : [v]) {
 							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
 							if (ref !== "" && !ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
@@ -502,7 +502,7 @@ export class Simulation {
 		if (!this.validators.get(action.verb)!.Check(action.params)) {
 			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.schema", debug: this.schemaErrors(action.verb, action.params) }, ticks: 0 };
 		}
-		// 可见性按当前状态逐动作计算：同一提案内的多动作（如先 travel 再移动实体）不沿用旧快照。
+		// 可见性按当前状态逐动作计算：同一提案内的多动作不沿用旧快照。
 		const curVis = this.visible();
 		const invalid = (verb.entityParams ?? [])
 			.map((p) => action.params[p])
