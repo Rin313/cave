@@ -311,7 +311,7 @@ function buildSystemPrompt(def: GameDef): string {
 	const stylisticLine = stylistic.size
 		? `\n可润饰属性：${[...stylistic].map((p) => `${p}（${propLabelOf(def, p) ?? p}）`).join("、")}——描述这些属性时允许合理的文学润饰（如「刻痕斑驳」）。`
 		: "";
-	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）：能解析 → 提交 actions 列表（{ verb, params }）；无法解析、实体不存在或语境荒谬 → 提交空 actions 与结构化 refusal（仅 label，不写理由）。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
+	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions 与结构化 refusal（仅 label：unparsed，不写理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
 
 部分回合没有行动窗口（渲染回合，如开场或纯时间流逝）：回合 prompt 顶部会标注「渲染回合」，此时不要调用 act，直接输出散文正文。
 
@@ -436,17 +436,17 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能解析操作 → 提交 actions；无法解析 → 提交空 actions 与 refusal（仅 label）。本回合只能调用一次；实体参数必须取自已可见实体的 id；世界法则会按顺序裁决每个动作并返回结果。`,
+		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能构造出合法动作（动词承载意图、实体参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 提交空 actions 与 refusal（仅 label：unparsed）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
-				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；无法解析时应省略" }),
+				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时应省略" }),
 			),
 			refusal: Type.Optional(
 				Type.Object(
 					{
-						label: Type.String({ description: "拒绝标签，如 unparsed / absurd" }),
+						label: Type.String({ description: "固定填 unparsed" }),
 					},
-					{ description: "无法解析或语境荒谬时的结构化拒绝；理由由世界法则给出，模型不撰写" },
+					{ description: "构造不出合法提案时的结构化拒绝；理由由世界法则给出，模型不撰写" },
 				),
 			),
 		}),
