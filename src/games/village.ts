@@ -130,7 +130,7 @@ export const village: GameDef = {
 					judge: (q, p) => {
 						if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
 						const t = q.entity(p.entity);
-						if (t?.props.grabbable !== true) return deny("gather.grabbable", { subject: p.entity, reason: `${q.name(p.entity)}搬不动。` });
+						if (!t || !q.holdable(p.entity)) return deny("gather.grabbable", { subject: p.entity, reason: `${q.name(p.entity)}搬不动。` });
 						if (t.props.in === q.player) return null;
 						return grant([D.set(p.entity, "in", q.player)], `你拾起了${q.name(p.entity)}。`);
 					},

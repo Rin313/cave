@@ -61,10 +61,6 @@ export interface Messages {
 	noResponse: string;
 	/** 实体参数不可见/不存在（core 校验层拒绝）：收已存在实体的解析名；全为幻觉 id 时为空列表。 */
 	invisibleEntity?: (names: string[]) => string;
-	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具不可持握时渲染（name 为工具实体名）。 */
-	instrumentUnholdable?: (name: string) => string;
-	/** 施动工具前提拒绝（core 产出，游戏注入语言）：工具可达性不满足时渲染（name 为工具实体名）。 */
-	instrumentUnreachable?: (name: string) => string;
 	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
 	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
@@ -120,7 +116,7 @@ export const TICK_VERB = "tick";
 
 // ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
 
-/** 规则判定上下文：只读世界视图 + 引擎隐式语义的唯一入口（可达性/关系/骰子/时间）。
+/** 规则判定上下文：只读世界视图 + 引擎隐式语义的唯一入口（可达性/可持握/关系/骰子/时间）。
  *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
 export interface Q {
 	readonly world: World;
@@ -141,6 +137,8 @@ export interface Q {
 	roll(key: string, sides: number): number;
 	canReach(id: string): boolean;
 	reachWhy(id: string): string | null;
+	/** 可持握（GameDef.holdable 槽位的现值；未声明即恒 false——遗漏在规则层变响）。 */
+	holdable(id: string): boolean;
 	visible(): Set<string>;
 }
 
@@ -206,7 +204,6 @@ export function defineVerb<S extends TObject>(spec: {
 	schema: S;
 	cost?: number;
 	entityParams?: string[];
-	instrumentParams?: string[];
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
@@ -217,7 +214,6 @@ export function defineVerb<S extends TObject>(spec: {
 		// 工具边界与裁决瓶颈同一严格度：多余参数在工具层被拒，而非到 sim 才成协议性拒绝（反馈只剩 noResponse）
 		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
-		instrumentParams: spec.instrumentParams,
 		candidates: spec.candidates,
 		// 包装为单参 judge（引擎口径）保留类型化二参 DX；原始 judge 源码挂在 wrapper.source 供静态扫描——
 		// String(wrapper) 看不见闭包体内的属性键读取，丢失原始源码会使词汇闭包检查对规则体整体失明。
@@ -251,9 +247,6 @@ export interface VerbDef {
 	cost?: number;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
-	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
-	 *  核心在规则前跑共享前提检查：必须可持握（holdable 槽位）且在可达范围；不满足直接拒绝，不进入规则。*/
-	instrumentParams?: string[];
 	/** 参数的动态值域：动作空间的声明式模型——作者写下的枚举域近似，收窄探测/意图菜单的枚举面；
 	 *  裁决从不消费它（真实边界是规则的授予面），漂移于规则 = 探测盲区（欠枚举 → 假阴性缺口报告），作者义务。
 	 *  动态域进不了静态 schema，也不可进工具 schema（逐回合变化的工具块击穿字节级稳定前缀），故由 def 携带。 */
@@ -284,13 +277,13 @@ export interface GameDef {
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
 	grounding?: (world: World, player: string) => string[];
 	/** 可达性槽位（游戏声明）：实体是否够得着。core 不内嵌任何空间模型——容器包含树等由游戏自选
-	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / 施动工具前提共用此谓词。 */
+	 *  构件提供（如 src/games/space.ts），缺省全部可达。P.reach / 规则的施动前提卫语句（Q.canReach）共用此谓词。 */
 	reach?: (world: World, player: string, id: string) => boolean;
 	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
 	reachReason?: (world: World, player: string, id: string) => string | null;
-	/** 可持握槽位（游戏必须声明）：实体能否被拿起/当施动工具。core 不内嵌任何属性名、不提供缺省——
+	/** 可持握槽位：实体能否被拿起/当施动工具。core 不内嵌任何属性名、不提供缺省——
 	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
-	 *  wieldable（= holdable + reach）与施动工具前提共用。 */
+	 *  消费者是规则内的施动前提卫语句（经 Q.holdable，与 Q.canReach 同一模式）。 */
 	holdable?: (world: World, player: string, id: string) => boolean;
 	/** 序列化投影：决定状态以什么形态进回合 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
@@ -509,12 +502,6 @@ export class Simulation {
 		if (!this.validators.get(action.verb)!.Check(action.params)) {
 			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.schema", debug: this.schemaErrors(action.verb, action.params) }, ticks: 0 };
 		}
-		// 施动工具前提先于可见性：工具够不够得着是关于「手」的问题，能点名工具（比通用不可见文案更具体）；
-		// 不存在的 id 由 instrument 跳过、交给可见性门兜住。
-		const inst = this.instrumentViolation(action, verb);
-		if (inst) {
-			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst, ticks: cost };
-		}
 		// 可见性按当前状态逐动作计算：同一提案内的多动作（如先 travel 再移动实体）不沿用旧快照。
 		const curVis = this.visible();
 		const invalid = (verb.entityParams ?? [])
@@ -564,6 +551,7 @@ export class Simulation {
 			},
 			canReach: (id) => (this.def.reach ? this.def.reach(world, player, id) : true),
 			reachWhy: (id) => (this.def.reachReason ? this.def.reachReason(world, player, id) : null),
+			holdable: (id) => (this.def.holdable ? this.def.holdable(world, player, id) : false),
 			visible: () => this.visible(),
 		};
 	}
@@ -588,25 +576,6 @@ export class Simulation {
 	private schemaErrors(verbName: string, params: Record<string, PropValue>): string {
 		const errs = this.validators.get(verbName)!.Errors(params);
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
-	}
-
-	/** 施动工具前提检查：声明为 instrumentParams 的参数实体必须可持握（holdable 槽位）且可达。
-	 *  只产出结构化拒绝（law + subject + reason），世界腔文案由游戏经 messages 注入，core 不撰写理由。 */
-	private instrumentViolation(action: Action, verb: VerbDef): Denial | null {
-		const msgs = messagesFor(this.def);
-		for (const p of verb.instrumentParams ?? []) {
-			const id = action.params[p];
-			if (typeof id !== "string" || !id) continue;
-			if (!entity(this.world, id)) continue;
-			if (!this.wieldable(id)) {
-				const name = entity(this.world, id)?.name ?? id;
-				if (!this.holdable(id)) {
-					return { law: "instrument.unholdable", subject: id, reason: msgs.instrumentUnholdable?.(name) };
-				}
-				return { law: "instrument.unreachable", subject: id, reason: msgs.instrumentUnreachable?.(name) };
-			}
-		}
-		return null;
 	}
 
 	/** 提交 + 硬墙：先快照；提交内做执行校验（fidelity——裁决必须被完整执行），提交后做不变式校验（执行后的世界必须成立）；
@@ -675,19 +644,6 @@ export class Simulation {
 
 		this.log.push(sr);
 		return sr;
-	}
-
-	/** 实体是否可持握（游戏声明的 GameDef.holdable 槽位，core 不内嵌任何属性名）。
-	 *  未声明的游戏一律不可持握（无缺省属性假设）。 */
-	holdable(id: string): boolean {
-		return this.def.holdable ? this.def.holdable(this.world, this.player, id) : false;
-	}
-
-	/** 实体是否可作为施动工具（可持握 + 可达）：施动工具前提门（instrumentViolation）的共享谓词。
-	 *  可持握走 holdable 槽位，可达性走 GameDef.reach 槽位（core 不内嵌空间模型）。 */
-	wieldable(id: string): boolean {
-		if (!this.holdable(id)) return false;
-		return this.def.reach ? this.def.reach(this.world, this.player, id) : true;
 	}
 
 	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）；tick 伪动词无游戏词可连，走 Messages.timePassed。 */
