@@ -5,7 +5,7 @@ import { Engine, fmtChange, type ActOutcome } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
 import type { GameDef, StepResult, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
-import { flagBool, flagStr, out, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
+import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
 	game: string;
@@ -125,11 +125,7 @@ async function renderScene(engine: Engine, instruction: string, elapsed: StepRes
 	return { text: texts.join(""), validations, usages };
 }
 
-interface CmdOpts {
-	json: boolean;
-}
-
-// ---------- 紧凑人类输出（缺省模式）：研究流程直接可读，不必解析 JSON ----------
+// ---------- 人类输出：研究流程直接可读；结构化数据已落盘（transcript.jsonl / state.json / meta.json）----------
 
 const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
@@ -204,7 +200,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 	}
 }
 
-async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<void> {
+async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
 	mkdirSync(dir, { recursive: true });
@@ -224,21 +220,17 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: 1, phase: "start", scene, validations, usage: usages });
-		if (opts.json) {
-			out({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, usage: usages, world: sim.snapshot() });
-		} else {
-			console.log(`【${runId}·start】${def.title}`);
-			console.log(scene);
-			warnValidations(validations);
-			const u = usageLine(usages);
-			if (u) console.log(u);
-		}
+		console.log(`【${runId}·start】${def.title}`);
+		console.log(scene);
+		warnValidations(validations);
+		const u = usageLine(usages);
+		if (u) console.log(u);
 	} finally {
 		engine.dispose();
 	}
 }
 
-async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined, opts: CmdOpts): Promise<void> {
+async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
 		const outcome = await engine.act({ intent, selection });
@@ -263,27 +255,16 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			validations,
 			usage: usages,
 		});
-		if (opts.json) {
-			out({
-				run: runId, game: meta.game, turn: meta.turn, phase: "act",
-				intent, selection: selection ?? null, toolCalls,
-				kind: outcome.kind, refusal: outcome.refusal ?? null,
-				results: outcome.results, elapsed: outcome.elapsed, narration, validations, usage: usages,
-				world: sim.snapshot(),
-			});
-		} else {
-			printAct(sim, { turn: meta.turn, intent, selection, outcome, toolCalls, validations, usages, narration });
-		}
+		printAct(sim, { turn: meta.turn, intent, selection, outcome, toolCalls, validations, usages, narration });
 	});
 }
 
 /** 顺序执行意图文件（一行一意图；#注释/@wait N）；同一引擎会话内连跑，A/B 意图集用。 */
-async function cmdBatch(runId: string, file: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
+async function cmdBatch(runId: string, file: string, gameId: string | undefined): Promise<void> {
 	const lines = readFileSync(file, "utf8").split(/\r?\n/)
 		.map((l) => l.trim())
 		.filter((l) => l !== "" && !l.startsWith("#"));
 	if (!lines.length) throw new Error(`意图文件 ${file} 为空`);
-	const steps: unknown[] = [];
 	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		for (const line of lines) {
 			if (line.startsWith("@wait")) {
@@ -292,7 +273,6 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined,
 				meta.turn += 1;
 				appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, usage: [] });
 				console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
-				steps.push({ turn: meta.turn, phase: "wait", ticks: n, events: results });
 			} else {
 				const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
 				const outcome = await engine.act({ intent: line });
@@ -306,35 +286,29 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined,
 				};
 				appendTranscript(dir, entry);
 				printAct(sim, { turn: meta.turn, intent: line, outcome, toolCalls, validations, usages, narration, brief: true });
-				steps.push(entry);
 			}
 			meta.sessionFile = engine.sessionFile;
 			saveMeta(dir, meta);
 			saveState(dir, sim);
 		}
 	});
-	if (opts.json) out({ run: runId, game: gameId, steps });
 }
 
-async function cmdRender(runId: string, instruction: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
+async function cmdRender(runId: string, instruction: string, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, engine }) => {
 		const { text: scene, validations, usages } = await renderScene(engine, instruction);
 		meta.turn += 1;
 		saveMeta(dir, meta);
 		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations, usage: usages });
-		if (opts.json) {
-			out({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations, usage: usages });
-		} else {
-			console.log(`\n【#${meta.turn} render】${instruction}`);
-			console.log(scene);
-			warnValidations(validations);
-			const u = usageLine(usages);
-			if (u) console.log(u);
-		}
+		console.log(`\n【#${meta.turn} render】${instruction}`);
+		console.log(scene);
+		warnValidations(validations);
+		const u = usageLine(usages);
+		if (u) console.log(u);
 	});
 }
 
-async function cmdWait(runId: string, n: number, gameId: string | undefined, opts: CmdOpts): Promise<void> {
+async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		const results = sim.tick(n);
 		const { text: scene, validations, usages } = await renderScene(
@@ -347,30 +321,22 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages });
-		if (opts.json) {
-			out({ run: runId, game: meta.game, turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages, world: sim.snapshot() });
-		} else {
-			console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
-			console.log(scene);
-			warnValidations(validations);
-			const u = usageLine(usages);
-			if (u) console.log(u);
-		}
+		console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+		console.log(scene);
+		warnValidations(validations);
+		const u = usageLine(usages);
+		if (u) console.log(u);
 	});
 }
 
-async function cmdState(runId: string, gameId: string | undefined, opts: CmdOpts): Promise<void> {
+async function cmdState(runId: string, gameId: string | undefined): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
 	const meta = loadMeta(dir);
 	const def = getGame(meta.game);
 	const sim = new Simulation(def, loadState(dir));
-	if (opts.json) {
-		out({ run: runId, game: meta.game, turn: meta.turn, sessionFile: meta.sessionFile, serialize: sim.serialize(), world: sim.snapshot() });
-	} else {
-		console.log(`【${runId}】${meta.game} 第${meta.turn}回合`);
-		console.log(JSON.stringify(JSON.parse(sim.serialize()), null, 1));
-	}
+	console.log(`【${runId}】${meta.game} 第${meta.turn}回合`);
+	console.log(JSON.stringify(JSON.parse(sim.serialize()), null, 1));
 }
 
 async function cmdReset(runId: string, game?: string): Promise<void> {
@@ -393,7 +359,6 @@ interface ReportRow {
 	tin: number;
 	tout: number;
 	cread: number;
-	calls: number;
 	firstIn: number | null;
 	lastIn: number | null;
 }
@@ -408,7 +373,7 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 		for (const id of readdirSync(gdir).sort()) {
 			const tp = transcriptPath(join(gdir, id));
 			if (!existsSync(tp)) continue;
-			const row: ReportRow = { dir: `${g}/${id}`, game: g, acts: 0, waits: 0, kinds: {}, fails: 0, tin: 0, tout: 0, cread: 0, calls: 0, firstIn: null, lastIn: null };
+			const row: ReportRow = { dir: `${g}/${id}`, game: g, acts: 0, waits: 0, kinds: {}, fails: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
 			for (const l of readFileSync(tp, "utf8").split(/\r?\n/)) {
 				if (!l.trim()) continue;
 				let e: { phase?: string; kind?: string; validations?: unknown[]; usage?: UsageRow[] };
@@ -422,7 +387,6 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 				if (e.phase === "act" && e.kind) row.kinds[e.kind] = (row.kinds[e.kind] ?? 0) + 1;
 				row.fails += Array.isArray(e.validations) ? e.validations.length : 0;
 				for (const u of Array.isArray(e.usage) ? e.usage : []) {
-					row.calls++;
 					row.tin += u.input;
 					row.tout += u.output;
 					row.cread += u.cacheRead;
@@ -458,7 +422,7 @@ function printReport(rows: ReportRow[], gameId: string | undefined): void {
 		const kinds: Record<string, number> = {};
 		for (const r of rows) for (const [kd, v] of Object.entries(r.kinds)) kinds[kd] = (kinds[kd] ?? 0) + v;
 		console.log(
-			`${"TOTAL".padEnd(30)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  ${kindsStr({ dir: "", game: "", acts: 0, waits: 0, kinds, fails: 0, tin: 0, tout: 0, cread: 0, calls: 0, firstIn: null, lastIn: null }).padEnd(44)} 校验失败=${sum((r) => r.fails)}  出 ${k(sum((r) => r.tout))}`,
+			`${"TOTAL".padEnd(30)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  ${kindsStr({ dir: "", game: "", acts: 0, waits: 0, kinds, fails: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null }).padEnd(44)} 校验失败=${sum((r) => r.fails)}  出 ${k(sum((r) => r.tout))}`,
 		);
 	}
 }
@@ -471,20 +435,19 @@ function joinIntent(positionals: string[]): string {
 async function main() {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
-	const opts: CmdOpts = { json: flagBool(a, "json") };
 
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  loop start --run <id> --game <id> [--json]
-  loop act <意图文本> --run <id> [--select <选中文本>] [--game <id>] [--json]
-  loop batch <intents.txt> --run <id> [--game <id>] [--json]
-  loop render --run <id> [--instruction <指令>] [--game <id>] [--json]
-  loop state --run <id> [--game <id>] [--json]
-  loop wait <n> --run <id> [--game <id>] [--json]
+  loop start --run <id> --game <id>
+  loop act <意图文本> --run <id> [--select <选中文本>] [--game <id>]
+  loop batch <intents.txt> --run <id> [--game <id>]
+  loop render --run <id> [--instruction <指令>] [--game <id>]
+  loop state --run <id> [--game <id>]
+  loop wait <n> --run <id> [--game <id>]
   loop report [--game <id>]
   loop reset --run <id> [--game <id>]
 
-缺省为紧凑人类可读输出（含提案/裁决/叙述兜底警告/token 用量与叙述）；--json 输出完整结构化结果。
+输出为紧凑人类可读视图（提案/裁决/叙述兜底警告/token 用量与叙述）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
 report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、叙述兜底次数（散文为空/未调 act 的摘要回落）与 token 用量（入列首→末展示裁剪后的输入趋势）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
@@ -500,30 +463,30 @@ report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、叙
 
 	switch (cmd) {
 		case "start":
-			await cmdStart(requireFlag(a, "game", "用 --game <id> 指定游戏"), runId, opts);
+			await cmdStart(requireFlag(a, "game", "用 --game <id> 指定游戏"), runId);
 			return;
 		case "act": {
 			const intent = flagStr(a, "intent") ?? joinIntent(positionals);
 			if (!intent) throw new Error("act 需要意图文本（位置参数或 --intent）");
-			await cmdAct(runId, intent, flagStr(a, "select"), gameId, opts);
+			await cmdAct(runId, intent, flagStr(a, "select"), gameId);
 			return;
 		}
 		case "batch": {
 			const file = positionals[0];
 			if (!file) throw new Error("batch 需要意图文件路径（位置参数）");
-			await cmdBatch(runId, file, gameId, opts);
+			await cmdBatch(runId, file, gameId);
 			return;
 		}
 		case "render":
-			await cmdRender(runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。", gameId, opts);
+			await cmdRender(runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。", gameId);
 			return;
 		case "wait": {
 			const n = Number(positionals[0] ?? flagStr(a, "n") ?? 1);
-			await cmdWait(runId, n, gameId, opts);
+			await cmdWait(runId, n, gameId);
 			return;
 		}
 		case "state":
-			await cmdState(runId, gameId, opts);
+			await cmdState(runId, gameId);
 			return;
 		case "report":
 			printReport(collectReport(gameId), gameId);

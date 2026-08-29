@@ -183,8 +183,7 @@ export function deny(law: string, o: { subject?: string; object?: string; prop?:
 
 /** 终局兜底规则：无条件拒绝并带 fallback 标记（probe 据此报告法则缺口）。 */
 export function fallback(id: string, text: (q: Q) => string): Rule {
-	// 同 defineVerb：包装 judge 挂原始文案闭包源码，兜底文案里的属性键读取对 lint 可见
-	return { id, judge: Object.assign((q: Q) => deny(id, { reason: text(q), fallback: true }), { source: String(text) }) };
+	return { id, judge: (q: Q) => deny(id, { reason: text(q), fallback: true }) };
 }
 
 /** Delta 构造糖。 */
@@ -215,9 +214,7 @@ export function defineVerb<S extends TObject>(spec: {
 		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
 		candidates: spec.candidates,
-		// 包装为单参 judge（引擎口径）保留类型化二参 DX；原始 judge 源码挂在 wrapper.source 供静态扫描——
-		// String(wrapper) 看不见闭包体内的属性键读取，丢失原始源码会使词汇闭包检查对规则体整体失明。
-		rules: spec.rules.map((r) => ({ id: r.id, judge: Object.assign((q: Q) => r.judge(q, q.params as Static<S>), { source: String(r.judge) }) })),
+		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
 }
 
@@ -443,7 +440,7 @@ export function serialize(world: World, visible: Iterable<string>, internalProps
 	return JSON.stringify({ time: world.time, relations: rels, entities: items });
 }
 
-/** 裁决结果 + 未提交的 deltas（apply 用）；check 丢弃 deltas 作为只读裁决。 */
+/** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）。 */
 interface RawResult extends StepResult {
 	deltas: Delta[];
 }
@@ -454,8 +451,7 @@ export class Simulation {
 	readonly log: StepResult[] = [];
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
-	/** 骰子键碰撞追踪：仅 apply/tick 提交链开启；check 的只读重估不追踪——同一动作复现同值是随机推论的必然，不是碰撞。 */
-	private tracingRolls = false;
+	/** 骰子键碰撞追踪：同一动作复现同值是随机推论的必然，同刻键重复才是隐性相关 bug。 */
 	private rollEpoch = -1;
 	private readonly rollKeys = new Set<string>();
 	/** 动词参数严格校验器（additionalProperties:false），构造期从动词 schema 编译——所有入口（act 工具/场景/CLI/probe）共用同一裁决瓶颈。 */
@@ -481,15 +477,6 @@ export class Simulation {
 	visible(): Set<string> {
 		if (this.def.grounding) return new Set(this.def.grounding(this.world, this.player));
 		return new Set(this.world.entities.map((e) => e.id));
-	}
-
-	/** 只读裁决（不提交、不入日志）：研究工具的审计通道。
-	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。
-	 *  check 报告裁决口径（规则是否表态），不报告执行口径——执行校验在提交侧；
-	 *  check 通过而 apply 被 invariant 拒绝即规则/系统 bug 的信号。 */
-	check(action: Action): StepResult {
-		const r = this.adjudicateRaw(action);
-		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src, ticks: r.ticks };
 	}
 
 	private adjudicateRaw(action: Action): RawResult {
@@ -558,7 +545,6 @@ export class Simulation {
 
 	/** 同一时刻内骰子键应唯一：重复即两个不同判定共享同一随机值（隐性相关 bug）。 */
 	private traceRollKey(key: string): void {
-		if (!this.tracingRolls) return;
 		if (this.world.time !== this.rollEpoch) {
 			this.rollEpoch = this.world.time;
 			this.rollKeys.clear();
@@ -617,15 +603,6 @@ export class Simulation {
 	}
 
 	apply(action: Action): StepResult {
-		this.tracingRolls = true;
-		try {
-			return this.applyTraced(action);
-		} finally {
-			this.tracingRolls = false;
-		}
-	}
-
-	private applyTraced(action: Action): StepResult {
 		const r = this.adjudicateRaw(action);
 		let sr: StepResult;
 		if (r.ok) {
@@ -668,17 +645,12 @@ export class Simulation {
 	}
 
 	tick(n = 1): StepResult[] {
-		this.tracingRolls = true;
-		try {
-			const out: StepResult[] = [];
-			for (let i = 0; i < n; i++) {
-				this.world.time += 1;
-				out.push(...this.runSystems());
-			}
-			return out;
-		} finally {
-			this.tracingRolls = false;
+		const out: StepResult[] = [];
+		for (let i = 0; i < n; i++) {
+			this.world.time += 1;
+			out.push(...this.runSystems());
 		}
+		return out;
 	}
 
 	/** 按注册顺序运行全部系统一次，产出并提交 deltas。 */

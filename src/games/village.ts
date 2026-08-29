@@ -18,7 +18,7 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	// 游戏词汇：身体需模拟的实体标记（供 systems 迭代），非 core 概念
 	actor: { type: "boolean", internal: true },
 	space: { type: "boolean", label: "场景" },
-	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册，词汇 lint 据此把关
+	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册
 	openable: { type: "boolean", label: "可开" },
 	open: { type: "boolean", label: "已开" },
 	grabbable: { type: "boolean", label: "可持握" },

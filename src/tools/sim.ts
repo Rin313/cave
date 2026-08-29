@@ -6,7 +6,7 @@ import { fmtChange } from "../core/engine.ts";
 import { getGame } from "../games/registry.ts";
 import { probeScope } from "../games/space.ts";
 import { coerceValue } from "../core/util.ts";
-import { flagBool, flagStr, out, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
+import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
 	verb: string;
@@ -302,21 +302,26 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
 	const { gaps, bugs, seen, truncated } = probeDef(def, maxCombos);
 	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型动作${truncated ? "，已按预算截断" : ""}）===`);
-	for (const verbName of Object.keys(def.verbs)) {
-		const vg = gaps.filter((g) => g.verb === verbName);
+	const byVerb = new Map<string, typeof gaps>();
+	for (const g of gaps) {
+		const list = byVerb.get(g.verb);
+		if (list) list.push(g);
+		else byVerb.set(g.verb, [g]);
+	}
+	for (const [verbName, vg] of byVerb) {
 		console.log(`「${verbName}」缺口: ${vg.length}`);
 		for (const g of vg) console.log(`  [GAP] ${g.op} → ${g.reason}`);
 	}
+	if (!gaps.length) console.log(`缺口: 0（${Object.keys(def.verbs).length} 个动词全部越过 denyAll 兜底）`);
 	console.log(`执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
 	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.debug}`);
 	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或经 verbs 的 candidates 收窄候选域。");
 	console.log(gaps.length === 0 && bugs.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
 }
 
-async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; world: boolean }): Promise<void> {
+async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
 	const def = getGame(gameId);
 	const sim = new Simulation(def);
-	const steps: { action: string; result: StepResult }[] = [];
 	for (const token of tokens) {
 		let results: StepResult[];
 		let actionDesc: string;
@@ -336,21 +341,12 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 			continue;
 		}
 		for (const r of results) {
-			steps.push({ action: actionDesc, result: r });
 			console.log(`\n>>> ${actionDesc}`);
 			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : ""}${!r.ok && r.deniedBy === "invariant" && r.denial?.debug && r.denial.reason == null ? ` ⚠ ${r.denial.debug}` : ""}`);
 			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
 		}
 	}
 
-	if (opts.json) {
-		out({
-			game: def.id,
-			steps: steps.map((s) => s.result),
-			world: opts.world ? sim.snapshot() : undefined,
-		});
-		return;
-	}
 	if (opts.world) {
 		console.log("\n=== 最终世界 ===");
 		console.log(sim.serialize());
@@ -359,95 +355,32 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 	for (const r of sim.log) console.log(`  ${JSON.stringify(r.action)} → ${r.reason}`);
 }
 
-// ---------- 词汇 lint（CRITIQUE C3-c）：静态扫描 GameDef 各闭包读取的属性键，对照 props 注册表 ----------
+// ---------- 词汇 lint：游戏源文件的属性键读取对照 props 注册表 ----------
 
-/** 收集 def 内全部函数闭包（路径 → 可见源码字符串）。 */
-function collectClosures(v: unknown, path: string, out: Map<string, string>, seen: WeakSet<object>): void {
-	if (typeof v === "function") {
-		out.set(path.replace(/^\./, ""), closureSource(v));
-		return;
-	}
-	if (v === null || typeof v !== "object" || seen.has(v)) return;
-	seen.add(v);
-	for (const [k, sub] of Object.entries(v as Record<string, unknown>)) collectClosures(sub, `${path}.${k}`, out, seen);
-}
-
-/** 函数闭包的可见源码：defineVerb/fallback 包装的 judge 在自身上挂了原始闭包源码（source），优先取用——
- *  String(wrapper) 看不见闭包体内的属性键读取，会使词汇闭包检查对规则体整体失明。 */
-function closureSource(v: unknown): string {
-	const src = (v as { source?: unknown }).source;
-	return typeof src === "string" ? src : String(v);
-}
-
-/** 提取源码中静态可见的属性键：`.props.x` 与 `.props["x"]`；动态索引（props[var]）无法静态发现，属盲区。 */
-function propKeysIn(src: string): Set<string> {
-	const keys = new Set<string>();
-	for (const m of src.matchAll(/\.props\s*\.\s*([A-Za-z_$][\w$]*)/g)) keys.add(m[1]!);
-	for (const m of src.matchAll(/\.props\s*\[\s*(["'`])([^"'`]+)\1\s*\]/g)) keys.add(m[2]!);
-	return keys;
-}
-
-/** 身份卡封闭键集：引擎固定的第二词表，恒可被规则键控、无需注册。 */
-const IDENTITY_KEYS = ["id", "name", "kind", "tags"] as const;
-
-/** 提取源码中静态可见的身份卡直读：`.id/.name/.kind/.tags`（排除方法调用位置；`.props.x` 由属性扫描单独处理）。
- *  返回 键 → 出现次数。 */
-function identityKeysIn(src: string): Map<string, number> {
-	const counts = new Map<string, number>();
-	const re = new RegExp(`\\.\\s*(${IDENTITY_KEYS.join("|")})\\b(?!\\s*\\()`, "g");
-	for (const m of src.matchAll(re)) counts.set(m[1]!, (counts.get(m[1]!) ?? 0) + 1);
-	return counts;
-}
-
+/** 扫描游戏源文件（src/games/<id>.ts）静态可见的属性键：`.props.x` 与 `.props["x"]`。
+ *  未注册键照常工作但失去 label/internal/stylistic 控制且不受类型契约约束——internal 泄漏与 label 回退由此提前暴露。
+ *  盲区（动态索引 props[var]、共享构件 space.ts 内的读取）属 review 面；构件契约键由使用方游戏注册。 */
 async function cmdLint(gameId: string): Promise<void> {
 	const def = getGame(gameId);
+	const file = join("src", "games", `${gameId}.ts`);
+	let src: string;
+	try {
+		src = readFileSync(file, "utf8");
+	} catch {
+		throw new Error(`找不到游戏源文件 ${file}（词汇 lint 按约定扫描 src/games/<id>.ts）`);
+	}
 	const declared = new Set(Object.keys(def.props ?? {}));
-	const closures = new Map<string, string>();
-	collectClosures(def, "", closures, new WeakSet());
-	const unknownSites = new Map<string, string[]>();
-	for (const [path, src] of closures) {
-		for (const key of propKeysIn(src)) {
-			if (!declared.has(key)) {
-				const sites = unknownSites.get(key);
-				if (sites) sites.push(path);
-				else unknownSites.set(key, [path]);
-			}
-		}
+	const unknown = new Map<string, number>();
+	for (const m of src.matchAll(/\.props\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*(["'`])([^"'`]+)\2\s*\])/g)) {
+		const key = m[1] ?? m[3]!;
+		if (!declared.has(key)) unknown.set(key, (unknown.get(key) ?? 0) + 1);
 	}
-	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${closures.size} 个闭包 ===`);
-	console.log("注：只扫 GameDef 对象图内可达的闭包；模块级 helper 与动态索引（props[var]）不在扫描面内。");
-	// 身份卡直读盘点：封闭词表，恒合法、无需注册——扫描面覆盖它只为词汇全景可见。
-	const identitySites = new Map<string, number>();
-	for (const [, src] of closures) {
-		for (const [key, n] of identityKeysIn(src)) identitySites.set(key, (identitySites.get(key) ?? 0) + n);
-	}
-	const identityLine = IDENTITY_KEYS.filter((k) => identitySites.has(k)).map((k) => `${k}（${identitySites.get(k)} 处）`).join("、");
-	console.log(identityLine ? `身份卡直读（封闭词表，无需注册）：${identityLine}` : "身份卡直读：无。");
-	// 承重墙审计：规则/系统闭包内出现等于当前世界实体 id 的字符串字面量。检测与政策分离——本段只报告；
-	// 法则网络形态命中即意外特判（须改为属性键控），authored 形态的逐实体书写命中属故意；
-	// 政策升级（声明/阻断）门控在「已报告的特判 bug 仍被提交」事件。
-	const worldIds = new Set(def.world.entities.map((e) => e.id));
-	const adjudication: [string, unknown][] = [];
-	for (const [vn, v] of Object.entries(def.verbs)) for (const r of v.rules) adjudication.push([`${vn}.${r.id}`, r.judge]);
-	for (const s of def.systems ?? []) adjudication.push([`sys:${s.id}`, s.run]);
-	const idLitSites = new Map<string, Set<string>>();
-	for (const [path, fn] of adjudication) {
-		const lits = new Set<string>();
-		for (const m of closureSource(fn).matchAll(/["'`]([^"'`\n]+)["'`]/g)) if (worldIds.has(m[1]!)) lits.add(m[1]!);
-		if (lits.size) idLitSites.set(path, lits);
-	}
-	const idLitCount = [...idLitSites.values()].reduce((a, s) => a + s.size, 0);
-	console.log(idLitCount
-		? `承重墙审计：${idLitCount} 个世界 id 字面量，分布于 ${idLitSites.size} 个规则/系统闭包——法则网络形态命中即意外特判（须改为属性键控），authored 形态命中属故意书写：`
-		: "承重墙审计：规则/系统闭包内无世界 id 字面量——法则网络纪律在静态面上成立。");
-	for (const [path, lits] of idLitSites) console.log(`  [ID] ${path} → ${[...lits].map((s) => `"${s}"`).join("、")}`);
-	if (!unknownSites.size) {
+	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${file} ===`);
+	if (!unknown.size) {
 		console.log("规则代码读取的全部属性键均已在 props 注册表声明。");
 		return;
 	}
-	for (const [key, sites] of [...unknownSites].sort()) {
-		console.log(`  ⚠ 未声明属性「${key}」读自：${sites.join("、")}`);
-	}
+	for (const [key, n] of [...unknown].sort()) console.log(`  ⚠ 未声明属性「${key}」（${n} 处）`);
 	console.log("未声明属性照常工作（视为普通可见属性），但失去 label/internal/stylistic 控制且不受注册表约束；建议登记进 GameDef.props。");
 }
 
@@ -458,11 +391,11 @@ async function main(): Promise<void> {
 		process.stdout.write(`用法:
   sim scenario <scenario.json>    运行单个法则引擎场景验证（场景文件内声明 game）
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
-  sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
+  sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
     研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；此处用 tick N 显式摇钟
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与执行校验 bug（--max 控制组合预算，默认 10000）
-  sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键；身份卡（id/name/kind/tags）直读为封闭词表，一并盘点；规则/系统闭包内的世界 id 字面量单独盘点（承重墙审计：法则网络形态命中即意外特判，authored 命中属故意书写）（advisory）
+  sim lint --game <id>    属性词汇 lint：扫描游戏源文件读取的属性键，报告未在 props 注册表声明的键（advisory）
 `);
 		return;
 	}
@@ -479,7 +412,7 @@ async function main(): Promise<void> {
 	}
 	if (cmd === "run") {
 		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
-		await cmdRun(positionals, gameId, { json: flagBool(a, "json"), world: flagBool(a, "world") });
+		await cmdRun(positionals, gameId, { world: flagBool(a, "world") });
 		return;
 	}
 	if (cmd === "probe") {

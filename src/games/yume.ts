@@ -21,7 +21,7 @@ const YUME_PROPS: Record<string, PropDef> = {
 	takable: { type: "boolean", label: "可拾取" },
 	vended: { type: "boolean", internal: true },
 	desc: { type: "string", label: "样子", stylistic: true },
-	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册，词汇 lint 据此把关
+	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册
 	openable: { type: "boolean", label: "可开" },
 	open: { type: "boolean", label: "已开" },
 };
