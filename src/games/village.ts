@@ -121,6 +121,7 @@ export const village: GameDef = {
 			label: "拾取",
 			description: "把可达的可持握物品拿到手中（如木料、掉在地上的米）。",
 			schema: Type.Object({ entity: Type.String({ description: "目标物品 id" }) }),
+			cost: 1,
 			entityParams: ["entity"],
 			candidates: (sim) => ({ entity: sim.world.entities.filter((e) => e.props.grabbable === true).map((e) => e.id) }),
 			rules: [
@@ -151,14 +152,27 @@ export const village: GameDef = {
 		}),
 		rest: defineVerb({
 			label: "歇息",
-			description: "休息：疲劳归零、体力 +8、饱腹 -5；昏迷时休息可醒来恢复。",
+			description: "休息片刻（一刻）：疲劳归零、体力 +8、饱腹 -5；昏迷时休息可昏睡一夜（四刻）醒来恢复。",
 			schema: Type.Object({}),
 			rules: [{
 				id: "rest.take",
 				judge: (q) => {
 					const a = q.entity(q.player)!;
-					if (a.props.down === true) return grant([D.set(q.player, "down", false), D.set(q.player, "fatigue", 0), D.set(q.player, "hp", 30), D.set(q.player, "satiety", 10)], "你昏昏沉沉睡了一夜，醒来后重新站起。");
-					return grant([D.set(q.player, "fatigue", 0), D.inc(q.player, "hp", 8), D.inc(q.player, "satiety", -5)], "你歇了歇，缓过劲来。");
+					if (a.props.down === true) return grant([D.set(q.player, "down", false), D.set(q.player, "fatigue", 0), D.set(q.player, "hp", 30), D.set(q.player, "satiety", 10)], "你昏昏沉沉睡了一夜，醒来后重新站起。", undefined, 4);
+					return grant([D.set(q.player, "fatigue", 0), D.inc(q.player, "hp", 8), D.inc(q.player, "satiety", -5)], "你歇了歇，缓过劲来。", undefined, 1);
+				},
+			}],
+		}),
+		wait: defineVerb({
+			label: "等待",
+			description: "原地待着让时间流逝：说等多久（span 为刻数，1–12，缺省一刻），世界就走过多少刻。",
+			schema: Type.Object({ span: Type.Optional(Type.Number({ description: "等待的刻数（1–12），缺省一刻" })) }),
+			rules: [{
+				id: "wait.pass",
+				// 时长经类型化参数由语言提案、由规则裁决（限制在 1–12）——「LLM 从不提案数值」的正面形态
+				judge: (q, p) => {
+					const span = Math.min(12, Math.max(1, Math.floor(Number(p.span ?? 1))));
+					return grant([], span >= 4 ? "你安静地待了好一阵子。" : "你静静地待了一会儿。", undefined, span);
 				},
 			}],
 		}),
@@ -247,6 +261,7 @@ export const village: GameDef = {
 			label: "汲水",
 			description: "从出水的水源（supply）打上一桶水；水源的存水有限。",
 			schema: Type.Object({ source: Type.String({ description: "水源实体 id" }) }),
+			cost: 1,
 			entityParams: ["source"],
 			candidates: (sim) => ({ source: sim.world.entities.filter((e) => e.props.supply === true).map((e) => e.id) }),
 			rules: [
@@ -278,6 +293,7 @@ export const village: GameDef = {
 			label: "采集",
 			description: "从成熟的浆果丛采下一颗浆果。",
 			schema: Type.Object({ bush: Type.String({ description: "浆果丛 id" }) }),
+			cost: 1,
 			entityParams: ["bush"],
 			candidates: (sim) => ({ bush: sim.world.entities.filter((e) => e.props.ripe === true).map((e) => e.id) }),
 			rules: [{
@@ -291,8 +307,9 @@ export const village: GameDef = {
 		}),
 		repair: defineVerb({
 			label: "修葺",
-			description: "对带阶段（phase）的损毁结构推进一步：清理 →（手持木料类东西）加固 → 封底完工领赏（bounty 由 patron 支付，出水 capacity 份）。",
+			description: "对带阶段（phase）的损毁结构推进一步：清理 →（手持木料类东西）加固 → 封底完工领赏（bounty 由 patron 支付，出水 capacity 份）。每步一段工时。",
 			schema: Type.Object({ structure: Type.String({ description: "损毁结构 id" }) }),
+			cost: 1,
 			entityParams: ["structure"],
 			candidates: (sim) => ({ structure: sim.world.entities.filter((e) => typeof e.props.phase === "number").map((e) => e.id) }),
 			rules: [
@@ -326,6 +343,7 @@ export const village: GameDef = {
 			label: "驱逐",
 			description: "在不太疲惫时赶走有攻击性的野兽，代价是被咬一口（骰子伤害，随时刻变化）。",
 			schema: Type.Object({ dog: Type.String({ description: "野兽 id" }) }),
+			cost: 1,
 			entityParams: ["dog"],
 			candidates: (sim) => ({ dog: sim.world.entities.filter((e) => e.props.aggressive === true).map((e) => e.id) }),
 			rules: [{
@@ -344,6 +362,7 @@ export const village: GameDef = {
 			label: "侦察",
 			description: "四处翻找脚下这片地方的犄角旮旯：骰子运气 >= 3 时捡到 2 枚铜币（散落的铜币有限，守恒）。",
 			schema: Type.Object({}),
+			cost: 1,
 			rules: [{
 				id: "scout.luck",
 				judge: (q) => {
@@ -357,8 +376,8 @@ export const village: GameDef = {
 			}],
 		}),
 	},
-	// 回合级时间驱动：每回合动作后推进一刻——疲劳/饥饿/夜袭/打烊/麦田等 per-tick 法则才能在游玩中成立
-	turnTicks: 1,
+	// 时间律：世界时间只经裁决边界流逝，刻数由裁决授予（VerbDef.cost / Verdict.ticks）——
+	// 多数劳作一刻，吃喝攀谈瞬时，昏睡一夜四刻
 	world: {
 		time: 0,
 		entities: [
@@ -467,11 +486,11 @@ export const village: GameDef = {
 	summarize: summarizeVillage,
 	digest: digestVillage,
 	hint: `世界法则（模拟层强制执行）：
-1. 每个时刻（tick）：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来。
-2. 入夜（时刻 % 4 == 3）：挂着「夜歇」的摊子歇业，买卖一律被拒；野狗有 1/4 概率偷袭（骰子判定，确定性）。
+1. 时间随行为流逝：拾取/采集/汲水/修葺/驱逐/翻找各耗一刻，吃喝、买卖、攀谈不耗时间，歇息片刻耗一刻，昏睡一夜耗四刻，等待可指定刻数。每过一刻：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来（睡一夜）。
+2. 入夜（时刻 % 4 == 3）：挂着「夜歇」的摊子歇业，买卖一律被拒；野狗有 1/4 概率偷袭（骰子判定，确定性）——睡梦里也不例外。
 3. 买卖各有其主：每样货品由它的卖家出卖——米从老店主处 10 铜币买入、5 铜币卖回；谷物向老农买，价随麦田存量浮动（存粮越少越贵）。卖家信任 >= 2 时一律减 2 铜币。
 4. 与村民交谈提升对方对你的信任（关系边），信任到顶（>= 5）后对方没了新鲜话。
-5. 浆果可采集（成熟时）可进食；吃浆果/谷物、饮水各有效果；麦田每 4 个时段补 1 单位谷物。
+5. 浆果可采集（成熟时）可进食；吃浆果/谷物、饮水各有效果；麦田每 4 刻补 1 单位谷物。
 6. 枯井按阶段修葺：清理 →（手持木料）加固 → 封底，不得跳步；封底后井里有约 10 桶清水，可汲水（draw）饮用（drink）恢复疲劳；完工赏金 10 铜币由老店主支付。
 7. 侦察掷骰子运气 >= 3 可在脚下这片地方捡到 2 枚铜币；散落的铜币有限。
 8. 铜币总量守恒（含村里散落的）；结构性属性（体力/钱币/位置等）只能由世界法则变更。`,

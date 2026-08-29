@@ -145,9 +145,10 @@ export interface Q {
 	visible(): Set<string>;
 }
 
-/** 裁决：授予（未提交 deltas + 世界腔理由 + facts）或结构化拒绝；规则返回 null = 不表态。 */
+/** 裁决：授予（未提交 deltas + 世界腔理由 + facts + 授予刻数）或结构化拒绝；规则返回 null = 不表态。
+ *  ticks 是时间律的规则面（DESIGN 公理三）：改写本动作的实际流逝（缺省回落动词时价）。 */
 export type Verdict =
-	| { ok: true; deltas: Delta[]; reason?: string; facts?: Fact[] }
+	| { ok: true; deltas: Delta[]; reason?: string; facts?: Fact[]; ticks?: number }
 	| { ok: false; denial: Denial };
 
 /** 动作规则：卫语句式总函数，拒绝/授予优先序即书写顺序。 */
@@ -162,8 +163,21 @@ export interface SystemRule {
 	run: (q: Q) => { deltas: Delta[]; facts?: Fact[]; reason?: string } | null;
 }
 
-export function grant(deltas: Delta[], reason?: string, facts?: Fact[]): Verdict {
-	return { ok: true, deltas, reason, facts };
+export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: number): Verdict {
+	return { ok: true, deltas, reason, facts, ticks };
+}
+
+/** 尝试时价（刻，非负整数，缺省 0）：无论裁决成败都消耗（协议性拒绝除外——映射层噪声不是尝试）。 */
+function attemptCost(verb: VerbDef | undefined): number {
+	const n = Math.floor(verb?.cost ?? 0);
+	return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** 授予刻数：规则改写优先（非负整数），否则回落尝试时价。 */
+function grantedTicks(ticks: number | undefined, cost: number): number {
+	if (ticks === undefined) return cost;
+	const n = Math.floor(ticks);
+	return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 export function deny(law: string, o: { subject?: string; object?: string; prop?: string; reason?: string; fallback?: boolean } = {}): Verdict {
@@ -191,6 +205,7 @@ export function defineVerb<S extends TObject>(spec: {
 	label: string;
 	description: string;
 	schema: S;
+	cost?: number;
 	entityParams?: string[];
 	instrumentParams?: string[];
 	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
@@ -199,6 +214,7 @@ export function defineVerb<S extends TObject>(spec: {
 	return {
 		label: spec.label,
 		description: spec.description,
+		cost: spec.cost,
 		// 工具边界与裁决瓶颈同一严格度：多余参数在工具层被拒，而非到 sim 才成协议性拒绝（反馈只剩 noResponse）
 		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
@@ -231,6 +247,9 @@ export interface VerbDef {
 	description: string;
 	/** TypeBox object schema，引擎据此生成 act 工具参数校验。 */
 	schema: TObject;
+	/** 尝试时价（刻，缺省 0）：无论裁决成败都消耗（协议性拒绝除外——映射层噪声不是尝试）。
+	 *  规则可在授予中以 ticks 改写实际流逝。 */
+	cost?: number;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
 	/** 施动工具参数：这些实体参数作为「工具」被挥动/使用（如 use 的 source）。
@@ -274,8 +293,6 @@ export interface GameDef {
 	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
 	 *  wieldable（= holdable + reach）与施动工具前提共用。 */
 	holdable?: (world: World, player: string, id: string) => boolean;
-	/** 回合级时间驱动：引擎在 act 一次性裁决后、描写前推进 n 刻并运行 systems（缺省 0 不流逝）。 */
-	turnTicks?: number;
 	/** 序列化投影：决定状态以什么形态进回合 prompt。缺省 = serialize() 全量 JSON。
 	 *  游戏可声明精简/结构化的 digest（如关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
 	digest?: (sim: Simulation) => string;
@@ -362,6 +379,9 @@ export interface StepResult {
 	reason: string;
 	changes: Change[];
 	action: Action;
+	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价，协议性拒绝为 0。
+	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；引擎据此逐刻推进 systems，研究工具显式摇钟。 */
+	ticks: number;
 	/** 否决来源：具体法则给了世界性理由（rule）、通用兜底（denyAll）、映射层形态错误的协议性拒绝（protocol，引擎↔模型通道流量，表达层整体过滤），
 	 *  或不变式硬墙的必要性拦截（invariant——规格违反信号或戏剧性必然，与法则否决是不同语义来源，审计应可区分）。 */
 	deniedBy?: "rule" | "denyAll" | "protocol" | "invariant";
@@ -459,23 +479,24 @@ export class Simulation {
 	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
 	check(action: Action): StepResult {
 		const r = this.adjudicateRaw(action);
-		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src };
+		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src, ticks: r.ticks };
 	}
 
 	private adjudicateRaw(action: Action): RawResult {
 		const msgs = messagesFor(this.def);
 		const verb = this.def.verbs[action.verb];
 		if (!verb) {
-			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.unknown", debug: `verb:${action.verb}` } };
+			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.unknown", debug: `verb:${action.verb}` }, ticks: 0 };
 		}
+		const cost = attemptCost(verb);
 		if (!this.validators.get(action.verb)!.Check(action.params)) {
-			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.schema", debug: this.schemaErrors(action.verb, action.params) } };
+			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.schema", debug: this.schemaErrors(action.verb, action.params) }, ticks: 0 };
 		}
 		// 施动工具前提先于可见性：工具够不够得着是关于「手」的问题，能点名工具（比通用不可见文案更具体）；
 		// 不存在的 id 由 instrument 跳过、交给可见性门兜住。
 		const inst = this.instrumentViolation(action, verb);
 		if (inst) {
-			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst };
+			return { ok: false, reason: renderDenial(this.def, inst), changes: [], deltas: [], action, deniedBy: "rule", denial: inst, ticks: cost };
 		}
 		// 可见性按当前状态逐动作计算：同一提案内的多动作（如先 travel 再移动实体）不沿用旧快照。
 		const curVis = this.visible();
@@ -488,18 +509,18 @@ export class Simulation {
 			const hit = entity(this.world, first);
 			const reason =
 				(hit ? (this.def.reachReason?.(this.world, this.player, first) ?? msgs.invisibleEntity?.([hit.name])) : msgs.invisibleEntity?.([])) ?? msgs.noResponse;
-			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", subject: first, reason, debug: invalid.join(",") } };
+			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", subject: first, reason, debug: invalid.join(",") }, ticks: cost };
 		}
 		const q = this.query(action.params);
 		for (const r of verb.rules) {
 			const v = r.judge(q);
 			if (!v) continue;
 			if (v.ok) {
-				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}` };
+				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}`, ticks: grantedTicks(v.ticks, cost) };
 			}
-			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: v.denial.fallback ? "denyAll" : "rule", denial: v.denial };
+			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: v.denial.fallback ? "denyAll" : "rule", denial: v.denial, ticks: cost };
 		}
-		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "denyAll" };
+		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "denyAll", ticks: cost };
 	}
 
 	/** 构造规则判定上下文：引擎隐式语义在此唯一收口。 */
@@ -617,13 +638,14 @@ export class Simulation {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(r.deltas, src);
 			if (!cc.ok) {
-				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial };
+				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
+				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 				this.log.push(sr);
 				return sr;
 			}
-			sr = { ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src };
+			sr = { ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
 		} else {
-			sr = { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial };
+			sr = { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
 
 		this.log.push(sr);
@@ -700,6 +722,7 @@ export class Simulation {
 					deniedBy: "invariant",
 					denial: cc.denial,
 					src,
+					ticks: 0,
 				});
 				continue;
 			}
@@ -711,6 +734,7 @@ export class Simulation {
 				facts: res.facts,
 				involved: collectInvolved(res.deltas, res.facts),
 				src,
+				ticks: 0,
 			});
 		}
 		return out;

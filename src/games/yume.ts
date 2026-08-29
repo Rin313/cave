@@ -85,17 +85,18 @@ const sleepVerb = defineVerb({
 		},
 		{
 			id: "sleep.wake",
-			judge: (q) => grant([D.set(q.player, "awake", true), D.set(q.player, "in", "room")], "你掐了一下自己。天花板、床垫、雪花屏的电视——你回到了房间里。"),
+			judge: (q) => grant([D.set(q.player, "awake", true), D.set(q.player, "in", "room")], "你掐了一下自己。天花板、床垫、雪花屏的电视——你回到了房间里。", undefined, 1),
 		},
 	],
 });
 
-/** 移动：沿路径在相邻地点间走。暗处需要光（灯效果）。
+/** 移动：沿路径在相邻地点间走（一刻）。暗处需要光（灯效果）。
  *  dest 不入 entityParams：地点永远可指名（内容被雾藏，地点本身不被），不可达由法则层给出世界性回答。 */
 const goVerb = defineVerb({
 	label: "移动",
-	description: "沿路前往相邻的地点（dest 是地点实体 id，见出口列表）。",
+	description: "沿路前往相邻的地点（dest 是地点实体 id，见出口列表）。走动推进梦的时刻。",
 	schema: Type.Object({ dest: Type.String({ description: "目的地实体 id" }) }),
+	cost: 1,
 	candidates: (sim) => {
 		const cur = sim.world.entities.find((e) => e.id === sim.player)?.props["in"] as string | null;
 		return { dest: (sim.world.relations ?? []).filter((r) => r.type === "path" && r.from === cur).map((r) => r.to) };
@@ -262,7 +263,7 @@ export const yume: GameDef = {
 		interact: interactVerb,
 		take: takeVerb,
 	},
-	turnTicks: 1,
+	// 时间律：梦的时刻只随走动（go 一刻）与醒来（sleep.wake 授一刻）推进；静止的梦命运冻结，低语伴随行走
 	world: {
 		time: 0,
 		entities: [
@@ -367,6 +368,6 @@ export const yume: GameDef = {
 2. 世界由路径连通；有的地方很暗，没有光进不去。
 3. interact 的结果由每个存在自身决定：同一个存在，你带着不同的东西时可能给出完全不同的回应；有些互动会让新的东西出现、让旧的东西永远消失。
 4. 「效果」（kind 为 effect 的存在）不会主动起作用——它们只是被你带着，而世界因此不同。
-5. 门厅里的独轮车人会把人送到别的世界。梦里的低语没有机制含义。
+5. 门厅里的独轮车人会把人送到别的世界。梦里的时刻随走动（go）推进，低语偶尔随之而来，没有机制含义。
 6. 不存在失败与死亡，也没有任务清单。看到什么，就去碰什么。`,
 };

@@ -30,7 +30,7 @@ const ACT_TOOL = "act";
 export interface ActOutcome {
 	kind: "applied" | "rejected" | "refused" | "partial";
 	results: StepResult[];
-	/** 本回合时间流逝产出（GameDef.turnTicks 驱动），独立于玩家动作裁决，不计入 kind。 */
+	/** 本回合时间流逝产出（各动作授予刻数的 systems 产出；时间律：无裁决即无流逝），不计入 kind。 */
 	elapsed: StepResult[];
 	refusal?: { label: string; reason?: string };
 }
@@ -218,7 +218,8 @@ export class Engine {
 
 		let narration: string;
 		if (!this.turn.acted) {
-			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）
+			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
+			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
 			this.outcome.refusal = { label: "unparsed" };
 			this.emit({ type: "validation", round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: this.turn.textBuf.join("").trim() });
 			narration = this.summarize([]);
@@ -358,7 +359,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 
 /** 回合事件的世界腔策展（act 工具结果与独立渲染共用）：
  *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、即将发生、新见。core 只做符号连接。
- *  时间流逝（turnTicks 的 systems 产出）不是玩家的尝试，是世界自己的因果——动作成败与否都照常发生；
+ *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
 function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[] = []): string[] {
 	const lines: string[] = [];
@@ -462,6 +463,7 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			const hasActions = !!params.actions?.length;
 			const refusal = hasActions ? undefined : params.refusal ? { label: params.refusal.label } : { label: "unparsed" };
 			const results: StepResult[] = [];
+			const elapsed: StepResult[] = [];
 			if (hasActions) {
 				for (const raw of params.actions!) {
 					const a = raw as { verb?: string; params?: Record<string, unknown> };
@@ -470,11 +472,13 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 						verb: a.verb ?? "",
 						params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
 					};
-					results.push(sim.apply(action));
+					const r = sim.apply(action);
+					results.push(r);
+					// 时间律：世界时间只经裁决边界流逝，刻数由裁决授予——按动作交织推进，
+					// 后续动作与 systems 都在后一世界态上裁决/运行（世界能在行为之间反应）。
+					if (r.ticks > 0) elapsed.push(...sim.tick(r.ticks));
 				}
 			}
-			// 回合时间流逝（turnTicks）：动作裁决后、描写前推进——无论动作成败世界都继续走
-			const elapsed = (def.turnTicks ?? 0) > 0 ? sim.tick(def.turnTicks!) : [];
 			channel.onAdjudication?.({ results: hasActions ? results : undefined, refusal, elapsed });
 			// 以世界腔策展作为工具结果：散文的唯一事件源（叙述只能跟随这里的内容）
 			const revealed = [...sim.visible()].filter((id) => !turn.visibleBefore.has(id));

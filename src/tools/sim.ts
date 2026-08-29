@@ -349,7 +349,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 		for (const r of results) {
 			steps.push({ action: actionDesc, result: r });
 			console.log(`\n>>> ${actionDesc}`);
-			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}`);
+			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : ""}`);
 			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
 		}
 	}
@@ -453,6 +453,7 @@ async function main(): Promise<void> {
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
+    研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；此处用 tick N 显式摇钟
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
   sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键；身份卡（id/name/kind/tags）直读为封闭词表，一并盘点（advisory）
 `);
