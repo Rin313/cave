@@ -36,7 +36,7 @@ export function sumProp(world: World, prop: string): number {
 	return total;
 }
 
-/** 引用清点原语（生长与收缩对称，DESIGN §3.4）：按注册表 type:"id" 枚举指向该实体的 (entity, prop)，
+/** 引用清点原语（生长与收缩对称）：按注册表 type:"id" 枚举指向该实体的 (entity, prop)，
  *  覆盖标量引用与引用数组（与 integrity 硬墙的管辖面一致——墙拦下的悬空，这里必须找得到）。
  *  语义无关的机械清点——despawn 前的悬空引用盘点（容器级 despawn 先迁散子女同理）；
  *  清理策略（置空/转移/级联生灭）是游戏语义，由规则决定；关系边由 despawn 自动级联，不在此列。 */

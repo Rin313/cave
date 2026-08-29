@@ -307,13 +307,13 @@ export interface InvariantCtx {
 	def: GameDef;
 	/** 创世快照：本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
 	genesis: World;
-	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）：过渡不变式据此审计 provenance（DESIGN §3.3）。
+	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）：过渡不变式据此审计 provenance。
 	 *  每条规则/系统的提交独立过墙，粒度即单次提交。 */
 	changes: Change[];
 }
 
 /** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。
- *  两种形态共用本接口（DESIGN §3.3）：状态不变式只读 world（守恒类，防总量漂移）；
+ *  两种形态共用本接口：状态不变式只读 world（守恒类，防总量漂移）；
  *  过渡不变式经 ctx.changes 读提交（provenance 类，防错误再分配）。 */
 export interface Invariant {
 	id: string;

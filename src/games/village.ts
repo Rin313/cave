@@ -469,8 +469,8 @@ export const village: GameDef = {
 		},
 		{
 			id: "coins.provenance",
-			// 过渡不变式（DESIGN §3.3）：守恒防总量漂移，本条防错误再分配——coins 的每次变更必须
-			// 来自合法经济规则的 src（C10 反例：把玩家的铜币改判给浆果丛，总量守恒而再分配非法）。
+			// 过渡不变式：守恒防总量漂移，本条防错误再分配——coins 的每次变更必须
+			// 来自合法经济规则的 src。
 			// 新增移动铜币的规则时须同步扩展此白名单——铜币流向由此显式化。
 			check: (_world, ctx) => {
 				const allowed = new Set(["rule:buy.goods", "rule:sell.goods", "rule:scout.luck", "rule:repair.step"]);
