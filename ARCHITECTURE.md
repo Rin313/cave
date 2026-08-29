@@ -5,7 +5,7 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 桌面壳 | **Electron** | |
-| LLM 编排 | **pi coding-agent SDK**（进程内） | `@earendil-works/pi-coding-agent`，非 RPC mode，进程内集成；已发布 npm 包，直接依赖 registry 版本；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/`（SDK API 见 `sdk.md`） |
+| LLM 编排 | **pi coding-agent SDK**（进程内） | `@earendil-works/pi-coding-agent`，非 RPC mode，进程内集成；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/` |
 | 持久化 | **SQLite** | 存档 + 回合审计，存什么见 §3 |
 
 ## 2. 核心架构主张
@@ -28,7 +28,7 @@
 
 7. **单 pass 回合而非双 pass 双 prompt** 每回合一次 `session.prompt()`：模型先调 `act`（一次性提交，one-shot 门闩封闭变异窗口），工具结果即本回合世界回应的世界腔策展（尝试行/时间流逝/法则事实/即将发生/新见/可声明实体，经 fmtChange 线性化、协议性拒绝过滤），模型基于它 `declare` 新事实并输出散文；叙述只能跟随工具结果。曾以双 pass（映射、表达各一次独立调用）承载同一职责，已移除——其四条结构性收益经实现核对均不成立：**「相位合约纯净」与实现不符**（两相位本就共享同一系统提示，相位区分靠 per-turn prompt，单 pass 下同样字节级稳定）；**「变异窗口封闭」在两设计里是同一个布尔**（one-shot 门闩，翻转点不同）；**「表达输入的策展权」由 act 工具结果承载**（工具结果是引擎撰写的文本，策展非但不需要独立 prompt，还免去表达 pass 的状态重注入——pruneContext 裁掉映射 run 后表达 pass 必须重喂全量 digest，单 pass 只注入一次）；**「拒绝路径形态」无差异**（refusal 本就是一次 act 调用）。成本对比：双 pass 每回合 ≥2 次串行调用、状态全量注入 3 份（映射 prompt / act 工具结果 / 表达 prompt）、校验失败尾部再起整轮 prompt；单 pass 1 次调用、状态注入 1 份 + 工具结果策展、回合内续行复用 [tools+system+user] 前缀（§2-6）。保留的权衡：表达上下文不再与映射推理隔离（act 参数在散文视野内），由声明契约与描写硬约束覆盖。
 
-## 2.5 GameDef 表面契约
+## 3. GameDef 表面契约
 
 - **`verbs`**：游戏声明的动词表，每个动词含 `schema`（TypeBox，生成 act 工具参数校验，并经 `defineVerb` 推导规则参数的编译期类型）、`entityParams`（哪些参数是实体 id，供可见性校验）、`candidates`（参数的动态值域——动作空间第三轴「动词 × 实体 × 候选」；动态域进不了静态 schema、也不可进工具 schema——逐回合变化的工具块击穿字节级稳定前缀——故由 def 携带）、`rules`（卫语句式规则函数，按序裁决首个表态即判决；末尾可挂 fallback 兜底规则）。动词集由各游戏声明：era/DoL 类可声明 `talk/travel/equip` 等，开放世界可声明 `attack/trade/craft` 等。
 - **环境响应（声明式动词）**：非预设的自由动作由游戏声明动词 + 法则承担——法则网络形态按属性键控一条规则覆盖全部可达实体；authored 形态则逐实体书写互动子句。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底。
@@ -54,7 +54,7 @@
 - **core 只提供通用工具，不耦合游戏**：状态化 rng 已移除——随机由 games 层以 World 状态自持（纯函数派生），`World` 即完整真相源，check/apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`roll`（确定性骰子，`hashStr(time#key)` 派生 [1,sides]，key 需同 tick 唯一——规则经 `Q.roll(key, sides)` 调用，check/apply/dryTick 天然一致）、`sumProp`（聚合助手，守恒不变式用）、`reach`/`reachReason`（可达性空槽，空间构件由游戏自选，如 `src/games/space.ts`）、`holdable`（可持握空槽，游戏必须声明，core 不提供缺省，可持握语义由游戏自定）、`integrityInvariant`（引用完整性硬墙）。引擎隐式语义经只读上下文 `Q` 具名入口收口（`q.time` 读时刻、`q.roll` 骰子等）。多时间尺度（回合/日/月）由游戏自持（`world.day` 等计数器，systems 内按 `q.time` 判定），core 不内置历法。
 - **games 层怎么写都行，且永不耦合进 core**：games 代码允许任意写法与重复样板（含按实体键控的特判、逐游戏重复的 digest/summarize/label 派生）——这是创作者的自由，不是待修的债；即便多个游戏收敛出相同形态，也不得「提升为 core 工具」——core 吸收游戏侧形态即开始耦合游戏、挤压其余游戏的写法空间。共享的游戏侧语义只走 games/ 内自愿接入的构件。
 
-## 3. 持久化边界
+## 4. 持久化边界
 
 模拟层状态是 JSON 可序列化的，SQLite 不存热状态，存存档与审计（**目标**；原型期由 `loop` 的 `runs/` 目录以 JSONL + `state.json` 落盘，SQLite 落地后迁移）：
 
@@ -64,7 +64,7 @@
 | `messages` | 回合历史：用户操作、映射结果、表达层输出（回放/审计） |
 | `sessions` | pi SDK 会话索引（SDK 自己写 JSONL，这里只存元数据 + 映射关系） |
 
-## 4. 研究与验证经验
+## 5. 研究与验证经验
 
 1. **端到端 `loop` 才是有效验证，`sim` 只验证确定性裁决。** `sim scenario` 断言"能授予/能拒绝 + 状态正确"，但真实质量（自由文本意图能否被映射到正确动词、表达层能否零幻觉叙述）只有 `loop` 能测，编译无错误和sim验证通过什么都说明不了。
 2. **LLM 有随机性，单次 e2e 结果带噪声。** 同一意图两次跑可能映射到不同动词，且同一会话内世界状态会级联（前一步点燃了柴 → 下一步"泼湿"被不变式回滚）。做机制对比要控制变量：**同世界、同开局、同意图集、每组独立开局**；跨回合级联导致的差异不要误判为机制差异。
