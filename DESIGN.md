@@ -174,7 +174,7 @@ const game: GameDef = {
 **非目标**（显式不做，让范围焦虑有去处）：
 
 - 多 actor 离屏自治（NPC 由 LLM 驱动的 RimWorld 式野心）。
-- 词表式语言约束（扫描器 / forbiddenTerms 类）：语言是 LLM 的原生能力，词表硬约束已移除。
+- 词表式语言约束（扫描器 / forbiddenTerms 类）：语言是 LLM 的原生能力。
 
 ## 附录：参考与灵感来源
 

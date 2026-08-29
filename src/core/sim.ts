@@ -84,8 +84,7 @@ export interface Fact {
 /** 属性类型。 */
 export type PropType = "string" | "number" | "boolean" | "id" | "any";
 
-/** 属性注册表条目：类型的声明、世界化标签、内部标记、可选值域。
- *  取代 GameDef 的 internalProps（internal 标记）与 propLabels（label）。 */
+/** 属性注册表条目：类型的声明、世界化标签、内部标记、可选值域。 */
 export interface PropDef {
 	type: PropType;
 	/** 世界化说法（拒绝/变更文本里的属性名）。 */
@@ -111,7 +110,7 @@ export interface Denial {
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
 	debug?: string;
-	/** 终局兜底标记：probe 据此报告法则缺口（取代 denyAll. 前缀字符串分类）。 */
+	/** 终局兜底标记：probe 据此报告法则缺口。 */
 	fallback?: boolean;
 }
 

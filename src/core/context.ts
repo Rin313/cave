@@ -4,7 +4,7 @@ import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 
 export type CtxMessages = ContextEvent["messages"];
 
-/** 单回合动作记录（世界腔，无 id）：映射层的指代/续接锚点，取代回流叙述。 */
+/** 单回合动作记录（世界腔，无 id）：映射层的指代/续接锚点。 */
 export interface MemoryTurn {
 	time: number;
 	intent: string;
