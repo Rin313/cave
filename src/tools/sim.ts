@@ -231,13 +231,16 @@ function describeAction(action: Action, def: GameDef): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; latent: { verb: string; op: string; ruleGranted: string }[]; seen: number; truncated: boolean } {
+function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; latent: { verb: string; op: string; ruleGranted: string }[]; bugs: { verb: string; op: string; debug: string }[]; seen: number; truncated: boolean } {
 	const sim = new Simulation(def);
 	/** 候选域缺省 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数收窄走 verbs.candidates，全局裁剪走 tools 层 per-game 配置。 */
 	const scope = new Set(probeScope(sim.world, def.playerId, sim.visible()));
 	const gaps: { verb: string; op: string; reason: string; law?: string }[] = [];
 	/** 规则会在不可持握工具上授予的潜在洞：剥门复审仍授予 = 规则无纵深防御，正确性完全依赖 instrument 声明。 */
 	const latent: { verb: string; op: string; ruleGranted: string }[] = [];
+	/** 核心级不变拒绝（deniedBy=invariant 且无世界腔理由——integrity/commit 执行校验）= 规则/系统 bug 信号；
+	 *  游戏不变式的拒绝带 message（世界的必要性拦截，玩法），不在此列。 */
+	const bugs: { verb: string; op: string; debug: string }[] = [];
 	/** def 手术：剥除全部施动工具前提声明（instrumentParams）重建无门模拟——latent 审计不需要 core 配合。
 	 *  门即声明的迭代，剥声明与跳门语义逐点等价；其余 def（rules/schema/messages/不变式）原样保留。 */
 	const stripped: GameDef = {
@@ -252,6 +255,9 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 		const r = fresh.apply(action);
 		if (!r.ok && r.deniedBy === "denyAll") {
 			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
+		}
+		if (!r.ok && r.deniedBy === "invariant" && r.denial && r.denial.reason == null) {
+			bugs.push({ verb: action.verb, op: describeAction(action, def), debug: r.denial.debug ?? r.denial.law });
 		}
 		if (!r.ok && r.denial?.law?.startsWith("instrument.")) {
 			// fresh.world 未被变更（门拒绝发生在提交前），可直接作为手术模拟的世界
@@ -304,23 +310,25 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 		generate(0, {});
 	}
 
-	return { gaps, latent, seen: seen.size, truncated };
+	return { gaps, latent, bugs, seen: seen.size, truncated };
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
-	const { gaps, latent, seen, truncated } = probeDef(def, maxCombos);
+	const { gaps, latent, bugs, seen, truncated } = probeDef(def, maxCombos);
 	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型动作${truncated ? "，已按预算截断" : ""}）===`);
 	for (const verbName of Object.keys(def.verbs)) {
 		const vg = gaps.filter((g) => g.verb === verbName);
 		console.log(`「${verbName}」缺口: ${vg.length}`);
 		for (const g of vg) console.log(`  [GAP] ${g.op} → ${g.reason}`);
 	}
+	console.log(`执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
+	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.debug}`);
 	console.log(`规则未自行检查施动工具（运行时被动词级 instrument 前提拦截）: ${latent.length}`);
 	for (const l of latent) console.log(`  [LATENT] ${l.op} → 规则本身会授予「${l.ruleGranted}」`);
 	if (latent.length) console.log("  建议：在规则内部自行检查施动工具前提（或保持 instrumentParams 声明），否则一旦 instrument 拦截被绕开规则会开出荒谬授予。");
 	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或经 verbs 的 candidates 收窄候选域。");
-	console.log(gaps.length === 0 && latent.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
+	console.log(gaps.length === 0 && latent.length === 0 && bugs.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
 	console.log("注：probe 只覆盖已声明 instrumentParams 的动词；若某动词漏声明施动工具前提且规则也未自检，此洞不会出现在报告（如 use 的 source 不可持握仍被授予）。请对 use 类动词逐一确认 instrumentParams 已声明。");
 }
 
@@ -349,7 +357,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { json: boolean; w
 		for (const r of results) {
 			steps.push({ action: actionDesc, result: r });
 			console.log(`\n>>> ${actionDesc}`);
-			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : ""}`);
+			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : ""}${!r.ok && r.deniedBy === "invariant" && r.denial?.debug && r.denial.reason == null ? ` ⚠ ${r.denial.debug}` : ""}`);
 			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
 		}
 	}
@@ -472,7 +480,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--json] [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
     研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；此处用 tick N 显式摇钟
-  sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
+  sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口、latent 潜在洞与执行校验 bug（--max 控制组合预算，默认 10000）
   sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键；身份卡（id/name/kind/tags）直读为封闭词表，一并盘点；规则/系统闭包内的世界 id 字面量单独盘点（承重墙审计：法则网络形态命中即意外特判，authored 命中属故意书写）（advisory）
 `);
 		return;

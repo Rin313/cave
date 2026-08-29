@@ -491,7 +491,9 @@ export class Simulation {
 	}
 
 	/** 只读裁决（不提交、不入日志）：研究工具的审计通道。
-	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。 */
+	 *  随机必须是 World 的纯函数（games 层自持计数器），check 与 apply 对同一状态天然一致。
+	 *  check 报告裁决口径（规则是否表态），不报告执行口径——执行校验在提交侧；
+	 *  check 通过而 apply 被 invariant 拒绝即规则/系统 bug 的信号。 */
 	check(action: Action): StepResult {
 		const r = this.adjudicateRaw(action);
 		return { ok: r.ok, reason: r.reason, changes: [], action, facts: r.facts, involved: r.involved, deniedBy: r.deniedBy, denial: r.denial, src: r.src, ticks: r.ticks };
@@ -607,23 +609,31 @@ export class Simulation {
 		return null;
 	}
 
-	/** 提交 + 不变式硬墙：先快照，提交后校验；违反则回滚整个提交并拒绝（原子）。
-	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案。 */
+	/** 提交 + 硬墙：先快照；提交内做执行校验（fidelity——裁决必须被完整执行），提交后做不变式校验（执行后的世界必须成立）；
+	 *  任一翼违反即原子回滚整个提交并拒绝。渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；
+	 *  游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案。 */
 	private commitChecked(deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
 		const before = this.snapshot();
-		const changes = this.commit(deltas, src);
-		const inv = this.checkInvariants(genesis, changes);
-		if (inv) {
-			// 回滚：先删掉提交期间新建的键（relations 等快照中不存在的），再整体恢复。
+		const rollback = (): void => {
+			// 先删掉提交期间新建的键（relations 等快照中不存在的），再整体恢复。
 			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
 			Object.assign(this.world, before);
+		};
+		const out = this.commit(deltas, src);
+		if ("refusal" in out) {
+			rollback();
+			return { ok: false, changes: [], denial: out.refusal, reason: messagesFor(this.def).noResponse };
+		}
+		const inv = this.checkInvariants(genesis, out.changes);
+		if (inv) {
+			rollback();
 			const denial: Denial = inv.authored
 				? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
 				: { law: `invariant.${inv.id}`, debug: inv.message };
 			return { ok: false, changes: [], denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
 		}
-		return { ok: true, changes };
+		return { ok: true, changes: out.changes };
 	}
 
 	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者（authored 标记产出方）。 */
@@ -776,7 +786,15 @@ export class Simulation {
 		return this.serialize();
 	}
 
-	private commit(deltas: Delta[], src: string): Change[] {
+	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行
+	 *  （逐条校验而非提交前预检：同一授予内 spawn 后 set 是合法书写）：目标实体/关系端点必须存在、spawn 的 id 必须未占用、
+	 *  inc/relInc 的现值必须是有限数（缺席/null 按 0 的既定语义——承重墙泛化承重于它，如 field.grow 对新实体；
+	 *  非数现值拒绝而非静默跳过或改写类型）、一切数值后果必须有限可说（NaN/Infinity 无法经 JSON 存活，
+	 *  序列化即静默变 null——账本腐蚀通道在提交侧封死）。不可执行即拒绝整个提交（commitChecked 原子回滚，
+	 *  与不变式同一通道）——裁决是判决，世界执行它或拒绝它，从不修正它；静默丢弃 delta 即裁决理由对变更流说谎。
+	 *  幂等跳过的唯一判据是目标状态已成立：relSet 删不存在的边成立（无边即状态，悬空端点之间本不容边）；
+ *  set 同值与零效果增量以目标存在为前提——主语不存在的「已成立」不可判定，存在性拒绝在前，永不回落为跳过。 */
+	private commit(deltas: Delta[], src: string): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
 		const rels = (this.world.relations = this.world.relations ?? []);
 		const upsertRel = (from: string, to: string, type: string, value: number | string | boolean) => {
@@ -784,25 +802,40 @@ export class Simulation {
 			if (hit) hit.value = value;
 			else rels.push({ from, to, type, value });
 		};
+		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", debug: `commit: ${debug}` } });
+		const sayable = (v: PropValue): boolean => {
+			if (typeof v === "number") return Number.isFinite(v);
+			if (Array.isArray(v)) return v.every(sayable);
+			if (v !== null && typeof v === "object") return Object.values(v).every(sayable);
+			return true;
+		};
+		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
 		for (const d of deltas) {
 			if (d.op === "spawn") {
-				if (entity(this.world, d.entity.id)) continue;
+				if (entity(this.world, d.entity.id)) return refuse(`spawn "${d.entity.id}": entity already exists`);
+				if (!sayable(d.entity.props)) return refuse(`spawn "${d.entity.id}": non-finite number in props`);
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
 				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name, src });
 				continue;
 			}
 			if (d.op === "despawn") {
 				const i = this.world.entities.findIndex((e) => e.id === d.entity);
-				if (i < 0) continue;
+				if (i < 0) return refuse(`despawn "${d.entity}": entity missing`);
 				const gone = this.world.entities[i]!;
 				this.world.entities.splice(i, 1);
-				this.world.relations = (this.world.relations ?? []).filter((r) => r.from !== d.entity && r.to !== d.entity);
+				// 原地级联删边：rels 是本次提交共享的数组，必须保持引用有效（重赋值会让同提交内后续 relSet/relInc 写入失联数组）
+				for (let j = rels.length - 1; j >= 0; j--) {
+					const r = rels[j]!;
+					if (r.from === d.entity || r.to === d.entity) rels.splice(j, 1);
+				}
 				changes.push({ kind: "despawn", entity: d.entity, name: gone.name, src });
 				continue;
 			}
 			if (d.op === "relSet") {
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (prev === d.value) continue;
+				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
+				if (!sayable(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): non-finite number`);
 				if (d.value === null) {
 					// 值 null 即删边（拓扑收缩与生长对称）；原地删——rels 是本次提交共享的数组，不可整体替换
 					const i = rels.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
@@ -814,28 +847,36 @@ export class Simulation {
 				continue;
 			}
 			if (d.op === "relInc") {
-				const prev = Number(relVal(this.world, d.from, d.to, d.type) ?? 0);
-				if (!Number.isFinite(prev)) continue;
+				if (dangling(d.from, d.to)) return refuse(`relInc ${d.from}->${d.to} (${d.type}): endpoint missing`);
+				const cur = relVal(this.world, d.from, d.to, d.type);
+				const prev = cur ?? 0;
+				if (typeof prev !== "number" || !Number.isFinite(prev)) return refuse(`relInc ${d.from}->${d.to} (${d.type}): current value is not a finite number`);
 				const next = prev + d.by;
+				if (!Number.isFinite(next)) return refuse(`relInc ${d.from}->${d.to} (${d.type}): result is not a finite number`);
+				if (next === prev) continue;
 				upsertRel(d.from, d.to, d.type, next);
 				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next, src });
 				continue;
 			}
 			const e = entity(this.world, d.entity);
-			if (!e) continue;
+			if (!e) return refuse(`${d.op} "${d.entity}.${d.prop}": target entity missing`);
 			if (d.op === "set") {
+				if (!sayable(d.value)) return refuse(`set "${d.entity}.${d.prop}": non-finite number`);
 				const prev = e.props[d.prop] ?? null;
 				if (prev === d.value) continue;
 				e.props[d.prop] = d.value;
 				changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value, src });
 			} else {
-				const prev = Number(e.props[d.prop] ?? 0);
-				if (!Number.isFinite(prev)) continue;
+				const cur = e.props[d.prop];
+				const prev = cur ?? 0;
+				if (typeof prev !== "number" || !Number.isFinite(prev)) return refuse(`inc "${d.entity}.${d.prop}": current value is not a finite number`);
 				const next = prev + d.by;
+				if (!Number.isFinite(next)) return refuse(`inc "${d.entity}.${d.prop}": result is not a finite number`);
+				if (next === prev) continue;
 				e.props[d.prop] = next;
 				changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next, src });
 			}
 		}
-		return changes;
+		return { changes };
 	}
 }
