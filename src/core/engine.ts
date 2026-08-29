@@ -322,6 +322,8 @@ function buildSystemPrompt(def: GameDef): string {
 
 第二步（描写）：基于 act 返回的裁决结果，把本回合写成面向玩家的文学散文。若有本回合的新事实需声明，先用 declare 工具提交（可选，可多次调用，以最后一次为准；无新事实则直接写散文），然后输出散文正文。
 
+部分回合没有行动窗口（渲染回合，如开场或纯时间流逝）：回合 prompt 顶部会标注「渲染回合」，此时不要调用 act，直接声明新事实（可选）并输出散文正文。
+
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名；实体属性由当前游戏的法则网络定义，见下方提示。
 
 可用动词（模拟层强制执行）：
@@ -434,7 +436,7 @@ function buildResultView(sim: Simulation, ctx: DeclCtx, results: StepResult[], r
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
 function buildRenderPrompt(sim: Simulation, ctx: DeclCtx, elapsed: StepResult[], instruction: string, pending: Change[]): string {
-	const lines = [`[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], undefined, undefined, pending, [], elapsed)];
+	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], undefined, undefined, pending, [], elapsed)];
 	const decl = declarableList(sim, ctx);
 	if (decl) lines.push("", decl);
 	lines.push("", `${instruction} 新事实先用 declare 工具声明（可选），然后输出散文正文。`);

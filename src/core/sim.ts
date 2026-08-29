@@ -307,7 +307,7 @@ export interface Invariant {
 	check: (world: World, ctx: InvariantCtx) => string | null;
 }
 
-/** core 默认硬墙：引用完整性——实体 id 唯一、in/注册表 id 属性/关系端点指向存在的实体。
+/** core 默认硬墙：引用完整性——实体 id 唯一、注册表 id 属性（标量或引用数组）与关系端点指向存在的实体。
  *  检测规则把世界改坏的 bug（悬空引用），任何提交都无法绕过。 */
 export function integrityInvariant(): Invariant {
 	return {
@@ -323,7 +323,10 @@ export function integrityInvariant(): Invariant {
 			for (const e of world.entities) {
 				for (const p of idProps) {
 					const v = e.props[p];
-					if (typeof v === "string" && v !== "" && !ids.has(v)) return `integrity: ${e.id}.${p} -> missing entity ${v}`;
+					// id 型属性契约：标量引用或引用数组（如背包）；空串视为无引用，与标量规则一致
+					for (const ref of Array.isArray(v) ? v : [v]) {
+						if (typeof ref === "string" && ref !== "" && !ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
+					}
 				}
 			}
 			for (const r of world.relations ?? []) {
