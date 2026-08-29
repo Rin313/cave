@@ -46,7 +46,7 @@ export function flagBool(a: ParsedArgs, name: string): boolean {
 	return a.flags.get(name) !== undefined;
 }
 
-/** JSON 输出（UTF-8）。 */
+/** JSON 输出 */
 export function out(obj: unknown): void {
 	process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
 }
