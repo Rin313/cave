@@ -320,9 +320,18 @@ export interface Invariant {
 	check: (world: World, ctx: InvariantCtx) => string | null;
 }
 
-/** core 默认硬墙：引用完整性——实体 id 唯一、注册表 id 属性（标量或引用数组）与关系端点指向存在的实体。
- *  检测规则把世界改坏的 bug（悬空引用），任何提交都无法绕过。 */
+/** core 默认硬墙：引用完整性与注册表类型契约——实体 id 唯一、id 型属性（标量或引用数组）与关系端点指向存在的实体、
+ *  注册属性的值与声明类型一致（number 拒非有限值：NaN/Infinity 经 JSON 序列化静默变 null，是账本腐蚀通道；
+ *  null/缺席为缺省惯例放行，any 显式豁免）。世界全域扫描：spawn 整包与 t=0 构造期自动覆盖。
+ *  检测规则把世界改坏的 bug（悬空引用、类型错写），任何提交都无法绕过。 */
 export function integrityInvariant(): Invariant {
+	const got = (v: PropValue): string => {
+		if (v === null) return "null";
+		if (typeof v === "number") return Number.isFinite(v) ? "number" : "non-finite number";
+		if (Array.isArray(v)) return "array";
+		if (typeof v === "object") return "object";
+		return typeof v;
+	};
 	return {
 		id: "integrity",
 		check: (world, ctx) => {
@@ -331,15 +340,22 @@ export function integrityInvariant(): Invariant {
 			// playerId 是 def 指向世界的唯一数据引用（无主语动词与感知钩子的解引用原点），每次裁决都被解引用，
 			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
-			const idProps = new Set<string>();
-			for (const [k, p] of Object.entries(ctx.def.props ?? {})) if (p.type === "id") idProps.add(k);
+			const registry = Object.entries(ctx.def.props ?? {});
 			for (const e of world.entities) {
-				for (const p of idProps) {
+				for (const [p, pd] of registry) {
 					const v = e.props[p];
-					// id 型属性契约：标量引用或引用数组（如背包）；空串视为无引用，与标量规则一致
-					for (const ref of Array.isArray(v) ? v : [v]) {
-						if (typeof ref === "string" && ref !== "" && !ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
+					if (v === null || v === undefined || pd.type === "any") continue;
+					if (pd.type === "id") {
+						// id 型属性契约：标量引用或引用数组（如背包）；空串视为无引用，与标量规则一致；非字符串即违约
+						for (const ref of Array.isArray(v) ? v : [v]) {
+							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
+							if (ref !== "" && !ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
+						}
+						continue;
 					}
+					if (pd.type === "number" && (typeof v !== "number" || !Number.isFinite(v))) return `integrity: ${e.id}.${p} expects number, got ${got(v)}`;
+					if (pd.type === "boolean" && typeof v !== "boolean") return `integrity: ${e.id}.${p} expects boolean, got ${got(v)}`;
+					if (pd.type === "string" && typeof v !== "string") return `integrity: ${e.id}.${p} expects string, got ${got(v)}`;
 				}
 			}
 			for (const r of world.relations ?? []) {

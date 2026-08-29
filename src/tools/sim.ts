@@ -427,13 +427,31 @@ async function cmdLint(gameId: string): Promise<void> {
 	}
 	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${closures.size} 个闭包 ===`);
 	console.log("注：只扫 GameDef 对象图内可达的闭包；模块级 helper 与动态索引（props[var]）不在扫描面内。");
-	// 身份卡直读盘点（C12）：封闭词表，恒合法、无需注册——扫描面覆盖它只为词汇全景可见，为后续纪律（C8 id 特判审计）留位。
+	// 身份卡直读盘点：封闭词表，恒合法、无需注册——扫描面覆盖它只为词汇全景可见。
 	const identitySites = new Map<string, number>();
 	for (const [, src] of closures) {
 		for (const [key, n] of identityKeysIn(src)) identitySites.set(key, (identitySites.get(key) ?? 0) + n);
 	}
 	const identityLine = IDENTITY_KEYS.filter((k) => identitySites.has(k)).map((k) => `${k}（${identitySites.get(k)} 处）`).join("、");
 	console.log(identityLine ? `身份卡直读（封闭词表，无需注册）：${identityLine}` : "身份卡直读：无。");
+	// 承重墙审计：规则/系统闭包内出现等于当前世界实体 id 的字符串字面量。检测与政策分离——本段只报告；
+	// 法则网络形态命中即意外特判（须改为属性键控），authored 形态的逐实体书写命中属故意；
+	// 政策升级（声明/阻断）门控在「已报告的特判 bug 仍被提交」事件。
+	const worldIds = new Set(def.world.entities.map((e) => e.id));
+	const adjudication: [string, unknown][] = [];
+	for (const [vn, v] of Object.entries(def.verbs)) for (const r of v.rules) adjudication.push([`${vn}.${r.id}`, r.judge]);
+	for (const s of def.systems ?? []) adjudication.push([`sys:${s.id}`, s.run]);
+	const idLitSites = new Map<string, Set<string>>();
+	for (const [path, fn] of adjudication) {
+		const lits = new Set<string>();
+		for (const m of closureSource(fn).matchAll(/["'`]([^"'`\n]+)["'`]/g)) if (worldIds.has(m[1]!)) lits.add(m[1]!);
+		if (lits.size) idLitSites.set(path, lits);
+	}
+	const idLitCount = [...idLitSites.values()].reduce((a, s) => a + s.size, 0);
+	console.log(idLitCount
+		? `承重墙审计：${idLitCount} 个世界 id 字面量，分布于 ${idLitSites.size} 个规则/系统闭包——法则网络形态命中即意外特判（须改为属性键控），authored 形态命中属故意书写：`
+		: "承重墙审计：规则/系统闭包内无世界 id 字面量——法则网络纪律在静态面上成立。");
+	for (const [path, lits] of idLitSites) console.log(`  [ID] ${path} → ${[...lits].map((s) => `"${s}"`).join("、")}`);
 	if (!unknownSites.size) {
 		console.log("规则代码读取的全部属性键均已在 props 注册表声明。");
 		return;
@@ -455,7 +473,7 @@ async function main(): Promise<void> {
     action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
     研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；此处用 tick N 显式摇钟
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与 latent 潜在洞（--max 控制组合预算，默认 10000）
-  sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键；身份卡（id/name/kind/tags）直读为封闭词表，一并盘点（advisory）
+  sim lint --game <id>    属性词汇 lint：静态扫描各闭包读取的属性键，报告未在 props 注册表声明的键；身份卡（id/name/kind/tags）直读为封闭词表，一并盘点；规则/系统闭包内的世界 id 字面量单独盘点（承重墙审计：法则网络形态命中即意外特判，authored 命中属故意书写）（advisory）
 `);
 		return;
 	}
