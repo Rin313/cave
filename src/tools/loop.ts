@@ -64,24 +64,6 @@ function appendTranscript(dir: string, entry: unknown): void {
 	appendFileSync(transcriptPath(dir), JSON.stringify(entry) + "\n", "utf8");
 }
 
-/** 把 SDK 会话文件逐条（不过滤）转换为可审阅 MD，写到同名 .review.md 旁。 */
-function writeSessionReview(sessionFile: string): void {
-	const lines = readFileSync(sessionFile, "utf8").split(/\r?\n/).filter((l) => l.trim());
-	if (!lines.length) return;
-	const header = JSON.parse(lines[0]!) as { id?: string };
-	const md: string[] = [
-		"# 会话审阅 " + (header.id ?? basename(sessionFile)),
-		"",
-		"> 由 `" + sessionFile + "` 逐条转换，未过滤任何字段。",
-		"",
-	];
-	for (const [i, l] of lines.entries()) {
-		const e = JSON.parse(l) as { type: string; message?: { role?: string } };
-		md.push("### " + (i + 1) + ". " + e.type + (e.message?.role ? `（${e.message.role}）` : ""), "", "```json", l, "```", "");
-	}
-	writeFileSync(sessionFile.replace(/\.jsonl$/, ".review.md"), md.join("\n"), "utf8");
-}
-
 function locateRunDir(runId: string, game?: string): string | null {
 	if (game) {
 		const dir = runDir(game, runId);
@@ -242,7 +224,6 @@ async function cmdStart(gameId: string, runId: string, opts: CmdOpts): Promise<v
 		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: 1, phase: "start", scene, validations, usage: usages });
-		writeSessionReview(meta.sessionFile!);
 		if (opts.json) {
 			out({ run: runId, game: gameId, turn: 1, phase: "start", scene, validations, usage: usages, world: sim.snapshot() });
 		} else {
@@ -282,7 +263,6 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			validations,
 			usage: usages,
 		});
-		writeSessionReview(meta.sessionFile!);
 		if (opts.json) {
 			out({
 				run: runId, game: meta.game, turn: meta.turn, phase: "act",
@@ -332,7 +312,6 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined,
 			saveMeta(dir, meta);
 			saveState(dir, sim);
 		}
-		writeSessionReview(engine.sessionFile!);
 	});
 	if (opts.json) out({ run: runId, game: gameId, steps });
 }
@@ -343,7 +322,6 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 		meta.turn += 1;
 		saveMeta(dir, meta);
 		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations, usage: usages });
-		writeSessionReview(engine.sessionFile!);
 		if (opts.json) {
 			out({ run: runId, game: meta.game, turn: meta.turn, phase: "render", scene, validations, usage: usages });
 		} else {
@@ -369,7 +347,6 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined, opt
 		saveMeta(dir, meta);
 		saveState(dir, sim);
 		appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages });
-		writeSessionReview(meta.sessionFile!);
 		if (opts.json) {
 			out({ run: runId, game: meta.game, turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages, world: sim.snapshot() });
 		} else {
