@@ -1,8 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Simulation, propGet } from "../core/sim.ts";
+import { Simulation, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
-import { fmtChange } from "../core/engine.ts";
 import { getGame } from "../games/registry.ts";
 import { probeScope } from "../games/space.ts";
 import { coerceValue } from "../core/util.ts";

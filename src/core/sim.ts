@@ -420,6 +420,29 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return messagesFor(def).noResponse;
 }
 
+/** 值的语言无关取值：id 解析为展示名，其余原样字符串化（core 只做符号连接）。 */
+export function fmtValue(sim: Simulation, v: PropValue): string {
+	if (v === null) return "null";
+	if (typeof v === "string") {
+		const hit = sim.world.entities.find((e) => e.id === v);
+		if (hit) return hit.name;
+	}
+	return String(v);
+}
+
+/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）：
+ *  普通变更 `<name>.<label>: <prev> → <next>`；rel 变更 `<from>.<type>.<to>: <prev> → <next>`；生灭 `+ name` / `- name`。
+ *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
+export function fmtChange(sim: Simulation, c: Change): string {
+	if (c.kind === "spawn") return `+ ${c.name}`;
+	if (c.kind === "despawn") return `- ${c.name}`;
+	if (c.kind === "rel") return `${fmtValue(sim, c.from)}.${c.type}.${fmtValue(sim, c.to)}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
+	const e = sim.world.entities.find((x) => x.id === c.entity);
+	const name = e?.name ?? c.entity;
+	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
+	return `${name}.${label}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
+}
+
 /** 属性读取 */
 export function propGet(e: Entity, prop: string): PropValue {
 	return e.props[prop] ?? null;

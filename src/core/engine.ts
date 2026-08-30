@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
+import { Simulation, fmtChange, fmtValue, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type ActionStep, type Change, type GameDef, type TickStep } from "./sim.ts";
 import { coerceValue } from "./util.ts";
 
 export interface EngineOptions {
@@ -328,28 +328,6 @@ ${hint}
 - 一律使用实体的名称（name），不得写出实体 id、属性名、工具调用或决策过程。
 - 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则；被拒绝的尝试只写尝试本身，不写其后果。
 - 「即将发生」只写征兆（用「将」「就要」），不得写成已发生。`;
-}
-
-function fmtValue(sim: Simulation, v: PropValue): string {
-	if (v === null) return "null";
-	if (typeof v === "string") {
-		const hit = sim.world.entities.find((e) => e.id === v);
-		if (hit) return hit.name;
-	}
-	return String(v);
-}
-
-/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）：
- *  普通变更 `<name>.<label>: <prev> → <next>`；rel 变更 `<from>.<type>.<to>: <prev> → <next>`；生灭 `+ name` / `- name`。
- *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
-export function fmtChange(sim: Simulation, c: Change): string {
-	if (c.kind === "spawn") return `+ ${c.name}`;
-	if (c.kind === "despawn") return `- ${c.name}`;
-	if (c.kind === "rel") return `${fmtValue(sim, c.from)}.${c.type}.${fmtValue(sim, c.to)}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
-	const e = sim.world.entities.find((x) => x.id === c.entity);
-	const name = e?.name ?? c.entity;
-	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	return `${name}.${label}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
 }
 
 /** 表达可见变更：internal 属性不进表达输入（公理一逃生舱）。只有 prop 变更携带 prop，rel/生灭恒可见。 */
