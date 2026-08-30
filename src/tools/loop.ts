@@ -336,7 +336,7 @@ async function cmdState(runId: string, gameId: string | undefined): Promise<void
 	const def = getGame(meta.game);
 	const sim = new Simulation(def, loadState(dir));
 	console.log(`【${runId}】${meta.game} 第${meta.turn}回合`);
-	console.log(JSON.stringify(JSON.parse(sim.serialize()), null, 1));
+	console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
 }
 
 async function cmdReset(runId: string, game?: string): Promise<void> {

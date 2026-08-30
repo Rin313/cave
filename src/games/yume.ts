@@ -1,5 +1,5 @@
-import type { Change, GameDef, PropDef, Q, Simulation, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, fallback, grant, internalPropsOf } from "../core/sim.ts";
+import type { Change, GameDef, PropDef, PropValue, Q, World } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
 import { denyUnreachable, reachFor } from "./space.ts";
 import { Type } from "typebox";
 
@@ -51,22 +51,18 @@ function summarizeYume(input: { world: World; changes: Change[]; player: string 
 	return lines.join("\n");
 }
 
-function digestYume(sim: Simulation): string {
-	const vis = sim.visible();
-	const internal = internalPropsOf(sim.def);
-	const me = sim.world.entities.find((e) => e.id === sim.player);
+/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单（无 id 承诺的呈现面；实体索引由 core 装配并保证 ≡ 可见性门）。 */
+function digestExtraYume(world: World, player: string): Record<string, PropValue> {
+	const me = entity(world, player);
 	const cur = me?.props["in"] as string | null;
-	const exits = (sim.world.relations ?? [])
-		.filter((r) => r.type === "path" && r.from === cur)
-		.map((r) => ({ id: r.to, name: entity(sim.world, r.to)?.name ?? r.to }));
-	const items = sim.world.entities.filter((e) => vis.has(e.id)).map((e) => ({
-		id: e.id,
-		name: e.name,
-		kind: e.kind,
-		props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
-	}));
-	const carried = sim.world.entities.filter((e) => e.kind === "effect" && e.props["in"] === sim.player).map((e) => e.name);
-	return JSON.stringify({ time: sim.world.time, awake: me?.props.awake !== false, here: cur ? (entity(sim.world, cur)?.name ?? cur) : null, exits, carried, entities: items });
+	return {
+		awake: me?.props.awake !== false,
+		here: cur ? (entity(world, cur)?.name ?? cur) : null,
+		exits: (world.relations ?? [])
+			.filter((r) => r.type === "path" && r.from === cur)
+			.map((r) => ({ id: r.to, name: entity(world, r.to)?.name ?? r.to })),
+		carried: world.entities.filter((e) => e.kind === "effect" && e.props["in"] === player).map((e) => e.name),
+	};
 }
 
 /** 睡去／醒来：房间的床垫通向梦；梦里再睡则回到房间。 */
@@ -97,10 +93,6 @@ const goVerb = defineVerb({
 	description: "沿路前往相邻的地点（dest 是地点实体 id，见出口列表）。走动推进梦的时刻。",
 	schema: Type.Object({ dest: Type.String({ description: "目的地实体 id" }) }),
 	cost: 1,
-	candidates: (sim) => {
-		const cur = sim.world.entities.find((e) => e.id === sim.player)?.props["in"] as string | null;
-		return { dest: (sim.world.relations ?? []).filter((r) => r.type === "path" && r.from === cur).map((r) => r.to) };
-	},
 	rules: [
 		{
 			id: "go.dark",
@@ -129,9 +121,6 @@ const takeVerb = defineVerb({
 	description: "把眼前可以拿起来的东西收好（takable）。",
 	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
 	entityParams: ["entity"],
-	candidates: (sim) => ({
-		entity: [...sim.visible()].filter((id) => sim.world.entities.find((e) => e.id === id)?.props.takable === true),
-	}),
 	rules: [
 		{
 			id: "take.it",
@@ -158,9 +147,6 @@ const interactVerb = defineVerb({
 	description: "触碰、注视或摆弄一个眼前的存在。结果取决于它是什么、以及你带着什么。",
 	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
 	entityParams: ["entity"],
-	candidates: (sim) => ({
-		entity: [...sim.visible()].filter((id) => id !== sim.player && sim.world.entities.find((e) => e.id === id)?.props.space !== true),
-	}),
 	rules: [
 		{ id: "int.futon", judge: (q, p) => (p.entity !== "futon" ? null : grant([], "床垫陷下去一个你的形状，好像一直在等你回来。")) },
 		{
@@ -362,7 +348,7 @@ export const yume: GameDef = {
 	},
 	...reachFor(),
 	summarize: summarizeYume,
-	digest: digestYume,
+	digestExtra: digestExtraYume,
 	hint: `世界法则（模拟层强制执行）：
 1. 四个动词：sleep（房间里睡去坠入梦境；梦里再睡则醒来）、go（沿路径走向相邻地点）、interact（与眼前的存在互动）、take（收起可拾取的东西）。
 2. 世界由路径连通；有的地方很暗，没有光进不去。

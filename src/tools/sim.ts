@@ -231,9 +231,25 @@ function describeAction(action: Action, def: GameDef): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
+/** 探测域 per-game 配置（tools 层的预算/覆盖裁剪面，非引擎语义）：动词参数的枚举域声明。
+ *  entityParams 缺省 = probeScope（可见 - 玩家 - 场景），此处声明覆盖缺省；无域参数（标量等）不枚举。
+ *  域是「法则具体覆盖面」的声明：域内目标应越过 fallback 得到具体法则回答，域外落 fallback 兜底、不报告缺口。 */
+const PROBE_DOMAINS: Record<string, Partial<Record<string, (sim: Simulation) => Record<string, PropValue[]>>>> = {
+	village: {
+		buy: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.price != null || e.props.priceBase != null).map((e) => e.id) }),
+		sell: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.in === sim.player && e.props.resale != null).map((e) => e.id) }),
+		draw: (sim) => ({ source: sim.world.entities.filter((e) => e.props.supply === true).map((e) => e.id) }),
+		repair: (sim) => ({ structure: sim.world.entities.filter((e) => typeof e.props.phase === "number").map((e) => e.id) }),
+	},
+	yume: {
+		go: (sim) => ({ dest: sim.world.entities.filter((e) => e.props.space === true).map((e) => e.id) }),
+		take: (sim) => ({ entity: [...sim.visible()].filter((id) => sim.world.entities.find((e) => e.id === id)?.props.takable === true) }),
+	},
+};
+
 function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; bugs: { verb: string; op: string; debug: string }[]; seen: number; truncated: boolean } {
 	const sim = new Simulation(def);
-	/** 候选域缺省 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数收窄走 verbs.candidates，全局裁剪走 tools 层 per-game 配置。 */
+	/** 实体参数缺省域 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数覆盖走 PROBE_DOMAINS。 */
 	const scope = new Set(probeScope(sim.world, def.playerId, sim.visible()));
 	const gaps: { verb: string; op: string; reason: string; law?: string }[] = [];
 	/** 核心级不变拒绝（deniedBy=invariant 且无世界腔理由——integrity/commit 执行校验）= 规则/系统 bug 信号；
@@ -260,11 +276,11 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	for (const verbName of verbNames) {
 		const verb = def.verbs[verbName]!;
 		const entityParams = verb.entityParams ?? [];
-		const candidates = verb.candidates?.(sim) ?? {};
+		const domains = PROBE_DOMAINS[def.id]?.[verbName]?.(sim) ?? {};
 		const paramLists: Record<string, PropValue[]> = {};
 
 		for (const p of entityParams) paramLists[p] = [...scope];
-		for (const [p, vals] of Object.entries(candidates)) {
+		for (const [p, vals] of Object.entries(domains)) {
 			paramLists[p] = vals;
 		}
 
@@ -315,7 +331,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	if (!gaps.length) console.log(`缺口: 0（${Object.keys(def.verbs).length} 个动词全部越过 denyAll 兜底）`);
 	console.log(`执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
 	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.debug}`);
-	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或经 verbs 的 candidates 收窄候选域。");
+	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或在 PROBE_DOMAINS（tools 层探测域配置）收窄候选域。");
 	console.log(gaps.length === 0 && bugs.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
 }
 
@@ -348,8 +364,8 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 	}
 
 	if (opts.world) {
-		console.log("\n=== 最终世界 ===");
-		console.log(sim.serialize());
+		console.log("\n=== 状态视图 ===");
+		console.log(sim.digest());
 	}
 	console.log("\n=== 变更日志 ===");
 	for (const r of sim.log) console.log(`  ${JSON.stringify(r.action)} → ${r.reason}`);

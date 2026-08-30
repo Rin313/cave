@@ -203,7 +203,6 @@ export function defineVerb<S extends TObject>(spec: {
 	schema: S;
 	cost?: number;
 	entityParams?: string[];
-	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -213,7 +212,6 @@ export function defineVerb<S extends TObject>(spec: {
 		// 工具边界与裁决瓶颈同一严格度：多余参数在工具层被拒，而非到 sim 才成协议性拒绝（反馈只剩 noResponse）
 		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
-		candidates: spec.candidates,
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
 }
@@ -244,10 +242,6 @@ export interface VerbDef {
 	cost?: number;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
-	/** 参数的动态值域：动作空间的声明式模型——作者写下的枚举域近似，收窄探测/意图菜单的枚举面；
-	 *  裁决从不消费它（真实边界是规则的授予面），漂移于规则 = 探测盲区（欠枚举 → 假阴性缺口报告），作者义务。
-	 *  动态域进不了静态 schema，也不可进工具 schema（逐回合变化的工具块击穿字节级稳定前缀），故由 def 携带。 */
-	candidates?: (sim: Simulation) => Record<string, PropValue[]>;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为 fallback 兜底。 */
 	rules: Rule[];
 }
@@ -266,8 +260,7 @@ export interface GameDef {
 	/** 时间系统：每 tick 按注册顺序运行的系统规则（world→deltas 的纯函数）。 */
 	systems?: SystemRule[];
 	hint?: string;
-	/** 属性注册表：属性类型/世界化标签/内部标记/值域。serialize 读 internal，
-	 *  describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
+	/** 属性注册表：属性类型/世界化标签/内部标记/值域。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
 	props?: Record<string, PropDef>;
 	/** 确定性回退摘要钩子（player = 意志居所）。 */
 	summarize?: (input: { world: World; changes: Change[]; player: string }) => string;
@@ -282,9 +275,10 @@ export interface GameDef {
 	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
 	 *  消费者是规则内的施动前提卫语句（经 Q.holdable，与 Q.canReach 同一模式）。 */
 	holdable?: (world: World, player: string, id: string) => boolean;
-	/** 序列化投影：决定状态以什么形态进回合 prompt。缺省 = serialize() 全量 JSON。
-	 *  游戏可声明精简/结构化的 digest（如关系格式化、省略冗余字段），以控制 prompt 体积与表达自由度。 */
-	digest?: (sim: Simulation) => string;
+	/** 状态视图的派生纹理（世界 + 玩家 → 顶层附加字段）：出口、随身清单等游戏自持语义的呈现。
+	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，extra 不承载它；携带可指名 id 时应配合
+	 *  非 entityParams 参数消费（地点恒可指名，由法则层回答）。 */
+	digestExtra?: (world: World, player: string) => Record<string, PropValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
 	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
@@ -421,23 +415,6 @@ export function relVal(world: World, from: string, to: string, type: string): nu
 /** 关系查询：from 的全部关系边（可按 type 过滤）。 */
 export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
-}
-
-/** 序列化：可见实体 + 非内部属性 + 关系表。 */
-export function serialize(world: World, visible: Iterable<string>, internalProps: readonly string[] = []): string {
-	const vis = new Set(visible);
-	const internal = new Set(internalProps);
-	const items = world.entities
-		.filter((e) => vis.has(e.id))
-		.map((e) => ({
-			id: e.id,
-			name: e.name,
-			kind: e.kind,
-			tags: e.tags,
-			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
-		}));
-	const rels = (world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
-	return JSON.stringify({ time: world.time, relations: rels, entities: items });
 }
 
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）。 */
@@ -704,14 +681,27 @@ export class Simulation {
 		return JSON.parse(JSON.stringify(this.world)) as World;
 	}
 
-	serialize(): string {
-		return serialize(this.world, this.visible(), [...internalPropsOf(this.def)]);
-	}
-
-	/** 序列化投影：映射/表达 prompt 用的状态呈现。游戏可声明 def.digest 覆盖。 */
+	/** 状态视图（唯一装配线）：prompt 的状态呈现由 core 组装——可见实体（grounding）× 注册表过滤
+	 *  × 关系端点可见过滤，顶层并入 def.digestExtra 派生纹理。
+	 *  参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名，可指名的必看得见。 */
 	digest(): string {
-		if (this.def.digest) return this.def.digest(this);
-		return this.serialize();
+		const vis = this.visible();
+		const internal = internalPropsOf(this.def);
+		const entities = this.world.entities
+			.filter((e) => vis.has(e.id))
+			.map((e) => ({
+				id: e.id,
+				name: e.name,
+				kind: e.kind,
+				tags: e.tags,
+				props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
+			}));
+		const relations = (this.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
+		const extra = this.def.digestExtra?.(this.world, this.player) ?? {};
+		// 保留键归装配线：extra 不得覆写 time/relations/entities（参照域契约的构造保证），冲突键被忽略并告警
+		const collisions = Object.keys(extra).filter((k) => k === "time" || k === "relations" || k === "entities");
+		if (collisions.length) console.warn(`[sim] digestExtra 与状态视图保留键冲突（被忽略）：${collisions.join("、")}`);
+		return JSON.stringify({ ...extra, time: this.world.time, relations, entities });
 	}
 
 	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行

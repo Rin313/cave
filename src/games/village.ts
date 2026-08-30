@@ -1,5 +1,5 @@
-import type { Change, GameDef, PropDef, Q, Simulation, SystemRule, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, fallback, grant, internalPropsOf } from "../core/sim.ts";
+import type { Change, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
 import { denyUnreachable, inTreeVisible, reachFor } from "./space.ts";
 import { Type } from "typebox";
@@ -90,21 +90,6 @@ function summarizeVillage(input: { world: World; changes: Change[]; player: stri
 	return ["你站在河畔村。"].concat(bits, changes.map((c) => summarizeChange(world, c))).join("\n");
 }
 
-function digestVillage(sim: Simulation): string {
-	const vis = sim.visible();
-	const internal = internalPropsOf(sim.def);
-	const items = sim.world.entities
-		.filter((e) => vis.has(e.id))
-		.map((e) => ({
-			id: e.id,
-			name: e.name,
-			kind: e.kind,
-			props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
-		}));
-	const rels = (sim.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
-	return JSON.stringify({ time: sim.world.time, relations: rels, entities: items });
-}
-
 export const village: GameDef = {
 	id: "village",
 	title: "河畔村（era/DoL 极探针）",
@@ -123,7 +108,6 @@ export const village: GameDef = {
 			schema: Type.Object({ entity: Type.String({ description: "目标物品 id" }) }),
 			cost: 1,
 			entityParams: ["entity"],
-			candidates: (sim) => ({ entity: sim.world.entities.filter((e) => e.props.grabbable === true).map((e) => e.id) }),
 			rules: [
 				{
 					id: "gather.take",
@@ -181,7 +165,6 @@ export const village: GameDef = {
 			description: "与村民攀谈：对方对自己的信任 +1；信任 >= 5 后无话可说。",
 			schema: Type.Object({ target: Type.String({ description: "交谈对象 id" }) }),
 			entityParams: ["target"],
-			candidates: (sim) => ({ target: sim.world.entities.filter((e) => e.kind === "npc").map((e) => e.id) }),
 			rules: [{
 				id: "talk.nice",
 				judge: (q, p) => {
@@ -195,7 +178,6 @@ export const village: GameDef = {
 			description: "向货品的卖家（vendor）购买：独件货品（有 price）整件到手；出产型货物（有 yields）从存量中买一份。价格随存量浮动，卖家信任达标（dealTrust）再减价（dealCut）；挂着夜歇的卖家入夜打烊。",
 			schema: Type.Object({ goods: Type.String({ description: "货品实体 id" }) }),
 			entityParams: ["goods"],
-			candidates: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.price != null || e.props.priceBase != null).map((e) => e.id) }),
 			rules: [
 				{
 					id: "buy.goods",
@@ -226,7 +208,6 @@ export const village: GameDef = {
 			description: "把手里带回收价（resale）的货品卖回给它的卖家（vendor）；挂着夜歇的卖家入夜歇业。",
 			schema: Type.Object({ goods: Type.String({ description: "手中货品 id" }) }),
 			entityParams: ["goods"],
-			candidates: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.in === sim.player && e.props.resale != null).map((e) => e.id) }),
 			rules: [
 				{
 					id: "sell.goods",
@@ -263,7 +244,6 @@ export const village: GameDef = {
 			schema: Type.Object({ source: Type.String({ description: "水源实体 id" }) }),
 			cost: 1,
 			entityParams: ["source"],
-			candidates: (sim) => ({ source: sim.world.entities.filter((e) => e.props.supply === true).map((e) => e.id) }),
 			rules: [
 				{
 					id: "draw.water",
@@ -295,7 +275,6 @@ export const village: GameDef = {
 			schema: Type.Object({ bush: Type.String({ description: "浆果丛 id" }) }),
 			cost: 1,
 			entityParams: ["bush"],
-			candidates: (sim) => ({ bush: sim.world.entities.filter((e) => e.props.ripe === true).map((e) => e.id) }),
 			rules: [{
 				id: "harvest.bush",
 				judge: (q, p) => {
@@ -311,7 +290,6 @@ export const village: GameDef = {
 			schema: Type.Object({ structure: Type.String({ description: "损毁结构 id" }) }),
 			cost: 1,
 			entityParams: ["structure"],
-			candidates: (sim) => ({ structure: sim.world.entities.filter((e) => typeof e.props.phase === "number").map((e) => e.id) }),
 			rules: [
 				{
 					id: "repair.step",
@@ -345,12 +323,13 @@ export const village: GameDef = {
 			schema: Type.Object({ dog: Type.String({ description: "野兽 id" }) }),
 			cost: 1,
 			entityParams: ["dog"],
-			candidates: (sim) => ({ dog: sim.world.entities.filter((e) => e.props.aggressive === true).map((e) => e.id) }),
 			rules: [{
 				id: "dog.chase",
 				// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 				judge: (q, p) => {
 					if (!q.canReach(p.dog)) return deny("denyAll.subdue", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
+					// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
+					if (q.entity(p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { subject: p.dog, reason: `${q.name(p.dog)}不是赶得跑的野兽。` });
 					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { subject: p.dog, reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
 					if (num(q.entity(q.player)?.props.fatigue) >= 40) return deny("dog.tired", { subject: p.dog, reason: `你太疲惫了，挥不动手，${q.name(p.dog)}只是远远地龇牙。` });
 					const bite = -(2 + q.roll(`dog.bite#${p.dog}`, 3));
@@ -484,7 +463,6 @@ export const village: GameDef = {
 	// 可持握语义由游戏声明（core 不假定属性名）：河畔村只有 grabbable 的东西可被拿起。
 	holdable: (world, _player, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeVillage,
-	digest: digestVillage,
 	hint: `世界法则（模拟层强制执行）：
 1. 时间随行为流逝：拾取/采集/汲水/修葺/驱逐/翻找各耗一刻，吃喝、买卖、攀谈不耗时间，歇息片刻耗一刻，昏睡一夜耗四刻，等待可指定刻数。每过一刻：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来（睡一夜）。
 2. 入夜（时刻 % 4 == 3）：挂着「夜歇」的摊子歇业，买卖一律被拒；野狗有 1/4 概率偷袭（骰子判定，确定性）——睡梦里也不例外。

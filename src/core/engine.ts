@@ -276,7 +276,7 @@ export class Engine {
 
 	private summarize(changes: Change[]): string {
 		if (this.def.summarize) return this.def.summarize({ world: this.sim.world, changes, player: this.sim.player });
-		return this.sim.serialize();
+		return this.sim.digest();
 	}
 
 	dispose(): void {
