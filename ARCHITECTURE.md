@@ -11,31 +11,27 @@
 ## 2. 核心架构主张
 
 1. **pi SDK 是映射层与表达层的宿主。** DESIGN.md 的三层架构落到 pi SDK 概念：
-
    | DESIGN.md 层 | pi SDK 落点 |
    |---|---|
    | 映射层 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；one-shot 门闩内一次性提交，只产结构化结果 |
    | 表达层 | session 的普通文本输出（`text_delta` 流式）；与映射同一回合运行（单 pass），输入 = 回合 prompt 的状态 + act 工具结果的世界腔策展|
    | 模拟层 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 | AgentSession 自带：messages + compact() + SessionManager；叙述不回流（幻觉不固化） |
-
 2. **"单一结构化出口"是这个 SDK 的默认结构。** session 只给 act 一个 tool（结构化出口），散文是普通文本流：每回合一次 `session.prompt()`，模型先 `act`（一次性提交动作提案或结构化拒绝，one-shot 门闩封闭变异窗口），工具结果承载裁决的世界腔策展；随后模型直接输出散文正文；`execute()` 内部就是规则裁决/校验边界。
 3. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的（`text_delta` / `tool_execution_*`），经转发器 `webContents.send()` 推给前端。
 4. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的。
-
 5. **上下文裁剪（`context` 事件 + 近况记录）**：每次 LLM 调用前经内联扩展（`DefaultResourceLoader.extensionFactories` 的 `cave-context`，`core/context.ts` 为策略单一来源）把消息裁剪为「近况记录 + 当前运行后缀」——后缀 = 最后一条 user 消息起的原样保留（toolCall/toolResult 配对天然完整），近况 = 最近 6 回合的「意图 → 世界腔裁决行」，并入该 user 消息头部。会话文件仍累积全量消息作审计；近况另以 custom 条目持久化于同一文件（custom 不参与 LLM 上下文），进程重启由其重建窗口。**缓存代价是显式决策**：状态每回合重注入使消息前缀跨回合天然不稳定，跨回合前缀复用只剩 [tools+system] 头块——因此系统提示与工具数组必须字节级稳定（易变状态一律走 per-turn prompt，禁入系统提示），且不做 setActiveTools 相位切换（工具块位于序列化前缀头部，每次切换即整体前缀失效）。回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变），provider 缓存可全程复用——这是单 pass 相对双 pass 的额外收益（双 pass 的表达 prompt 是新 user 消息，只能复用头块）。compaction 保持关闭：pi 缺省摘要是编码任务形状、且把旧叙述摘要重新注入，与「模拟层唯一真相源」相悖；长度兜底走显式新开会话。资源发现全部关闭（noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles）：cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt。
-
 6. **单 pass 回合** 每回合一次 `session.prompt()`：模型先调 `act`（一次性提交，one-shot 门闩封闭变异窗口），工具结果即本回合世界回应的世界腔策展（尝试行/时间流逝/法则事实/即将发生/新见，经 fmtChange 线性化、协议性拒绝过滤），模型基于它输出散文；叙述只能跟随工具结果。
 
 ## 3. GameDef 表面契约
 
-- **`verbs`**：游戏声明的动词表，每个动词含 `schema`（TypeBox，生成 act 工具参数校验，并经 `defineVerb` 推导规则参数的编译期类型）、`cost`（尝试时价：无论裁决成败都消耗的刻数，协议性拒绝除外；时间律的动词面）、`entityParams`（哪些参数是实体 id，供可见性校验）、`rules`（卫语句式规则函数，按序裁决首个表态即判决；末尾可挂 fallback 兜底规则）。动词集由各游戏声明：era/DoL 类可声明 `talk/travel/equip` 等，开放世界可声明 `attack/trade/craft` 等。
+- **`verbs`**：游戏声明的动词表，每个动词含 `schema`（TypeBox，生成 act 工具参数校验，并经 `defineVerb` 推导规则参数的编译期类型）、`cost`（尝试时价：无论裁决成败都消耗的刻数，协议性拒绝除外；时间律的动词面）、`entityParams`（哪些参数是实体 id，供可见性校验）、`rules`（卫语句式规则函数，按序裁决首个表态即判决；末尾可挂 fallback 兜底规则）。动词集由各游戏声明。
 - **环境响应（声明式动词）**：非预设的自由动作由游戏声明动词 + 法则承担——法则网络形态按属性键控一条规则覆盖全部可达实体；authored 形态则逐实体书写互动子句。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底。
 - **`Rule`（卫语句式规则，按动词分组）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/player/time/params + `rel/relNum/roll/canReach/holdable/name` 等引擎语义唯一入口），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses）。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc/spawn/despawn`——生灭原语让梦核/authored 世界可动态生长，relSet 值 null 即删边（拓扑收缩与生长对称），despawn 级联清理核心结构、悬空 id 引用由完整性硬墙回滚），LLM 不提案数值。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码；隐式语义显式化为具名入口（如 `relNum` 的缺边缺省在调用点写明）。
 - **`fallback` 兜底规则**：动词末尾的无条件拒绝规则，其 Denial 带 `fallback: true` 结构化标记；runner 对全部规则未表态的动作回落 noResponse（同样计为 denyAll）。散文内联在规则文本里，`sim probe` 据标记报告法则缺口。
 - **拒绝文案内联**：拒绝理由以世界腔字符串直书在规则代码里（`deny(law, { reason })`），缺省回落 `messages.noResponse`——"一个行为的文案与其条件同处一处"。core 产出的拒绝由 `Messages` 注入语言：不可见实体（`invisibleEntity`，可选，收解析后的实体名）。**不变式按产出方渲染**：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案。
 - **校验收敛与协议性拒绝**：动词存在/schema/实体可见性校验从 act 工具收敛进 `Simulation.adjudicateRaw` 单一瓶颈（严格校验器构造期从动词 schema 编译，additionalProperties:false），场景/CLI/probe 与 LLM 入口同一裁决口径（轨迹时间策略归调用方：引擎按授予交织，研究工具显式摇钟）。裁决门顺序：未知动词 → schema → 可见性 → 规则。三类结构化拒绝：`action.unknown` / `action.schema` 为**协议性拒绝**（`deniedBy:"protocol"`，映射层形态错误属引擎↔模型通道流量，表达层整体过滤、理由回落 noResponse，诊断进 `Denial.debug`）；`action.invisible` 为世界性拒绝（已存在但不可见的实体用游戏自己的 `reachReason` 槽位解释，幻觉 id 无名字回落通用文案）。**Messages 收窄**：契约只收解析后的 referent（名字），不收 id/属性名；机器诊断一律走 `Denial.debug`。
-- **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas/facts（火蔓延、燃尽、日程等）；**fact-only 输出合法**——零状态变更的纯氛围事实同样成立并进入表达输入。**时间是裁决授予的后果维度（DESIGN 公理三时间律）**：`VerbDef.cost`（缺省 0）为尝试时价（成败皆消耗，协议性拒绝除外——映射层噪声不是尝试），授予可携 `ticks` 改写实际流逝；引擎在 act 工具内按动作交织推进（每动作裁决提交后 `sim.tick(r.ticks)`，elapsed 并入表达输入/近况，不计入 ActOutcome.results 的 kind）；无裁决即无流逝（refusal/未解析回合世界静止）；研究工具不自动流逝，`sim run` 的 `advance N` 显式摇钟。
+- **`systems`**：时间系统注册表，每 tick 按序执行，产出 deltas/facts；**fact-only 输出合法**——零状态变更的纯氛围事实同样成立并进入表达输入。**时间是裁决授予的后果维度（DESIGN 公理三时间律）**：`VerbDef.cost`（缺省 0）为尝试时价（成败皆消耗，协议性拒绝除外——映射层噪声不是尝试），授予可携 `ticks` 改写实际流逝；引擎在 act 工具内按动作交织推进（每动作裁决提交后 `sim.tick(r.ticks)`，elapsed 并入表达输入/近况，不计入 ActOutcome.results 的 kind）；无裁决即无流逝（refusal/未解析回合世界静止）；研究工具不自动流逝，`sim run` 的 `advance N` 显式摇钟。
 - **两种创作形态（authorial regimes）**：**法则网络形态**——规则按属性组合键控、随新实体自动泛化（承重墙针对此形态，防组合爆炸）；**authored 形态**——梦核/脚本化世界的正当写法：互动按实体逐个书写（每条一个卫语句子句 + 兜底）、效果改写互动结果、实体生灭与动态拓扑。两形态共用同一套裁决瓶颈与提交硬墙，差异只在作者书写风格与不变式密度，core 不感知形态。
 - **`grounding`**：可见实体索引钩子，决定哪些实体进状态视图；缺省全部可见。**`reach`/`reachReason`（GameDef 可选）是可达性空槽**：`P.reach`/规则的施动前提卫语句（`Q.canReach`）共用的谓词，缺省全可达、无理由——core 不内嵌任何空间模型；容器包含树语义是游戏侧构件 `src/games/space.ts`（`inTreeReach`/`inTreeVisible`/`reachFor`），需要空间语义的游戏自选接入。**`holdable`（GameDef 可选）是可持握空槽**：规则经 `Q.holdable` 消费的谓词（与 `Q.canReach` 同一模式），core 不提供缺省——未声明的游戏一律不可持握；可持握语义（grabbable 属性、体力门槛、材质、锋利等）由游戏声明，与 `reach` 同一模式。
 - **`messages`**（GameDef 必填）：core 产出的用户可见文案（时间流逝、不可见实体等）由游戏注入自有语言；core 不内嵌任何语言。**契约只收解析后的 referent（实体名），不收 id/属性名**——机器诊断一律走 `Denial.debug`；协议性拒绝与 core 完整性不变式违反回落 `noResponse`。可达性理由文案内置于游戏侧空间构件 `src/games/space.ts`（`SpaceOpts.msgs` 可覆盖），不进 Messages。

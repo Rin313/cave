@@ -18,7 +18,7 @@ scenarios/
 - 选择简洁的写法，不限制使用流行依赖、原生API还是手写。尽量不写注释，只记录从代码无法看出的意图或约束，不记录变更历史
 - `DESIGN.md`,`ARCHITECTURE.md`,`CRITIQUE.md`只是某种片面的看法，不要盲目信任，基于逻辑学、信息学、拓扑学谨慎思考
 - 重点关注文档的设计，其次是core层的实现，剩下二者是次要的，tools层是测试工具，games层是研究示例
-- 对于端到端测试，provider使用`opencode-go`，model使用`hy3`
+- 对于端到端测试，provider使用`opencode-go`，model使用`mimo-v2.5`
 - 用户没有指示时，不要执行 git命令
 - 改完代码后执行 `npx tsc --noEmit`
 
