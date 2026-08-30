@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type Change, type GameDef, type PropValue, type StepResult } from "./sim.ts";
+import { Simulation, internalPropsOf, messagesFor, propLabelOf, stylisticPropsOf, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
 import { coerceValue } from "./util.ts";
 
 export interface EngineOptions {
@@ -29,23 +29,23 @@ const ACT_TOOL = "act";
 
 export interface ActOutcome {
 	kind: "applied" | "rejected" | "refused" | "partial";
-	results: StepResult[];
-	/** 本回合时间流逝产出（各动作授予刻数的 systems 产出；时间律：无裁决即无流逝），不计入 kind。 */
-	elapsed: StepResult[];
+	results: ActionStep[];
+	/** 本回合时间流逝产出（动作授予刻数逐刻运行 systems 的刻步；时间律：无裁决即无流逝），不计入 kind。 */
+	elapsed: TickStep[];
 	refusal?: { label: string; reason?: string };
 }
 
 export type EngineEvent =
 	| { type: "text_delta"; delta: string }
 	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
-	| { type: "tool_result"; results: StepResult[] }
-	| { type: "elapsed"; results: StepResult[] }
+	| { type: "tool_result"; results: ActionStep[] }
+	| { type: "elapsed"; steps: TickStep[] }
 	| { type: "validation"; round: number; error: string; attempt: string }
 	| { type: "usage"; input: number; output: number; cacheRead: number; cacheWrite: number };
 
 /** act 工具 execute 向 Engine 直通回写裁决结果（不经事件流嗅探或工具结果解析往返）。 */
 interface TurnChannel {
-	onAdjudication: ((patch: { results?: StepResult[]; refusal?: { label: string }; elapsed?: StepResult[] }) => void) | null;
+	onAdjudication: ((patch: { results?: ActionStep[]; refusal?: { label: string }; elapsed?: TickStep[] }) => void) | null;
 }
 
 /** 单回合通道状态：变异窗口门闩 + 散文缓冲。
@@ -108,7 +108,7 @@ export class Engine {
 			}
 			if (patch.elapsed?.length) {
 				this.outcome.elapsed = patch.elapsed;
-				this.emit({ type: "elapsed", results: patch.elapsed });
+				this.emit({ type: "elapsed", steps: patch.elapsed });
 			}
 		};
 		session.subscribe((event) => {
@@ -233,9 +233,10 @@ export class Engine {
 	}
 
 	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。 */
-	private recordTurn(intent: string, elapsed: StepResult[]): void {
+	private recordTurn(intent: string, elapsed: TickStep[]): void {
 		const o = this.outcome;
-		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || this.sim.describeAction(r.action)}`);
+		const passed = messagesFor(this.def).timePassed;
+		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || passed}`);
 		this.memory.push({
 			time: this.sim.world.time,
 			intent: intent.slice(0, 80),
@@ -251,8 +252,8 @@ export class Engine {
 		}
 	}
 
-	/** 独立渲染（无动作裁决的叙述回合，如开场/等待后的场景描写）：elapsed 为本回合时间流逝的 systems 产出（含 facts）。 */
-	async render(instruction: string, elapsed: StepResult[] = []): Promise<void> {
+	/** 独立渲染（无动作裁决的叙述回合，如开场/等待后的场景描写）：elapsed 为本回合时间流逝的刻步（含 facts）。 */
+	async render(instruction: string, elapsed: TickStep[] = []): Promise<void> {
 		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		this.turn.textBuf.length = 0;
@@ -361,7 +362,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
  *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、即将发生、新见。core 只做符号连接。
  *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
-function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[] = []): string[] {
+function formatTurnEvents(sim: Simulation, results: ActionStep[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[] = []): string[] {
 	const lines: string[] = [];
 	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
 	if (refusal) {
@@ -385,7 +386,7 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 		lines.push(`${messagesFor(sim.def).timePassed}：`);
 		for (const r of elapsedEvents) {
 			const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
-			const body = bits.length ? bits.join("。") : (r.reason ?? messagesFor(sim.def).defaultReason);
+			const body = bits.length ? bits.join("。") : (r.reason || messagesFor(sim.def).defaultReason);
 			lines.push(`- ${r.ok ? body : `${body}（被拒绝）`}`);
 		}
 	}
@@ -407,13 +408,13 @@ function formatTurnEvents(sim: Simulation, results: StepResult[], refusal: { lab
 }
 
 /** act 工具结果：本回合世界回应的世界腔策展——散文的唯一事件源（叙述只能跟随这里的内容）。 */
-function buildResultView(sim: Simulation, results: StepResult[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: StepResult[]): string {
+function buildResultView(sim: Simulation, results: ActionStep[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[]): string {
 	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed, elapsed);
 	return lines.join("\n");
 }
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
-function buildRenderPrompt(sim: Simulation, elapsed: StepResult[], instruction: string, pending: Change[]): string {
+function buildRenderPrompt(sim: Simulation, elapsed: TickStep[], instruction: string, pending: Change[]): string {
 	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], undefined, undefined, pending, [], elapsed)];
 	lines.push("", `${instruction} 直接输出散文正文。`);
 	return lines.join("\n");
@@ -462,8 +463,8 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			turn.acted = true;
 			const hasActions = !!params.actions?.length;
 			const refusal = hasActions ? undefined : params.refusal ? { label: params.refusal.label } : { label: "unparsed" };
-			const results: StepResult[] = [];
-			const elapsed: StepResult[] = [];
+			const results: ActionStep[] = [];
+			const elapsed: TickStep[] = [];
 			if (hasActions) {
 				for (const raw of params.actions!) {
 					const a = raw as { verb?: string; params?: Record<string, unknown> };

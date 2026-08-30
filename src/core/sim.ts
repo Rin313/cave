@@ -65,7 +65,7 @@ export interface Messages {
 	defaultReason: string;
 	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
 	notInActionPhase: string;
-	/** 时间流逝动作（TICK_VERB）的世界腔描述。 */
+	/** 时间流逝的世界腔描述（刻步的段头与近况渲染；事件流中刻不是动作）。 */
 	timePassed: string;
 }
 
@@ -92,7 +92,7 @@ export interface PropDef {
 	stylistic?: boolean;
 }
 
-/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。协议性标记由 StepResult.deniedBy:"protocol" 承担（单一事实源），Denial 只携带 referent 与诊断。 */
+/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。协议性标记由 ActionStep.deniedBy:"protocol" 承担（单一事实源），Denial 只携带 referent 与诊断。 */
 export interface Denial {
 	/** 法则标识 */
 	law: string;
@@ -109,10 +109,6 @@ export interface Denial {
 	/** 终局兜底标记：probe 据此报告法则缺口。 */
 	fallback?: boolean;
 }
-
-/** 引擎保留伪动词：时间系统（tick）产出 StepResult 时的动作标识。
- *  不是游戏声明的动词，游戏不应声明同名动词；describeAction 据此渲染「时间流逝」。 */
-export const TICK_VERB = "tick";
 
 // ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
 
@@ -373,7 +369,13 @@ export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
-export interface StepResult {
+/** 事件流条目（审计与表达输入的基本形态）：动作裁决与世界刻步是两种本体——
+ *  刻是世界的因（驱动 systems 的因果步，提交失败不回退时间），不是意志的果 */
+export type Step = ActionStep | TickStep;
+
+/** 动作裁决结果：一次动作过门的完整记录。 */
+export interface ActionStep {
+	kind: "action";
 	ok: boolean;
 	reason: string;
 	changes: Change[];
@@ -389,6 +391,22 @@ export interface StepResult {
 	facts?: Fact[];
 	involved?: string[];
 	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
+	src?: string;
+}
+
+/** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻）。零产出系统不产生条目。 */
+export interface TickStep {
+	kind: "tick";
+	at: number;
+	ok: boolean;
+	reason: string;
+	changes: Change[];
+	/** 刻步只会被不变式硬墙拦截（系统产出没有其他否决路径）。 */
+	deniedBy?: "invariant";
+	denial?: Denial;
+	facts?: Fact[];
+	involved?: string[];
+	/** 变更来源标识（system:<id>），审计依据。 */
 	src?: string;
 }
 
@@ -418,14 +436,14 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 }
 
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）。 */
-interface RawResult extends StepResult {
+interface RawResult extends Omit<ActionStep, "kind"> {
 	deltas: Delta[];
 }
 
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	readonly log: StepResult[] = [];
+	readonly log: Step[] = [];
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
 	/** 骰子键碰撞追踪：同一动作复现同值是随机推论的必然，同刻键重复才是隐性相关 bug。 */
@@ -579,31 +597,30 @@ export class Simulation {
 		return null;
 	}
 
-	apply(action: Action): StepResult {
+	apply(action: Action): ActionStep {
 		const r = this.adjudicateRaw(action);
-		let sr: StepResult;
+		let sr: ActionStep;
 		if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(r.deltas, src);
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
-				sr = { ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
+				sr = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 				this.log.push(sr);
 				return sr;
 			}
-			sr = { ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
+			sr = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
 		} else {
-			sr = { ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
+			sr = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
 
 		this.log.push(sr);
 		return sr;
 	}
 
-	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）；tick 伪动词无游戏词可连，走 Messages.timePassed。 */
+	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。 */
 	describeAction(action: Action): string {
 		const verb = this.def.verbs[action.verb];
-		if (action.verb === TICK_VERB) return messagesFor(this.def).timePassed;
 		if (!verb) return action.verb;
 		const name = (v: PropValue): string => {
 			if (typeof v === "string") {
@@ -621,8 +638,8 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
-	tick(n = 1): StepResult[] {
-		const out: StepResult[] = [];
+	tick(n = 1): TickStep[] {
+		const out: TickStep[] = [];
 		for (let i = 0; i < n; i++) {
 			this.world.time += 1;
 			out.push(...this.runSystems());
@@ -631,9 +648,9 @@ export class Simulation {
 	}
 
 	/** 按注册顺序运行全部系统一次，产出并提交 deltas。 */
-	private runSystems(): StepResult[] {
-		const out: StepResult[] = [];
-		const emit = (sr: StepResult): void => {
+	private runSystems(): TickStep[] {
+		const out: TickStep[] = [];
+		const emit = (sr: TickStep): void => {
 			this.log.push(sr);
 			out.push(sr);
 		};
@@ -643,28 +660,20 @@ export class Simulation {
 			// 纯氛围输出（fact-only，无状态变更）同样成立——氛围系统的合法通道
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			const cc = this.commitChecked(res.deltas, src);
+			const at = this.world.time;
 			if (!cc.ok) {
-				emit({
-					ok: false,
-					reason: cc.reason ?? messagesFor(this.def).noResponse,
-					changes: [],
-					action: { verb: TICK_VERB, params: { n: this.world.time } },
-					deniedBy: "invariant",
-					denial: cc.denial,
-					src,
-					ticks: 0,
-				});
+				emit({ kind: "tick", at, ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: cc.denial, src });
 				continue;
 			}
 			emit({
+				kind: "tick",
+				at,
 				ok: true,
 				reason: res.facts?.length ? res.facts.map((f) => f.text).join(" ") : (res.reason ?? messagesFor(this.def).defaultReason),
 				changes: cc.changes,
-				action: { verb: TICK_VERB, params: { n: this.world.time } },
 				facts: res.facts,
 				involved: collectInvolved(res.deltas, res.facts),
 				src,
-				ticks: 0,
 			});
 		}
 		return out;
@@ -672,7 +681,7 @@ export class Simulation {
 
 	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。表达层的"即将发生"合法预言来源。
 	 *  随机由 games 层以 World 状态自持（纯函数派生），克隆世界即完整预言——无需序列快照机制。 */
-	dryTick(n = 1): StepResult[] {
+	dryTick(n = 1): TickStep[] {
 		const clone = new Simulation(this.def, this.world);
 		return clone.tick(n);
 	}

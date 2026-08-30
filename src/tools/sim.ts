@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Simulation, TICK_VERB, propGet } from "../core/sim.ts";
-import type { Action, GameDef, PropValue, StepResult } from "../core/sim.ts";
+import { Simulation, propGet } from "../core/sim.ts";
+import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
 import { fmtChange } from "../core/engine.ts";
 import { getGame } from "../games/registry.ts";
 import { probeScope } from "../games/space.ts";
@@ -207,7 +207,7 @@ function parseActionToken(token: string, sim: Simulation): Action {
 	const [verbName, ...rest] = token.split(/\s+/);
 	const verb = sim.def.verbs[verbName!];
 	if (!verb) {
-		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；tick N 流逝时间；实体参数可用名称或 id）`);
+		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；advance n 显式摇钟；实体参数可用名称或 id）`);
 	}
 	const props = verb.schema.properties;
 	const paramOrder = Object.keys(props);
@@ -339,18 +339,12 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 	const def = getGame(gameId);
 	const sim = new Simulation(def);
 	for (const token of tokens) {
-		let results: StepResult[];
-		let actionDesc: string;
-		const verbName = token.split(/\s+/)[0];
-		// tick 是引擎保留关键字（时间流逝）；若游戏声明了同名动词则走游戏动词
-		if (verbName === TICK_VERB && !sim.def.verbs[TICK_VERB]) {
-			const n = Number(token.split(/\s+/)[1] ?? 1);
-			actionDesc = `tick ${n}`;
-			results = sim.tick(n);
-		} else {
-			actionDesc = token;
-			results = [sim.apply(parseActionToken(token, sim))];
-		}
+		const parts = token.split(/\s+/);
+		const head = parts[0]!;
+		const isAdvance = head === "advance";
+		const n = isAdvance ? Number(parts[1] ?? 1) : 0;
+		const actionDesc = isAdvance ? `advance ${n}` : token;
+		const results: Step[] = isAdvance ? sim.tick(n) : [sim.apply(parseActionToken(token, sim))];
 		if (results.length === 0) {
 			console.log(`\n>>> ${actionDesc}`);
 			console.log("（时间流逝，什么也没发生）");
@@ -358,7 +352,8 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		}
 		for (const r of results) {
 			console.log(`\n>>> ${actionDesc}`);
-			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : ""}${!r.ok && r.deniedBy === "invariant" && r.denial?.debug && r.denial.reason == null ? ` ⚠ ${r.denial.debug}` : ""}`);
+			const ticks = r.kind === "action" && r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : "";
+			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${ticks}${!r.ok && r.deniedBy === "invariant" && r.denial?.debug && r.denial.reason == null ? ` ⚠ ${r.denial.debug}` : ""}`);
 			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
 		}
 	}
@@ -368,7 +363,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		console.log(sim.digest());
 	}
 	console.log("\n=== 变更日志 ===");
-	for (const r of sim.log) console.log(`  ${JSON.stringify(r.action)} → ${r.reason}`);
+	for (const s of sim.log) console.log(`  ${s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`} → ${s.reason}`);
 }
 
 // ---------- 词汇 lint：游戏源文件的属性键读取对照 props 注册表 ----------
@@ -408,8 +403,8 @@ async function main(): Promise<void> {
   sim scenario <scenario.json>    运行单个法则引擎场景验证（场景文件内声明 game）
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
-    action: <动词> <参数>... | tick <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
-    研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；此处用 tick N 显式摇钟
+    action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
+    研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；advance n 显式摇钟
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与执行校验 bug（--max 控制组合预算，默认 10000）
   sim lint --game <id>    属性词汇 lint：扫描游戏源文件读取的属性键，报告未在 props 注册表声明的键（advisory）
 `);

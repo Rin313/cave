@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, fmtChange, type ActOutcome } from "../core/engine.ts";
 import { Simulation } from "../core/sim.ts";
-import type { GameDef, StepResult, World } from "../core/sim.ts";
+import type { GameDef, TickStep, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
@@ -118,7 +118,7 @@ function collectEvents(engine: Engine): CollectEventsResult {
 	return { unsub, texts, validations, toolCalls, usages };
 }
 
-async function renderScene(engine: Engine, instruction: string, elapsed: StepResult[] = []): Promise<{ text: string; validations: ValidationFailure[]; usages: UsageRow[] }> {
+async function renderScene(engine: Engine, instruction: string, elapsed: TickStep[] = []): Promise<{ text: string; validations: ValidationFailure[]; usages: UsageRow[] }> {
 	const { unsub, texts, validations, usages } = collectEvents(engine);
 	await engine.render(instruction, elapsed);
 	unsub();
