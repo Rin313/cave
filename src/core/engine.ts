@@ -382,7 +382,7 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refusal: { lab
 	return lines;
 }
 
-/** act 工具结果：本回合世界回应的世界腔策展——散文的唯一事件源（叙述只能跟随这里的内容）。 */
+/** act 工具结果：本回合世界回应的世界腔策展 */
 function buildResultView(sim: Simulation, results: ActionStep[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[]): string {
 	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed, elapsed);
 	return lines.join("\n");
