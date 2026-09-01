@@ -135,7 +135,7 @@ const takeVerb = defineVerb({
 					: `你把${q.name(p.entity)}收好了。`);
 			},
 		},
-		fallback("denyAll.take", (q) => `你带不走${q.name(String(q.params.entity))}。`),
+		fallback("take.fallback", (q) => `你带不走${q.name(String(q.params.entity))}。`),
 	],
 });
 
@@ -226,7 +226,7 @@ const interactVerb = defineVerb({
 		},
 		{ id: "int.snowman", judge: (q, p) => (p.entity !== "snowman" ? null : grant([], "雪人的两张脸都在笑。你又数了一遍，还是两张。")) },
 		{ id: "int.lake", judge: (q, p) => (p.entity !== "lake" ? null : grant([], "冰层很厚。厚冰下面，有什么东西慢慢地游了过去。")) },
-		fallback("denyAll.interact", (q) => {
+		fallback("interact.fallback", (q) => {
 			const t = q.entity(String(q.params.entity));
 			return t ? `${q.name(t.id)}没有任何反应。` : "那里已经什么都没有了。";
 		}),

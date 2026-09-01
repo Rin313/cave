@@ -63,7 +63,7 @@ export function denyUnreachable(world: World, player: string, id: string, opts: 
 }
 
 /** sim probe 的候选域缺省投影（space 构件约定）：可见实体 - 玩家 - space 场景。
- *  场景实体不是交互目标，进枚举域只会经 fallback 兜底规则产出假缺口噪声（probe 只认 denyAll 报缺口）。
+ *  场景实体不是交互目标，进枚举域只会经 fallback 兜底规则产出假缺口噪声（probe 只认 Denial.fallback 标记报缺口）。
  *  探测域是研究工具的裁剪面，非引擎语义；大实体量游戏的进一步收窄走 tools 层 per-game 配置。 */
 export function probeScope(world: World, player: string, visible: Iterable<string>): string[] {
 	return [...visible].filter((id) => id !== player && entity(world, id)?.props.space !== true);

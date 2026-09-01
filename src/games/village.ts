@@ -121,7 +121,7 @@ export const village: GameDef = {
 						return grant([D.set(p.entity, "in", q.player)], `你拾起了${q.name(p.entity)}。`);
 					},
 				},
-				fallback("denyAll.gather", (q) => `你拿不起${q.name(String(q.params.entity))}。`),
+				fallback("gather.fallback", (q) => `你拿不起${q.name(String(q.params.entity))}。`),
 			],
 		}),
 		eat: defineVerb({
@@ -225,7 +225,7 @@ export const village: GameDef = {
 						return grant([D.set(p.goods, "in", dest), D.inc(q.player, "coins", price), D.inc(vendorId, "coins", -price)], `你把${q.name(p.goods)}卖回给了${q.name(vendorId)}。`);
 					},
 				},
-				fallback("denyAll.sell", () => "你手里没有可出卖的货品。"),
+				fallback("sell.fallback", () => "你手里没有可出卖的货品。"),
 			],
 		}),
 		eatGrain: defineVerb({
@@ -281,7 +281,7 @@ export const village: GameDef = {
 				id: "harvest.bush",
 				judge: (q, p) => {
 					if (q.entity(p.bush)?.props.ripe !== true) return deny("harvest.unripe", { subject: p.bush, reason: `${q.name(p.bush)}还没有成熟。` });
-					if (!canReach(q, p.bush)) return deny("denyAll.harvest", { subject: p.bush, reason: `${q.name(p.bush)}无法被采集。`, fallback: true });
+					if (!canReach(q, p.bush)) return deny("harvest.fallback", { subject: p.bush, reason: `${q.name(p.bush)}无法被采集。`, fallback: true });
 					return grant([D.inc(q.player, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
 				},
 			}],
@@ -329,7 +329,7 @@ export const village: GameDef = {
 				id: "dog.chase",
 				// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 				judge: (q, p) => {
-					if (!canReach(q, p.dog)) return deny("denyAll.subdue", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
+					if (!canReach(q, p.dog)) return deny("subdue.fallback", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
 					// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
 					if (q.entity(p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { subject: p.dog, reason: `${q.name(p.dog)}不是赶得跑的野兽。` });
 					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { subject: p.dog, reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
@@ -349,7 +349,7 @@ export const village: GameDef = {
 				judge: (q) => {
 					const cur = q.entity(q.player)?.props["in"];
 					const spot = typeof cur === "string" ? q.entity(cur) : null;
-					if (!spot) return deny("denyAll.scout", { reason: "这里没什么可翻找的。", fallback: true });
+					if (!spot) return deny("scout.fallback", { reason: "这里没什么可翻找的。", fallback: true });
 					if (q.roll("find.coin", 4) < 3) return deny("scout.unlucky", { reason: "你翻找了一圈，一无所获。" });
 					if (num(spot.props.coins) < 2) return deny("scout.picked", { subject: spot.id, reason: "能捡的都被人捡干净了。" });
 					return grant([D.inc(spot.id, "coins", -2), D.inc(q.player, "coins", 2)], "你四处翻了翻，在墙角捡到了两枚铜币。");

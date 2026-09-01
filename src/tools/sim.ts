@@ -250,7 +250,7 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	const sim = new Simulation(def);
 	/** 实体参数缺省域 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数覆盖走 PROBE_DOMAINS。 */
 	const scope = new Set(probeScope(sim.world, def.playerId, sim.visible()));
-	const gaps: { verb: string; op: string; reason: string; law?: string }[] = [];
+	const gaps: { verb: string; op: string; reason: string; law: string }[] = [];
 	/** 核心级不变拒绝（deniedBy=invariant 且无世界腔理由——integrity/commit 执行校验）= 规则/系统 bug 信号；
 	 *  游戏不变式的拒绝带 message（世界的必要性拦截，玩法），不在此列。 */
 	const bugs: { verb: string; op: string; debug: string }[] = [];
@@ -260,8 +260,8 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 	const probeAction = (action: Action) => {
 		const fresh = new Simulation(def);
 		const r = fresh.apply(action);
-		if (!r.ok && r.deniedBy === "denyAll") {
-			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial?.law });
+		if (!r.ok && r.denial?.fallback === true) {
+			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial.law });
 		}
 		if (!r.ok && r.deniedBy === "invariant" && r.denial && r.denial.reason == null) {
 			bugs.push({ verb: action.verb, op: describeAction(action, def), debug: r.denial.debug ?? r.denial.law });
@@ -327,7 +327,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 		console.log(`「${verbName}」缺口: ${vg.length}`);
 		for (const g of vg) console.log(`  [GAP] ${g.op} → ${g.reason}`);
 	}
-	if (!gaps.length) console.log(`缺口: 0（${Object.keys(def.verbs).length} 个动词全部越过 denyAll 兜底）`);
+	if (!gaps.length) console.log(`缺口: 0（${Object.keys(def.verbs).length} 个动词全部越过兜底标记）`);
 	console.log(`执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
 	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.debug}`);
 	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或在 PROBE_DOMAINS（tools 层探测域配置）收窄候选域。");
@@ -337,6 +337,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
 	const def = getGame(gameId);
 	const sim = new Simulation(def);
+	const steps: Step[] = [];
 	for (const token of tokens) {
 		const parts = token.split(/\s+/);
 		const head = parts[0]!;
@@ -344,6 +345,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		const n = isAdvance ? Number(parts[1] ?? 1) : 0;
 		const actionDesc = isAdvance ? `advance ${n}` : token;
 		const results: Step[] = isAdvance ? sim.tick(n) : [sim.apply(parseActionToken(token, sim))];
+		steps.push(...results);
 		if (results.length === 0) {
 			console.log(`\n>>> ${actionDesc}`);
 			console.log("（时间流逝，什么也没发生）");
@@ -362,7 +364,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		console.log(sim.digest());
 	}
 	console.log("\n=== 变更日志 ===");
-	for (const s of sim.log) console.log(`  ${s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`} → ${s.reason}`);
+	for (const s of steps) console.log(`  ${s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`} → ${s.reason}`);
 }
 
 // ---------- 词汇 lint：游戏源文件的属性键读取对照 props 注册表 ----------
@@ -404,7 +406,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
     研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；advance n 显式摇钟
-  sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到 denyAll 的法则缺口与执行校验 bug（--max 控制组合预算，默认 10000）
+  sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到兜底标记（Denial.fallback）的法则缺口与执行校验 bug（--max 控制组合预算，默认 10000）
   sim lint --game <id>    属性词汇 lint：扫描游戏源文件读取的属性键，报告未在 props 注册表声明的键（advisory）
 `);
 		return;

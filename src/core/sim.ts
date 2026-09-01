@@ -97,13 +97,13 @@ export interface Denial {
 	subject?: string;
 	/** 受动实体 id（结构化亲证：进结果视图「涉及」行与审计）。 */
 	object?: string;
-	/** 涉及属性（denyAll 等按属性兜底的模板用）。 */
+	/** 涉及属性（按属性兜底的模板用）。 */
 	prop?: string;
 	/** 世界腔拒绝文案（法则 text 内联渲染 / 可达性构件 prose / 不变式 message）；缺省回落到 messages.noResponse。 */
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
 	debug?: string;
-	/** 终局兜底标记：probe 据此报告法则缺口。 */
+	/** 作者的兜底自声明：probe 据此报告法则缺口 */
 	fallback?: boolean;
 }
 
@@ -170,7 +170,7 @@ export function deny(law: string, o: { subject?: string; object?: string; prop?:
 	return { ok: false, denial: { law, ...o } };
 }
 
-/** 终局兜底规则：无条件拒绝并带 fallback 标记（probe 据此报告法则缺口）。 */
+/** 兜底规则：无条件拒绝，Denial 带 fallback 自声明标记（probe 据此报告法则缺口）。 */
 export function fallback(id: string, text: (q: Q) => string): Rule {
 	return { id, judge: (q: Q) => deny(id, { reason: text(q), fallback: true }) };
 }
@@ -359,9 +359,10 @@ export interface ActionStep {
 	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价，协议性拒绝为 0。
 	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；引擎据此逐刻推进 systems，研究工具显式摇钟。 */
 	ticks: number;
-	/** 否决来源：具体法则给了世界性理由（rule）、通用兜底（denyAll）、映射层形态错误的协议性拒绝（protocol，引擎↔模型通道流量，表达层整体过滤），
-	 *  或不变式硬墙的必要性拦截（invariant——规格违反信号或戏剧性必然，与法则否决是不同语义来源，审计应可区分）。 */
-	deniedBy?: "rule" | "denyAll" | "protocol" | "invariant";
+	/** 否决来源：rule——动词法则网络的否决（含全部规则未表态时的引擎闭合回落，
+	 *  law "action.unanswered"）；protocol——映射层形态错误（引擎↔模型通道流量，表达层整体过滤）；
+	 *  invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。法则缺口不在本枚举——探测读 Denial.fallback。 */
+	deniedBy?: "rule" | "protocol" | "invariant";
 	/** 结构化拒绝（deniedBy=rule 时给出），供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
@@ -442,7 +443,6 @@ interface RawResult extends Omit<ActionStep, "kind"> {
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	readonly log: Step[] = [];
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
 	/** 骰子键碰撞追踪：同一动作复现同值是随机推论的必然，同刻键重复才是隐性相关 bug。 */
@@ -502,9 +502,9 @@ export class Simulation {
 			if (v.ok) {
 				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}`, ticks: grantedTicks(v.ticks, cost) };
 			}
-			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: v.denial.fallback ? "denyAll" : "rule", denial: v.denial, ticks: cost };
+			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}
-		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "denyAll", ticks: cost };
+		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered", fallback: true }, ticks: cost };
 	}
 
 	/** 构造规则判定上下文：引擎隐式语义在此唯一收口。 */
@@ -601,7 +601,6 @@ export class Simulation {
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
 				sr = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
-				this.log.push(sr);
 				return sr;
 			}
 			sr = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
@@ -609,7 +608,6 @@ export class Simulation {
 			sr = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
 
-		this.log.push(sr);
 		return sr;
 	}
 
@@ -646,7 +644,6 @@ export class Simulation {
 	private runSystems(): TickStep[] {
 		const out: TickStep[] = [];
 		const emit = (sr: TickStep): void => {
-			this.log.push(sr);
 			out.push(sr);
 		};
 		for (const sys of this.def.systems ?? []) {
