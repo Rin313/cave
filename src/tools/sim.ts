@@ -368,7 +368,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 // ---------- 词汇 lint：游戏源文件的属性键读取对照 props 注册表 ----------
 
 /** 扫描游戏源文件（src/games/<id>.ts）静态可见的属性键：`.props.x` 与 `.props["x"]`。
- *  未注册键照常工作但失去 label/internal/stylistic 控制且不受类型契约约束——internal 泄漏与 label 回退由此提前暴露。
+ *  未注册键照常工作但失去 label/internal 控制且不受类型契约约束——internal 泄漏与 label 回退由此提前暴露。
  *  盲区（动态索引 props[var]、共享构件 space.ts 内的读取）属 review 面；构件契约键由使用方游戏注册。 */
 async function cmdLint(gameId: string): Promise<void> {
 	const def = getGame(gameId);
@@ -391,7 +391,7 @@ async function cmdLint(gameId: string): Promise<void> {
 		return;
 	}
 	for (const [key, n] of [...unknown].sort()) console.log(`  ⚠ 未声明属性「${key}」（${n} 处）`);
-	console.log("未声明属性照常工作（视为普通可见属性），但失去 label/internal/stylistic 控制且不受注册表约束；建议登记进 GameDef.props。");
+	console.log("未声明属性照常工作（视为普通可见属性），但失去 label/internal 控制且不受注册表约束；建议登记进 GameDef.props。");
 }
 
 async function main(): Promise<void> {

@@ -16,11 +16,11 @@ const YUME_PROPS: Record<string, PropDef> = {
 	space: { type: "boolean", label: "地点" },
 	awake: { type: "boolean", label: "清醒" },
 	ended: { type: "boolean", internal: true },
-	ending: { type: "boolean", label: "终局", stylistic: true },
+	ending: { type: "boolean", label: "终局" },
 	dark: { type: "boolean", label: "昏暗" },
 	takable: { type: "boolean", label: "可拾取" },
 	vended: { type: "boolean", internal: true },
-	desc: { type: "string", label: "样子", stylistic: true },
+	desc: { type: "string", label: "样子" },
 	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册
 	openable: { type: "boolean", label: "可开" },
 	open: { type: "boolean", label: "已开" },

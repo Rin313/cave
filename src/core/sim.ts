@@ -80,16 +80,13 @@ export interface Fact {
 /** 属性类型。 */
 export type PropType = "string" | "number" | "boolean" | "id" | "any";
 
-/** 属性注册表条目：类型的声明、世界化标签、内部标记、可选值域。 */
+/** 属性注册表条目：类型的声明、世界化标签、内部标记 */
 export interface PropDef {
 	type: PropType;
 	/** 世界化说法（拒绝/变更文本里的属性名）。 */
 	label?: string;
 	/** 内部属性：不进 LLM 序列化、不进变更线性化（从源头杜绝泄漏）。 */
 	internal?: boolean;
-	/** 润饰属性：表达层可对此属性做合理文学润饰（系统提示注入可润饰属性）。
-	 *  非润饰的物理属性须与状态严格一致 */
-	stylistic?: boolean;
 }
 
 /** 结构化拒绝：非散文，散文由引擎按法则模板渲染。协议性标记由 ActionStep.deniedBy:"protocol" 承担（单一事实源），Denial 只携带 referent 与诊断。 */
@@ -341,13 +338,6 @@ export function messagesFor(def: GameDef): Messages {
 export function internalPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
 	for (const [k, p] of Object.entries(def.props ?? {})) if (p.internal) s.add(k);
-	return s;
-}
-
-/** 从属性注册表计算润饰属性集（表达层可文学润饰、不参与断言校验）。 */
-export function stylisticPropsOf(def: GameDef): Set<string> {
-	const s = new Set<string>();
-	for (const [k, p] of Object.entries(def.props ?? {})) if (p.stylistic) s.add(k);
 	return s;
 }
 
