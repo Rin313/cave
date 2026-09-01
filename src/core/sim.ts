@@ -112,7 +112,7 @@ export interface Denial {
 
 // ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
 
-/** 规则判定上下文：只读世界视图 + 引擎隐式语义的唯一入口（可达性/可持握/关系/骰子/时间）。
+/** 规则判定上下文：只读世界视图 + 引擎自有语义的唯一入口（关系/骰子/时间/可见性）。
  *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
 export interface Q {
 	readonly world: World;
@@ -131,10 +131,6 @@ export interface Q {
 	relNum(from: string, to: string, type: string, dflt: number): number;
 	/** 确定性骰子（World 纯函数，check/apply/dryTick 一致）。 */
 	roll(key: string, sides: number): number;
-	canReach(id: string): boolean;
-	reachWhy(id: string): string | null;
-	/** 可持握（GameDef.holdable 槽位的现值；未声明即恒 false——遗漏在规则层变响）。 */
-	holdable(id: string): boolean;
 	visible(): Set<string>;
 }
 
@@ -260,17 +256,8 @@ export interface GameDef {
 	props?: Record<string, PropDef>;
 	/** 确定性回退摘要钩子（player = 意志居所）。 */
 	summarize?: (input: { world: World; changes: Change[]; player: string }) => string;
-	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见。 */
+	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */
 	grounding?: (world: World, player: string) => string[];
-	/** 可达性槽位（游戏声明）：实体是否够得着。core 不内嵌任何空间模型——容器包含树等由游戏自选
-	 *  构件提供，缺省全部可达。P.reach / 规则的施动前提卫语句（Q.canReach）共用此谓词。 */
-	reach?: (world: World, player: string, id: string) => boolean;
-	/** 可达性理由槽位：不可达时返回世界腔理由（拒绝文案），可达返回 null。缺省 null。 */
-	reachReason?: (world: World, player: string, id: string) => string | null;
-	/** 可持握槽位：实体能否被拿起/当施动工具。core 不内嵌任何属性名、不提供缺省——
-	 *  未声明的游戏默认全部不可持握；游戏自定语义（grabbable 属性、体力门槛、材质、锋利等）。
-	 *  消费者是规则内的施动前提卫语句（经 Q.holdable，与 Q.canReach 同一模式）。 */
-	holdable?: (world: World, player: string, id: string) => boolean;
 	/** 状态视图的派生纹理（世界 + 玩家 → 顶层附加字段）：出口、随身清单等游戏自持语义的呈现。
 	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，extra 不承载它；携带可指名 id 时应配合
 	 *  非 entityParams 参数消费（地点恒可指名，由法则层回答）。 */
@@ -513,11 +500,10 @@ export class Simulation {
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
 		if (invalid.length) {
-			// 已存在但不可见的实体用游戏自己的可达性理由解释（关着的容器/不在本地）；幻觉 id 无名字，回落通用文案
+			// 世界腔由游戏 messages 注入：已存在但不可见的实体收解析名，幻觉 id 无名字（收空列表）
 			const first = invalid[0]!;
 			const hit = entity(this.world, first);
-			const reason =
-				(hit ? (this.def.reachReason?.(this.world, this.player, first) ?? msgs.invisibleEntity?.([hit.name])) : msgs.invisibleEntity?.([])) ?? msgs.noResponse;
+			const reason = msgs.invisibleEntity?.(hit ? [hit.name] : []) ?? msgs.noResponse;
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", subject: first, reason, debug: invalid.join(",") }, ticks: cost };
 		}
 		const q = this.query(action.params);
@@ -554,9 +540,6 @@ export class Simulation {
 				this.traceRollKey(key);
 				return rollDice(world, key, sides);
 			},
-			canReach: (id) => (this.def.reach ? this.def.reach(world, player, id) : true),
-			reachWhy: (id) => (this.def.reachReason ? this.def.reachReason(world, player, id) : null),
-			holdable: (id) => (this.def.holdable ? this.def.holdable(world, player, id) : false),
 			visible: () => this.visible(),
 		};
 	}

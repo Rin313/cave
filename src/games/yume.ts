@@ -1,6 +1,6 @@
 import type { Change, GameDef, PropDef, PropValue, Q, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
-import { denyUnreachable, reachFor } from "./space.ts";
+import { denyUnreachable, inTreeReach } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -34,6 +34,7 @@ const EFFECTS = ["knife_effect", "lamp_effect", "cat_effect", "bike_effect"] as 
 const hasEffect = (q: Q, id: string): boolean => entity(q.world, id)?.props.in === q.player;
 const hasAllEffects = (q: Q): boolean => EFFECTS.every((e) => hasEffect(q, e));
 const hereOf = (q: Q): string => String(q.entity(q.player)?.props["in"] ?? "");
+const canReach = (q: Q, id: string): boolean => inTreeReach(q.world, q.player, id).ok;
 
 function summarizeYume(input: { world: World; changes: Change[]; player: string }): string {
 	const { world, changes, player } = input;
@@ -125,7 +126,7 @@ const takeVerb = defineVerb({
 		{
 			id: "take.it",
 			judge: (q, p) => {
-				if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
+				if (!canReach(q, p.entity)) return denyUnreachable(q.world, q.player, p.entity);
 				const t = q.entity(p.entity);
 				if (t?.props.takable !== true) return deny("take.heavy", { subject: p.entity, reason: `${q.name(p.entity)}带不走。` });
 				if (t.props["in"] === q.player) return deny("take.held", { subject: p.entity, reason: `${q.name(p.entity)}已经收好了。` });
@@ -346,7 +347,6 @@ export const yume: GameDef = {
 		}
 		return [...out];
 	},
-	...reachFor(),
 	summarize: summarizeYume,
 	digestExtra: digestExtraYume,
 	hint: `世界法则（模拟层强制执行）：

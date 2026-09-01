@@ -1,10 +1,9 @@
-import type { Entity, Q, Verdict, World } from "../core/sim.ts";
+import type { Entity, Verdict, World } from "../core/sim.ts";
 import { entity } from "../core/sim.ts";
 
-/** 容器包含树可达性的游戏侧构件：core 不内嵌任何空间模型，需要空间语义的游戏自选接入。
+/** 容器包含树空间语义的游戏侧构件：core 不内嵌任何空间模型，需要空间语义的游戏自选接入。
  *  语义与理由文案内置于本构件（games 层可含语言），SpaceOpts.msgs 可逐项覆盖；
- *  关容器对实体的放行（楔住等）由游戏经 containerAccess 裁决。
- *  附带的 GameDef.reach/reachReason 接线（reachFor）供游戏直接展开到 GameDef。 */
+ *  关容器对实体的放行（楔住等）由游戏经 containerAccess 裁决。 */
 
 const REACH_MSGS = {
 	reachMissing: "这里没有这个东西。",
@@ -57,27 +56,14 @@ export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}
 	return vis;
 }
 
-/** 由 inTreeReach 派生的 GameDef.reach / reachReason 槽位（不可达时的世界腔理由）。 */
-export function reachFor(opts: SpaceOpts = {}): {
-	reach: (world: World, player: string, id: string) => boolean;
-	reachReason: (world: World, player: string, id: string) => string | null;
-} {
-	return {
-		reach: (world, player, id) => inTreeReach(world, player, id, opts).ok,
-		reachReason: (world, player, id) => {
-			const r = inTreeReach(world, player, id, opts);
-			return r.ok ? null : (r.reason || null);
-		},
-	};
-}
-
 /** 不可达拒绝（卫语句用）：law "reach"，理由为空间构件的世界腔文案，缺省回落构件缺省语。 */
-export function denyUnreachable(q: Q, id: string): Verdict {
-	return { ok: false, denial: { law: "reach", subject: id, reason: q.reachWhy(id) || REACH_MSGS.reachNotHere } };
+export function denyUnreachable(world: World, player: string, id: string, opts: SpaceOpts = {}): Verdict {
+	const r = inTreeReach(world, player, id, opts);
+	return { ok: false, denial: { law: "reach", subject: id, reason: r.reason || REACH_MSGS.reachNotHere } };
 }
 
 /** sim probe 的候选域缺省投影（space 构件约定）：可见实体 - 玩家 - space 场景。
- *  场景实体不是交互目标，进枚举域只会经 fallback 兕底规则产出假缺口噪声（probe 只认 denyAll 报缺口）。
+ *  场景实体不是交互目标，进枚举域只会经 fallback 兜底规则产出假缺口噪声（probe 只认 denyAll 报缺口）。
  *  探测域是研究工具的裁剪面，非引擎语义；大实体量游戏的进一步收窄走 tools 层 per-game 配置。 */
 export function probeScope(world: World, player: string, visible: Iterable<string>): string[] {
 	return [...visible].filter((id) => id !== player && entity(world, id)?.props.space !== true);

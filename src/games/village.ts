@@ -1,7 +1,7 @@
 import type { Change, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
-import { denyUnreachable, inTreeVisible, reachFor } from "./space.ts";
+import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -68,6 +68,8 @@ const loyalCut = (q: Q, vendorId: string): number => {
 	if (!v || v.props.dealTrust === undefined) return 0;
 	return trust(q, vendorId) >= num(v.props.dealTrust) ? num(v.props.dealCut) : 0;
 };
+const canReach = (q: Q, id: string): boolean => inTreeReach(q.world, q.player, id).ok;
+const holdable = (q: Q, id: string): boolean => entity(q.world, id)?.props.grabbable === true;
 
 function summarizeChange(world: World, c: Change): string {
 	if (c.kind === "spawn") return `出现了：${c.name}。`;
@@ -112,9 +114,9 @@ export const village: GameDef = {
 				{
 					id: "gather.take",
 					judge: (q, p) => {
-						if (!q.canReach(p.entity)) return denyUnreachable(q, p.entity);
+						if (!canReach(q, p.entity)) return denyUnreachable(q.world, q.player, p.entity);
 						const t = q.entity(p.entity);
-						if (!t || !q.holdable(p.entity)) return deny("gather.grabbable", { subject: p.entity, reason: `${q.name(p.entity)}搬不动。` });
+						if (!t || !holdable(q, p.entity)) return deny("gather.grabbable", { subject: p.entity, reason: `${q.name(p.entity)}搬不动。` });
 						if (t.props.in === q.player) return null;
 						return grant([D.set(p.entity, "in", q.player)], `你拾起了${q.name(p.entity)}。`);
 					},
@@ -195,7 +197,7 @@ export const village: GameDef = {
 						if (!yields && g.props.in === q.player) return deny("buy.held", { subject: p.goods, reason: `${q.name(p.goods)}已经在你手里了。` });
 						const price = Math.max(1, (pb ?? pr!) - (yields ? stock : 0) - loyalCut(q, vendorId));
 						if (num(q.entity(q.player)?.props.coins) < price) return deny("buy.broke", { subject: vendorId, reason: "你的钱不够。" });
-						if (!q.canReach(p.goods)) return denyUnreachable(q, p.goods);
+						if (!canReach(q, p.goods)) return denyUnreachable(q.world, q.player, p.goods);
 						return yields
 							? grant([D.inc(p.goods, yields, -1), D.inc(q.player, yields, 1), D.inc(vendorId, "coins", price), D.inc(q.player, "coins", -price)], `你花${price}铜币从${q.name(vendorId)}手里买了一份${q.name(p.goods)}的出产。`)
 							: grant([D.set(p.goods, "in", q.player), D.inc(vendorId, "coins", price), D.inc(q.player, "coins", -price)], `你花${price}铜币向${q.name(vendorId)}买下了${q.name(p.goods)}。`);
@@ -248,7 +250,7 @@ export const village: GameDef = {
 				{
 					id: "draw.water",
 					judge: (q, p) => {
-						if (!q.canReach(p.source)) return denyUnreachable(q, p.source);
+						if (!canReach(q, p.source)) return denyUnreachable(q.world, q.player, p.source);
 						const w = q.entity(p.source);
 						if (!w || w.props.supply !== true) return deny("draw.dry", { subject: p.source, reason: `${q.name(p.source)}还是枯的，打不出水。`, fallback: true });
 						if (num(w.props.water) < 1) return deny("draw.empty", { subject: p.source, reason: `${q.name(p.source)}的存水已经见底了。` });
@@ -279,7 +281,7 @@ export const village: GameDef = {
 				id: "harvest.bush",
 				judge: (q, p) => {
 					if (q.entity(p.bush)?.props.ripe !== true) return deny("harvest.unripe", { subject: p.bush, reason: `${q.name(p.bush)}还没有成熟。` });
-					if (!q.canReach(p.bush)) return deny("denyAll.harvest", { subject: p.bush, reason: `${q.name(p.bush)}无法被采集。`, fallback: true });
+					if (!canReach(q, p.bush)) return deny("denyAll.harvest", { subject: p.bush, reason: `${q.name(p.bush)}无法被采集。`, fallback: true });
 					return grant([D.inc(q.player, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
 				},
 			}],
@@ -327,7 +329,7 @@ export const village: GameDef = {
 				id: "dog.chase",
 				// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 				judge: (q, p) => {
-					if (!q.canReach(p.dog)) return deny("denyAll.subdue", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
+					if (!canReach(q, p.dog)) return deny("denyAll.subdue", { subject: p.dog, reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
 					// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
 					if (q.entity(p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { subject: p.dog, reason: `${q.name(p.dog)}不是赶得跑的野兽。` });
 					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { subject: p.dog, reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
@@ -459,9 +461,6 @@ export const village: GameDef = {
 		},
 	],
 	grounding: (world, player) => [...inTreeVisible(world, player)],
-	...reachFor(),
-	// 可持握语义由游戏声明（core 不假定属性名）：河畔村只有 grabbable 的东西可被拿起。
-	holdable: (world, _player, id) => entity(world, id)?.props.grabbable === true,
 	summarize: summarizeVillage,
 	hint: `世界法则（模拟层强制执行）：
 1. 时间随行为流逝：拾取/采集/汲水/修葺/驱逐/翻找各耗一刻，吃喝、买卖、攀谈不耗时间，歇息片刻耗一刻，昏睡一夜耗四刻，等待可指定刻数。每过一刻：疲劳 +2；饱腹 > 0 时饱腹 -6；饱腹耗尽后体力每刻 -4；疲劳满 100 昏厥；体力见底昏迷。歇息可恢复，昏迷时歇息可醒来（睡一夜）。
