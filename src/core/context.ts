@@ -10,7 +10,6 @@ export interface MemoryTurn {
 	intent: string;
 	kind: "applied" | "rejected" | "refused" | "partial";
 	moves: string[];
-	refusal?: string;
 }
 
 export const MEMORY_CUSTOM_TYPE = "cave.memory";
@@ -34,7 +33,6 @@ export function loadMemory(entries: readonly EntryLike[]): MemoryTurn[] {
 			intent: String(d.intent),
 			kind: d.kind === "applied" || d.kind === "rejected" || d.kind === "partial" ? d.kind : "refused",
 			moves: Array.isArray(d.moves) ? d.moves.map(String) : [],
-			refusal: typeof d.refusal === "string" ? d.refusal : undefined,
 		});
 	}
 	return out.slice(-MEMORY_LIMIT);
@@ -44,7 +42,7 @@ export function loadMemory(entries: readonly EntryLike[]): MemoryTurn[] {
 export function renderMemory(memory: readonly MemoryTurn[]): string {
 	if (!memory.length) return "";
 	const lines = memory.map((m) => {
-		const moves = m.moves.length ? m.moves.join("；") : `未解析（${m.refusal ?? "?"}）`;
+		const moves = m.moves.length ? m.moves.join("；") : "未解析";
 		return `- t${m.time} 「${m.intent}」→ ${moves}`;
 	});
 	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");

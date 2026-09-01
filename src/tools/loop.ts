@@ -155,8 +155,7 @@ function printAct(sim: Simulation, o: {
 	usages: UsageRow[]; narration: string; brief?: boolean;
 }): void {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
-	const ref = o.outcome.refusal ? `（${o.outcome.refusal.label}）` : "";
-	console.log(`\n【#${o.turn} act】${o.intent}${sel} → ${o.outcome.kind}${ref}`);
+	console.log(`\n【#${o.turn} act】${o.intent}${sel} → ${o.outcome.kind}`);
 	for (const l of proposalLines(o.toolCalls)) console.log(l);
 	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action)}：${r.reason}`);
 	for (const r of o.outcome.elapsed) {
@@ -248,7 +247,6 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			selection: selection ?? null,
 			toolCalls,
 			kind: outcome.kind,
-			refusal: outcome.refusal ?? null,
 			results: outcome.results,
 			elapsed: outcome.elapsed,
 			narration,
@@ -281,7 +279,7 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 				const narration = texts.join("");
 				const entry = {
 					turn: meta.turn, phase: "act", intent: line, selection: null, toolCalls,
-					kind: outcome.kind, refusal: outcome.refusal ?? null, results: outcome.results, elapsed: outcome.elapsed,
+					kind: outcome.kind, results: outcome.results, elapsed: outcome.elapsed,
 					narration, validations, usage: usages,
 				};
 				appendTranscript(dir, entry);

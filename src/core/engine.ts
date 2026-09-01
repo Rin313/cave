@@ -32,7 +32,6 @@ export interface ActOutcome {
 	results: ActionStep[];
 	/** 本回合时间流逝产出（动作授予刻数逐刻运行 systems 的刻步；时间律：无裁决即无流逝），不计入 kind。 */
 	elapsed: TickStep[];
-	refusal?: { label: string; reason?: string };
 }
 
 /** 叙述通道三事件（Engine 是 pi 流到玩家视野的转译器：映射期文本与 thinking 永不入此通道）：
@@ -51,7 +50,7 @@ export type EngineEvent =
 
 /** act 工具 execute 向 Engine 直通回写裁决结果（不经事件流嗅探或工具结果解析往返）。 */
 interface TurnChannel {
-	onAdjudication: ((patch: { results?: ActionStep[]; refusal?: { label: string }; elapsed?: TickStep[] }) => void) | null;
+	onAdjudication: ((patch: { results?: ActionStep[]; elapsed?: TickStep[] }) => void) | null;
 }
 
 /** 单回合通道状态：变异窗口门闩 + 叙述账本（按生成代记账，镜像 pi 的重试语义）。
@@ -105,14 +104,6 @@ export class Engine {
 				else if (anyApplied) this.outcome.kind = "applied";
 				else if (anyRejected) this.outcome.kind = "rejected";
 				else this.outcome.kind = "refused";
-			}
-			if (patch.refusal) {
-				this.emit({ type: "tool_result", results: [] });
-				// 拒绝只在尚无已裁决动作时成立：动作一旦入账后果已发生，迟到的 refusal 不覆盖裁决
-				if (this.outcome.results.length === 0) {
-					this.outcome.kind = "refused";
-					this.outcome.refusal = patch.refusal;
-				}
 			}
 			if (patch.elapsed?.length) {
 				this.outcome.elapsed = patch.elapsed;
@@ -246,7 +237,6 @@ export class Engine {
 		if (!this.turn.acted) {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
 			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
-			this.outcome.refusal = { label: "unparsed" };
 			this.emit({ type: "validation", round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
 			narration = this.summarize([]);
 		} else {
@@ -268,7 +258,6 @@ export class Engine {
 			intent,
 			kind: o.kind,
 			moves: [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves],
-			refusal: o.refusal?.label,
 		});
 		if (this.memory.length > MEMORY_LIMIT) this.memory.splice(0, this.memory.length - MEMORY_LIMIT);
 		try {
@@ -327,21 +316,19 @@ function buildTurnPrompt(state: string, intent: string, selection: string | unde
 	const intentLine = selection
 		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
 		: `玩家意图：「${intent}」`;
-	return `[当前状态]（唯一真相源）：\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（或结构化拒绝）；世界裁决后基于返回的结果描写本回合。`;
+	return `[当前状态]（唯一真相源）：\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（构造不出合法提案则提交空提案）；世界裁决后基于返回的结果描写本回合。`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
-	const hint = def.hint ? `${def.hint}\n` : "";
 	const verbs = Object.entries(def.verbs)
 		.map(([name, v]) => `- ${name}「${v.label}」：${v.description}${v.entityParams?.length ? `（实体参数：${v.entityParams.join("/")}，只能取可见实体 id）` : ""}`)
 		.join("\n");
-		return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions 与结构化 refusal（仅 label：unparsed，不写理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
+	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
 部分回合没有行动窗口（渲染回合，如开场或纯时间流逝）：回合 prompt 顶部会标注「渲染回合」，此时不要调用 act，直接输出散文正文。
-世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名；实体属性由当前游戏的法则网络定义，见下方提示。
+世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名。
 可用动词（模拟层强制执行）：
 ${verbs}
 
-${hint}
 描写硬约束：
 - 叙述只能跟随 act 返回的裁决结果（尝试、变更、法则事实、新见）与世界状态中的实体和属性。
 - 状态与裁决中不存在的物体、人物、现象、后果不得出现——后果由世界法则产生，不由你创造；对已有内容的转写与渲染（措辞、视角、氛围、文学手法）一律自由，只须不与状态矛盾。
@@ -361,10 +348,10 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
  *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、即将发生、新见。core 只做符号连接。
  *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
-function formatTurnEvents(sim: Simulation, results: ActionStep[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[] = []): string[] {
+function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[] = []): string[] {
 	const lines: string[] = [];
 	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
-	if (refusal) {
+	if (refused) {
 		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	}
 	const narratable = results.filter((r) => r.deniedBy !== "protocol");
@@ -378,7 +365,7 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refusal: { lab
 			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
 			lines.push(`- 尝试「${sim.describeAction(r.action)}」→ ${verdict}${changes}${facts}${involved}`);
 		}
-	} else if (!refusal && !elapsedEvents.length) {
+	} else if (!refused && !elapsedEvents.length) {
 		lines.push("没有任何改变。");
 	}
 	if (elapsedEvents.length) {
@@ -407,14 +394,14 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refusal: { lab
 }
 
 /** act 工具结果：本回合世界回应的世界腔策展 */
-function buildResultView(sim: Simulation, results: ActionStep[], refusal: { label: string } | undefined, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[]): string {
-	const lines = formatTurnEvents(sim, results, refusal, intent, pending, revealed, elapsed);
+function buildResultView(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[]): string {
+	const lines = formatTurnEvents(sim, results, refused, intent, pending, revealed, elapsed);
 	return lines.join("\n");
 }
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
 function buildRenderPrompt(sim: Simulation, elapsed: TickStep[], instruction: string, pending: Change[]): string {
-	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], undefined, undefined, pending, [], elapsed)];
+	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], false, undefined, pending, [], elapsed)];
 	lines.push("", `${instruction} 直接输出散文正文。`);
 	return lines.join("\n");
 }
@@ -436,21 +423,13 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）或结构化拒绝。能构造出合法动作（动词承载意图、实体参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 提交空 actions 与 refusal（仅 label：unparsed）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
+		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）。能构造出合法动作（动词承载意图、实体参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 省略 actions（空提案即拒绝，不写任何理由）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
-				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时应省略" }),
-			),
-			refusal: Type.Optional(
-				Type.Object(
-					{
-						label: Type.String({ description: "固定填 unparsed" }),
-					},
-					{ description: "构造不出合法提案时的结构化拒绝；理由由世界法则给出，模型不撰写" },
-				),
+				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" }),
 			),
 		}),
-		execute: async (_toolCallId, params: { actions?: unknown[]; refusal?: { label: string } }) => {
+		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
 			if (!turn.gateOpen) {
 				return {
 					content: [{ type: "text", text: JSON.stringify({ ok: false, error: messagesFor(def).notInActionPhase }) }],
@@ -461,7 +440,6 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			turn.gateOpen = false;
 			turn.acted = true;
 			const hasActions = !!params.actions?.length;
-			const refusal = hasActions ? undefined : params.refusal ? { label: params.refusal.label } : { label: "unparsed" };
 			const results: ActionStep[] = [];
 			const elapsed: TickStep[] = [];
 			if (hasActions) {
@@ -479,12 +457,12 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 					if (r.ticks > 0) elapsed.push(...sim.tick(r.ticks));
 				}
 			}
-			channel.onAdjudication?.({ results: hasActions ? results : undefined, refusal, elapsed });
+			if (hasActions) channel.onAdjudication?.({ results, elapsed });
 			// 以世界腔策展作为工具结果：散文的唯一事件源（叙述只能跟随这里的内容）
 			const revealed = [...sim.visible()].filter((id) => !turn.visibleBefore.has(id));
 			const pending = sim.dryTick(1).flatMap((r) => r.changes);
 			return {
-				content: [{ type: "text", text: buildResultView(sim, results, refusal, turn.intent, pending, revealed, elapsed) }],
+				content: [{ type: "text", text: buildResultView(sim, results, !hasActions, turn.intent, pending, revealed, elapsed) }],
 				details: {},
 			};
 		},
