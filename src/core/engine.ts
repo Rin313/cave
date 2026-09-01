@@ -265,7 +265,7 @@ export class Engine {
 		this.emit({ type: "text_delta", delta: this.settleNarration(visibleChanges) });
 	}
 
-	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地，无幻觉面）。 */
+	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地）。 */
 	private settleNarration(summaryChanges: Change[]): string {
 		const text = this.turn.textBuf.join("");
 		if (text.trim() === "") {
