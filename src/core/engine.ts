@@ -35,8 +35,14 @@ export interface ActOutcome {
 	refusal?: { label: string; reason?: string };
 }
 
+/** 叙述通道三事件（Engine 是 pi 流到玩家视野的转译器：映射期文本与 thinking 永不入此通道）：
+ *  narration_delta 实时正文（相位门控：仅裁决后的生成）；narration_reset 在重试丢弃在途生成时清零
+ *  （与 pi「移除失败消息再重生成」镜像）；narration 是回合定稿的权威全文（累积散文或确定性摘要兜底），
+ *  消费者以它校准——实时增量与定稿在重试等边缘情形下可能短暂不一致，定稿恒胜。 */
 export type EngineEvent =
-	| { type: "text_delta"; delta: string }
+	| { type: "narration_delta"; delta: string }
+	| { type: "narration_reset" }
+	| { type: "narration"; text: string }
 	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
 	| { type: "tool_result"; results: ActionStep[] }
 	| { type: "elapsed"; steps: TickStep[] }
@@ -48,15 +54,17 @@ interface TurnChannel {
 	onAdjudication: ((patch: { results?: ActionStep[]; refusal?: { label: string }; elapsed?: TickStep[] }) => void) | null;
 }
 
-/** 单回合通道状态：变异窗口门闩 + 散文缓冲。
- *  Engine.act() 开启门闩并复位其余字段；act 工具首次执行即翻转（本回合唯一裁决）。
- *  散文缓冲只在门闩翻转后（裁决已发生）收集——叙述只能跟随裁决，正文 = 裁决之后的文本。 */
+/** 单回合通道状态：变异窗口门闩 + 叙述账本（按生成代记账，镜像 pi 的重试语义）。
+ *  Engine.act() 开启门闩并复位字段；act 工具首次执行即翻转（本回合唯一裁决）。
+ *  current 是在途生成的正文：message_end 正常终结即并入 settled；error 暂扣——
+ *  pi 丢弃重生成（auto_retry_start）则作废并广播 narration_reset，保留（重试预算耗尽）则定稿时入账。 */
 interface TurnState {
 	gateOpen: boolean;
 	acted: boolean;
 	visibleBefore: Set<string>;
 	intent?: string;
-	textBuf: string[];
+	settled: string;
+	current: string;
 }
 
 export class Engine {
@@ -114,9 +122,26 @@ export class Engine {
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
-					// 散文缓冲只在裁决后（门闩已翻转；渲染回合恒为关）收集：叙述只能跟随裁决
+					// 实时叙述只转译裁决后的正文（门闩已翻转；渲染回合恒为关）：叙述只能跟随裁决
 					if (event.assistantMessageEvent.type === "text_delta" && !this.turn.gateOpen) {
-						this.turn.textBuf.push(event.assistantMessageEvent.delta);
+						const delta = event.assistantMessageEvent.delta;
+						this.turn.current += delta;
+						this.emit({ type: "narration_delta", delta });
+					}
+					break;
+				case "message_end":
+					// 生成代入账：正常终结（stop/length/toolUse/aborted）并入 settled；
+					// error 暂扣在 current——pi 将视重试与否移除（重生成）或保留（预算耗尽），分别由下方与定稿裁决
+					if (event.message.role === "assistant" && !this.turn.gateOpen && event.message.stopReason !== "error") {
+						this.turn.settled += this.turn.current;
+						this.turn.current = "";
+					}
+					break;
+				case "auto_retry_start":
+					// pi 移除失败消息并重生成：在途文本作废，叙述块清零（残段不得混入定稿叙述）
+					if (!this.turn.gateOpen) {
+						this.turn.current = "";
+						this.emit({ type: "narration_reset" });
 					}
 					break;
 				case "tool_execution_start":
@@ -151,7 +176,7 @@ export class Engine {
 
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
-		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), textBuf: [] };
+		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), settled: "", current: "" };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
@@ -200,7 +225,8 @@ export class Engine {
 	private openTurn(intent: string): void {
 		this.turn.gateOpen = true;
 		this.turn.acted = false;
-		this.turn.textBuf.length = 0;
+		this.turn.settled = "";
+		this.turn.current = "";
 		this.turn.visibleBefore = this.sim.visible();
 		this.turn.intent = intent;
 	}
@@ -221,14 +247,14 @@ export class Engine {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
 			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
 			this.outcome.refusal = { label: "unparsed" };
-			this.emit({ type: "validation", round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: this.turn.textBuf.join("").trim() });
+			this.emit({ type: "validation", round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
 			narration = this.summarize([]);
 		} else {
 			// 摘要兜底原料 = 本回合全部可见变更（玩家动作 + 时间流逝）
 			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed].flatMap((r) => narratableChanges(this.def, r.changes)));
 		}
 		this.recordTurn(action.intent, this.outcome.elapsed);
-		this.emit({ type: "text_delta", delta: narration });
+		this.emit({ type: "narration", text: narration });
 		return this.outcome;
 	}
 
@@ -256,18 +282,19 @@ export class Engine {
 	async render(instruction: string, elapsed: TickStep[] = []): Promise<void> {
 		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
 		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
-		this.turn.textBuf.length = 0;
+		this.turn.settled = "";
+		this.turn.current = "";
 		try {
 			await this.session.prompt(buildRenderPrompt(this.sim, elapsed, instruction, pending));
 		} finally {
 			this.turn.gateOpen = false;
 		}
-		this.emit({ type: "text_delta", delta: this.settleNarration(visibleChanges) });
+		this.emit({ type: "narration", text: this.settleNarration(visibleChanges) });
 	}
 
-	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地）。 */
+	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地）。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
 	private settleNarration(summaryChanges: Change[]): string {
-		const text = this.turn.textBuf.join("");
+		const text = this.turn.settled + this.turn.current;
 		if (text.trim() === "") {
 			this.emit({ type: "validation", round: 1, error: "散文为空。", attempt: text });
 			return this.summarize(summaryChanges);

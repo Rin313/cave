@@ -110,7 +110,7 @@ function collectEvents(engine: Engine): CollectEventsResult {
 	const toolCalls: unknown[] = [];
 	const usages: UsageRow[] = [];
 	const unsub = engine.subscribe((e) => {
-		if (e.type === "text_delta") texts.push(e.delta);
+		if (e.type === "narration") texts.push(e.text);
 		else if (e.type === "validation") validations.push({ round: e.round, error: e.error, attempt: e.attempt });
 		else if (e.type === "tool_call") toolCalls.push({ actionCount: e.actionCount, actions: e.actions });
 		else if (e.type === "usage") usages.push({ input: e.input, output: e.output, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite });
