@@ -270,11 +270,10 @@ export class Engine {
 	/** 独立渲染（无动作裁决的叙述回合，如开场/等待后的场景描写）：elapsed 为本回合时间流逝的刻步（含 facts）。 */
 	async render(instruction: string, elapsed: TickStep[] = []): Promise<void> {
 		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
-		const pending = this.sim.dryTick(1).flatMap((r) => r.changes);
 		this.turn.settled = "";
 		this.turn.current = "";
 		try {
-			await this.session.prompt(buildRenderPrompt(this.sim, elapsed, instruction, pending));
+			await this.session.prompt(buildRenderPrompt(this.sim, elapsed, instruction));
 		} finally {
 			this.turn.gateOpen = false;
 		}
@@ -334,8 +333,7 @@ ${verbs}
 - 状态与裁决中不存在的物体、人物、现象、后果不得出现——后果由世界法则产生，不由你创造；对已有内容的转写与渲染（措辞、视角、氛围、文学手法）一律自由，只须不与状态矛盾。
 - 状态是世界的事实，不是待播报的读数：把事实织进场景，不要逐条罗列属性值。
 - 一律使用实体的名称（name），不得写出实体 id、属性名、工具调用或决策过程。
-- 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则；被拒绝的尝试只写尝试本身，不写其后果。
-- 「即将发生」只写征兆（用「将」「就要」），不得写成已发生。`;
+- 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则；被拒绝的尝试只写尝试本身，不写其后果。`;
 }
 
 /** 表达可见变更：internal 属性不进表达输入（公理一逃生舱）。只有 prop 变更携带 prop，rel/生灭恒可见。 */
@@ -345,10 +343,10 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 }
 
 /** 回合事件的世界腔策展（act 工具结果与独立渲染共用）：
- *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、即将发生、新见。core 只做符号连接。
+ *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、新见。core 只做符号连接。
  *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
-function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[] = []): string[] {
+function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
 	const lines: string[] = [];
 	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
 	if (refused) {
@@ -376,13 +374,6 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 			lines.push(`- ${r.ok ? body : `${body}（被拒绝）`}`);
 		}
 	}
-	const pendingVisible = narratableChanges(sim.def, pending);
-	if (pendingVisible.length) {
-		lines.push("即将发生（下一时刻）：");
-		for (const c of pendingVisible) {
-			lines.push(`  ${fmtChange(sim, c)}`);
-		}
-	}
 	const revealedVisible = revealed.filter((id) => sim.world.entities.some((e) => e.id === id));
 	if (revealedVisible.length) {
 		lines.push("本回合新见：");
@@ -394,14 +385,14 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 }
 
 /** act 工具结果：本回合世界回应的世界腔策展 */
-function buildResultView(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, pending: Change[], revealed: string[], elapsed: TickStep[]): string {
-	const lines = formatTurnEvents(sim, results, refused, intent, pending, revealed, elapsed);
+function buildResultView(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[]): string {
+	const lines = formatTurnEvents(sim, results, refused, intent, revealed, elapsed);
 	return lines.join("\n");
 }
 
 /** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
-function buildRenderPrompt(sim: Simulation, elapsed: TickStep[], instruction: string, pending: Change[]): string {
-	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], false, undefined, pending, [], elapsed)];
+function buildRenderPrompt(sim: Simulation, elapsed: TickStep[], instruction: string): string {
+	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], false, undefined, [], elapsed)];
 	lines.push("", `${instruction} 直接输出散文正文。`);
 	return lines.join("\n");
 }
@@ -460,9 +451,8 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			if (hasActions) channel.onAdjudication?.({ results, elapsed });
 			// 以世界腔策展作为工具结果：散文的唯一事件源（叙述只能跟随这里的内容）
 			const revealed = [...sim.visible()].filter((id) => !turn.visibleBefore.has(id));
-			const pending = sim.dryTick(1).flatMap((r) => r.changes);
 			return {
-				content: [{ type: "text", text: buildResultView(sim, results, !hasActions, turn.intent, pending, revealed, elapsed) }],
+				content: [{ type: "text", text: buildResultView(sim, results, !hasActions, turn.intent, revealed, elapsed) }],
 				details: {},
 			};
 		},

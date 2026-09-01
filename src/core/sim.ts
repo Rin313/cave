@@ -674,8 +674,9 @@ export class Simulation {
 		return out;
 	}
 
-	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。表达层的"即将发生"合法预言来源。
-	 *  随机由 games 层以 World 状态自持（纯函数派生），克隆世界即完整预言——无需序列快照机制。 */
+	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。合法外推原语：纯函数派生自状态，
+	 *  克隆即完整外推（无需序列快照机制）——但派生合法 ≠ 必然：下一动作的 deltas 先于预测刻落地，外推可被干预作废。
+	 *  供 games 层感知语义（先兆 fact / digestExtra 纹理）与研究工具自选消费。 */
 	dryTick(n = 1): TickStep[] {
 		const clone = new Simulation(this.def, this.world);
 		return clone.tick(n);

@@ -380,6 +380,17 @@ export const village: GameDef = {
 	},
 	systems: [
 		{
+			id: "dog.forebode",
+			// 征兆即世界事件：夜袭前一刻的 fact-only 氛围输出（迟滞阈值——有吠声未必有袭击）。
+			// 「即将发生」不进协议通道（core 不编辑感知），先兆由世界供给：有出处、跨回合同一、与袭击同一出处纪律。
+			run: (q) => {
+				if (q.time % 4 !== 2) return null;
+				const beasts = q.world.entities.filter((e) => e.props.alive === true && e.props.aggressive === true);
+				if (!beasts.length) return null;
+				return { deltas: [], facts: beasts.map((b) => ({ text: "夜色渐浓，远处隐约传来野狗的低吠。", entities: [b.id] })) };
+			},
+		},
+		{
 			id: "dog.night",
 			// roll 在条件层只掷一次；每只野兽各扣 1 体力。
 			run: (q) => {
