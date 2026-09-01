@@ -31,7 +31,7 @@ export function loadMemory(entries: readonly EntryLike[]): MemoryTurn[] {
 		if (!d || typeof d.intent !== "string") continue;
 		out.push({
 			time: Number(d.time ?? 0),
-			intent: String(d.intent).slice(0, 80),
+			intent: String(d.intent),
 			kind: d.kind === "applied" || d.kind === "rejected" || d.kind === "partial" ? d.kind : "refused",
 			moves: Array.isArray(d.moves) ? d.moves.map(String) : [],
 			refusal: typeof d.refusal === "string" ? d.refusal : undefined,

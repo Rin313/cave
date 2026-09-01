@@ -239,7 +239,7 @@ export class Engine {
 		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || passed}`);
 		this.memory.push({
 			time: this.sim.world.time,
-			intent: intent.slice(0, 80),
+			intent,
 			kind: o.kind,
 			moves: [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves],
 			refusal: o.refusal?.label,
