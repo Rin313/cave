@@ -59,7 +59,7 @@ export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}
 /** 不可达拒绝（卫语句用）：law "reach"，理由为空间构件的世界腔文案，缺省回落构件缺省语。 */
 export function denyUnreachable(world: World, player: string, id: string, opts: SpaceOpts = {}): Verdict {
 	const r = inTreeReach(world, player, id, opts);
-	return { ok: false, denial: { law: "reach", subject: id, reason: r.reason || REACH_MSGS.reachNotHere } };
+	return { ok: false, denial: { law: "reach", reason: r.reason || REACH_MSGS.reachNotHere } };
 }
 
 /** sim probe 的候选域缺省投影（space 构件约定）：可见实体 - 玩家 - space 场景。

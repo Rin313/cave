@@ -89,16 +89,10 @@ export interface PropDef {
 	internal?: boolean;
 }
 
-/** 结构化拒绝：非散文，散文由引擎按法则模板渲染。协议性标记由 ActionStep.deniedBy:"protocol" 承担（单一事实源），Denial 只携带 referent 与诊断。 */
+/** 结构化拒绝：法则身份 + 世界腔理由 + 机器诊断 + 兜底自声明。协议性标记由 ActionStep.deniedBy:"protocol" 承担（单一事实源） */
 export interface Denial {
 	/** 法则标识 */
 	law: string;
-	/** 施动实体 id（结构化亲证：进结果视图「涉及」行与审计）。 */
-	subject?: string;
-	/** 受动实体 id（结构化亲证：进结果视图「涉及」行与审计）。 */
-	object?: string;
-	/** 涉及属性（按属性兜底的模板用）。 */
-	prop?: string;
 	/** 世界腔拒绝文案（法则 text 内联渲染 / 可达性构件 prose / 不变式 message）；缺省回落到 messages.noResponse。 */
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
@@ -166,7 +160,7 @@ function grantedTicks(ticks: number | undefined, cost: number): number {
 	return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-export function deny(law: string, o: { subject?: string; object?: string; prop?: string; reason?: string; fallback?: boolean } = {}): Verdict {
+export function deny(law: string, o: { reason?: string; fallback?: boolean } = {}): Verdict {
 	return { ok: false, denial: { law, ...o } };
 }
 
@@ -357,13 +351,13 @@ export interface ActionStep {
 	changes: Change[];
 	action: Action;
 	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价，协议性拒绝为 0。
-	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；引擎据此逐刻推进 systems，研究工具显式摇钟。 */
+	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；引擎据此逐刻推进 systems。 */
 	ticks: number;
 	/** 否决来源：rule——动词法则网络的否决（含全部规则未表态时的引擎闭合回落，
 	 *  law "action.unanswered"）；protocol——映射层形态错误（引擎↔模型通道流量，表达层整体过滤）；
 	 *  invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。法则缺口不在本枚举——探测读 Denial.fallback。 */
 	deniedBy?: "rule" | "protocol" | "invariant";
-	/** 结构化拒绝（deniedBy=rule 时给出），供表达层/审计使用。 */
+	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
 	involved?: string[];
@@ -493,7 +487,7 @@ export class Simulation {
 			const first = invalid[0]!;
 			const hit = entity(this.world, first);
 			const reason = msgs.invisibleEntity?.(hit ? [hit.name] : []) ?? msgs.noResponse;
-			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", subject: first, reason, debug: invalid.join(",") }, ticks: cost };
+			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
 		}
 		const q = this.query(action.params);
 		for (const r of verb.rules) {

@@ -100,7 +100,7 @@ const goVerb = defineVerb({
 			judge: (q, p) => {
 				const d = q.entity(p.dest);
 				if (d?.props.space !== true || q.rel(hereOf(q), p.dest, "path") === null) return null;
-				if (d.props.dark === true && !hasEffect(q, "lamp_effect")) return deny("go.dark", { object: p.dest, reason: `${q.name(p.dest)}里黑得化不开。你摸到门框，退了回来。` });
+				if (d.props.dark === true && !hasEffect(q, "lamp_effect")) return deny("go.dark", { reason: `${q.name(p.dest)}里黑得化不开。你摸到门框，退了回来。` });
 				return null;
 			},
 		},
@@ -108,8 +108,8 @@ const goVerb = defineVerb({
 			id: "go.walk",
 			judge: (q, p) => {
 				const d = q.entity(p.dest);
-				if (!d || d.props.space !== true) return deny("go.noplace", { object: p.dest, reason: `${q.name(p.dest)}？这里没有这个地方。` });
-				if (q.rel(hereOf(q), p.dest, "path") === null) return deny("go.noway", { subject: hereOf(q), object: p.dest, reason: `从这里没有路通往${q.name(p.dest)}。` });
+				if (!d || d.props.space !== true) return deny("go.noplace", { reason: `${q.name(p.dest)}？这里没有这个地方。` });
+				if (q.rel(hereOf(q), p.dest, "path") === null) return deny("go.noway", { reason: `从这里没有路通往${q.name(p.dest)}。` });
 				return grant([D.set(q.player, "in", p.dest)], `你走进了${q.name(p.dest)}。`);
 			},
 		},
@@ -128,8 +128,8 @@ const takeVerb = defineVerb({
 			judge: (q, p) => {
 				if (!canReach(q, p.entity)) return denyUnreachable(q.world, q.player, p.entity);
 				const t = q.entity(p.entity);
-				if (t?.props.takable !== true) return deny("take.heavy", { subject: p.entity, reason: `${q.name(p.entity)}带不走。` });
-				if (t.props["in"] === q.player) return deny("take.held", { subject: p.entity, reason: `${q.name(p.entity)}已经收好了。` });
+				if (t?.props.takable !== true) return deny("take.heavy", { reason: `${q.name(p.entity)}带不走。` });
+				if (t.props["in"] === q.player) return deny("take.held", { reason: `${q.name(p.entity)}已经收好了。` });
 				return grant([D.set(p.entity, "in", q.player)], t.kind === "effect"
 					? `你收下了${q.name(p.entity)}。说不清为什么，世界的质地变了一点。`
 					: `你把${q.name(p.entity)}收好了。`);
