@@ -11,8 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, fmtChange, fmtValue, internalPropsOf, messagesFor, type Action, type ActionStep, type Change, type GameDef, type TickStep } from "./sim.ts";
-import { coerceValue } from "./util.ts";
+import { Simulation, fmtChange, fmtValue, internalPropsOf, messagesFor, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -435,13 +434,9 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			const elapsed: TickStep[] = [];
 			if (hasActions) {
 				for (const raw of params.actions!) {
-					const a = raw as { verb?: string; params?: Record<string, unknown> };
-					// 动词/schema/可见性校验收敛在 sim.apply 的单一裁决瓶颈，与场景/CLI/probe 同一口径。
-					const action: Action = {
-						verb: a.verb ?? "",
-						params: Object.fromEntries(Object.entries(a.params ?? {}).map(([k, v]) => [k, coerceValue(v)])),
-					};
-					const r = sim.apply(action);
+					// pi 在 execute 前已按工具 schema 完成 Convert + 严格 Check（错误回模型、门闩未耗）
+					const a = raw as { verb: string; params: Record<string, PropValue> };
+					const r = sim.apply({ verb: a.verb, params: a.params } satisfies Action);
 					results.push(r);
 					// 时间律：世界时间只经裁决边界流逝，刻数由裁决授予——按动作交织推进，
 					// 后续动作与 systems 都在后一世界态上裁决/运行（世界能在行为之间反应）。

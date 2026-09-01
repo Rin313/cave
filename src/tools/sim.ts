@@ -4,7 +4,6 @@ import { Simulation, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { probeScope } from "../games/space.ts";
-import { coerceValue } from "../core/util.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
@@ -52,8 +51,9 @@ interface ScenarioReport {
 	steps: StepReport[];
 }
 
+/** 场景文件是手写 JSON，参数原样入裁决瓶颈：类型错写走 sim 的协议性拒绝 */
 function asAction(a: ScenarioAction): Action {
-	return { verb: a.verb, params: Object.fromEntries(Object.entries(a.params).map(([k, v]) => [k, coerceValue(v)])) };
+	return { verb: a.verb, params: a.params as Record<string, PropValue> };
 }
 
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
