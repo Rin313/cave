@@ -26,9 +26,8 @@
 
 ## 3. GameDef 表面契约
 
-- **环境响应（声明式动词）**：非预设的自由动作由游戏声明动词 + 法则承担——法则网络形态按属性键控一条规则覆盖全部可达实体；authored 形态则逐实体书写互动子句。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底。
 - **`Rule`（卫语句式规则，按动词分组）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/player/time/params + `rel/relNum/roll/visible/name` 等引擎自有语义唯一入口；施动前提是规则侧语义，由 games 层构件供给），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses）。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc/spawn/despawn`——生灭原语让梦核/authored 世界可动态生长，relSet 值 null 即删边（拓扑收缩与生长对称），despawn 级联清理核心结构、悬空 id 引用由完整性硬墙回滚）。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码。
-- **两种创作形态（authorial regimes）**：**法则网络形态**——规则按属性组合键控、随新实体自动泛化（承重墙针对此形态，防组合爆炸）；**authored 形态**——梦核/脚本化世界的正当写法：互动按实体逐个书写（每条一个卫语句子句 + 兜底）、效果改写互动结果、实体生灭与动态拓扑。两形态共用同一套裁决瓶颈与提交硬墙，差异只在作者书写风格与不变式密度，core 不感知形态。
+- **两种创作形态（authorial regimes）**：**法则网络形态**——规则按属性组合键控、随新实体自动泛化（承重墙针对此形态，防组合爆炸）；**authored 形态**——梦核/脚本化世界的正当写法：互动按实体逐个书写（每条一个卫语句子句 + 兜底）、效果改写互动结果、实体生灭与动态拓扑。两形态共用同一套裁决瓶颈与提交硬墙，差异只在作者书写风格与不变式密度。
 - **`grounding`**：可见实体索引钩子，决定哪些实体进状态视图；缺省全部可见（未声明认识论语义的诚实零）。感知面只有两个槽位（grounding/digestExtra）——准入门是「core 机器在协议通道内消费它」（状态视图装配/entityParams 可见性门/新见检测）。
 - **`props`（属性注册表）**：`{ prop: { type, label?, internal? } }`。`internal: true` 的属性不进 LLM 序列化 / 变更线性化，从源头杜绝泄漏；`label` 是属性世界化说法（拒绝/变更文本用），**并是表达 prompt 变更馈送的默认渲染源**——「本回合尝试/时间流逝」用实体名 + `label` 做语言无关线性化（`fmtChange`，`name.label: from → to`，core 只做符号连接、不内嵌语言词）；动作侧同一纪律：`describeAction` 以 `verb.label(param,…)` 符号连接；tick 伪动词无游戏词可线性化，走 `messages.timePassed`。`internalPropsOf(def)` 派生内部属性集。
 - **状态视图**：prompt 的状态视图由 core 组装——可见实体（grounding）× 注册表过滤（internal 不进 prompt，隔离机械保证）× 关系端点可见过滤，顶层并入 `digestExtra`（游戏派生纹理：出口、随身清单等无 id 承诺的呈现面）。参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名、可指名的必看得见。
