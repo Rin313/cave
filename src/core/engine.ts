@@ -342,7 +342,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 }
 
 /** 回合事件的世界腔策展（act 工具结果与独立渲染共用）：
- *  尝试行（协议性拒绝过滤——引擎↔模型通道流量不是世界事件）、时间流逝、新见。core 只做符号连接。
+ *  尝试行、时间流逝、新见。core 只做符号连接。
  *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
 function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
@@ -351,10 +351,9 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 	if (refused) {
 		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	}
-	const narratable = results.filter((r) => r.deniedBy !== "protocol");
-	if (narratable.length) {
+	if (results.length) {
 		lines.push("本回合尝试：");
-		for (const r of narratable) {
+		for (const r of results) {
 			const visible = narratableChanges(sim.def, r.changes);
 			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}` : "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
@@ -434,7 +433,8 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			const elapsed: TickStep[] = [];
 			if (hasActions) {
 				for (const raw of params.actions!) {
-					// pi 在 execute 前已按工具 schema 完成 Convert + 严格 Check（错误回模型、门闩未耗）
+					// 静态形态已在工具边界由 pi 校验（Convert + 严格 Check：错误回模型、可重试、门闩未耗）；
+					// 内核的同型检查是前置条件——此处若抛 ProtocolViolation 即 pi/sim 校验偏斜（引擎 bug），pi 的 execute catch 兑为 error result
 					const a = raw as { verb: string; params: Record<string, PropValue> };
 					const r = sim.apply({ verb: a.verb, params: a.params } satisfies Action);
 					results.push(r);

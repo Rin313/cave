@@ -57,7 +57,7 @@ export interface Action {
 /** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言。
  *  契约只收解析后的 referent（实体名等世界语），不收 id/属性名——机器诊断一律走 Denial.debug。 */
 export interface Messages {
-	/** 所有法则均未表态时的兜底回应；协议性拒绝（映射层形态错误）与 core 完整性不变式违反也回落此文案。 */
+	/** 所有法则均未表态时的兜底回应；core 完整性不变式违反也回落此文案。 */
 	noResponse: string;
 	/** 实体参数不可见/不存在（core 校验层拒绝）：收已存在实体的解析名；全为幻觉 id 时为空列表。 */
 	invisibleEntity?: (names: string[]) => string;
@@ -89,7 +89,7 @@ export interface PropDef {
 	internal?: boolean;
 }
 
-/** 结构化拒绝：法则身份 + 世界腔理由 + 机器诊断 + 兜底自声明。协议性标记由 ActionStep.deniedBy:"protocol" 承担（单一事实源） */
+/** 结构化拒绝：法则身份 + 世界腔理由 + 机器诊断 + 兜底自声明。 */
 export interface Denial {
 	/** 法则标识 */
 	law: string;
@@ -99,6 +99,21 @@ export interface Denial {
 	debug?: string;
 	/** 作者的兜底自声明：probe 据此报告法则缺口 */
 	fallback?: boolean;
+}
+
+/** 静态形态前置条件违约：未知动词 / schema 不符。
+ *  静态形态错在裁决之外——工具边界由 pi 校验拒绝（错误回模型、可重试、门闩未耗）；
+ *  内核收到同类动作即调用方违约（工具边界偏斜 / 场景笔误 / probe 域声明错误），响亮抛出。
+ *  世界真相（含感知——不可见）在裁决之内，走世界性拒绝。 */
+export class ProtocolViolation extends Error {
+	readonly law: "action.unknown" | "action.schema";
+	readonly debug: string;
+
+	constructor(law: "action.unknown" | "action.schema", debug: string) {
+		super(`协议违约 ${law}：${debug}`);
+		this.law = law;
+		this.debug = debug;
+	}
 }
 
 // ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
@@ -147,7 +162,7 @@ export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: 
 	return { ok: true, deltas, reason, facts, ticks };
 }
 
-/** 尝试时价（刻，非负整数，缺省 0）：无论裁决成败都消耗（协议性拒绝除外——映射层噪声不是尝试）。 */
+/** 尝试时价（刻，非负整数，缺省 0）：凡入裁决即尝试，成败皆消耗。 */
 function attemptCost(verb: VerbDef | undefined): number {
 	const n = Math.floor(verb?.cost ?? 0);
 	return Number.isFinite(n) && n > 0 ? n : 0;
@@ -192,7 +207,7 @@ export function defineVerb<S extends TObject>(spec: {
 		label: spec.label,
 		description: spec.description,
 		cost: spec.cost,
-		// 工具边界与裁决瓶颈同一严格度：多余参数在工具层被拒，而非到 sim 才成协议性拒绝（反馈只剩 noResponse）
+		// 工具边界与内核前置条件同一严格度：多余参数在工具层被拒，而非到内核才触发 ProtocolViolation
 		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
@@ -220,8 +235,7 @@ export interface VerbDef {
 	description: string;
 	/** TypeBox object schema，引擎据此生成 act 工具参数校验。 */
 	schema: TObject;
-	/** 尝试时价（刻，缺省 0）：无论裁决成败都消耗（协议性拒绝除外——映射层噪声不是尝试）。
-	 *  规则可在授予中以 ticks 改写实际流逝。 */
+	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。规则可在授予中以 ticks 改写实际流逝。 */
 	cost?: number;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
@@ -350,13 +364,12 @@ export interface ActionStep {
 	reason: string;
 	changes: Change[];
 	action: Action;
-	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价，协议性拒绝为 0。
+	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价（凡入裁决即尝试）。
 	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；引擎据此逐刻推进 systems。 */
 	ticks: number;
-	/** 否决来源：rule——动词法则网络的否决（含全部规则未表态时的引擎闭合回落，
-	 *  law "action.unanswered"）；protocol——映射层形态错误（引擎↔模型通道流量，表达层整体过滤）；
-	 *  invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。法则缺口不在本枚举——探测读 Denial.fallback。 */
-	deniedBy?: "rule" | "protocol" | "invariant";
+	/** 否决来源：rule——动词法则网络的否决（含全部规则未表态时的引擎闭合回落，law "action.unanswered"；
+	 *  可见性门同归此值——感知是世界真相）；invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。*/
+	deniedBy?: "rule" | "invariant";
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
@@ -470,12 +483,10 @@ export class Simulation {
 	private adjudicateRaw(action: Action): RawResult {
 		const msgs = messagesFor(this.def);
 		const verb = this.def.verbs[action.verb];
-		if (!verb) {
-			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.unknown", debug: `verb:${action.verb}` }, ticks: 0 };
-		}
+		if (!verb) throw new ProtocolViolation("action.unknown", `verb:${action.verb}`);
 		const cost = attemptCost(verb);
 		if (!this.validators.get(action.verb)!.Check(action.params)) {
-			return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "protocol", denial: { law: "action.schema", debug: this.schemaErrors(action.verb, action.params) }, ticks: 0 };
+			throw new ProtocolViolation("action.schema", this.schemaErrors(action.verb, action.params));
 		}
 		// 可见性按当前状态逐动作计算：同一提案内的多动作不沿用旧快照。
 		const curVis = this.visible();
@@ -542,7 +553,7 @@ export class Simulation {
 		return (this.genesisCache ??= this.snapshot());
 	}
 
-	/** 协议性 schema 错误的机器诊断（进 Denial.debug，不进玩家文案）。 */
+	/** 静态形态违约的机器诊断（进 ProtocolViolation.debug）。 */
 	private schemaErrors(verbName: string, params: Record<string, PropValue>): string {
 		const errs = this.validators.get(verbName)!.Errors(params);
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
@@ -666,8 +677,7 @@ export class Simulation {
 	}
 
 	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。合法外推原语：纯函数派生自状态，
-	 *  克隆即完整外推（无需序列快照机制）——但派生合法 ≠ 必然：下一动作的 deltas 先于预测刻落地，外推可被干预作废。
-	 *  供 games 层感知语义（先兆 fact / digestExtra 纹理）与研究工具自选消费。 */
+	 *  克隆即完整外推（无需序列快照机制）——但派生合法 ≠ 必然：下一动作的 deltas 先于预测刻落地，外推可被干预作废。*/
 	dryTick(n = 1): TickStep[] {
 		const clone = new Simulation(this.def, this.world);
 		return clone.tick(n);

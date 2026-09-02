@@ -73,7 +73,7 @@
 		{
 			"name": "era 语境结构性墙：无自由动作动词（do 已移除），凭空铸币被拒",
 			"steps": [
-				{ "name": "自由动作动词不存在：do 被拒为未知动词，铜币不被改变", "action": { "verb": "do", "params": {} }, "expect": { "ok": false, "reason": "回应", "state": { "player.coins": 40 } } },
+				{ "name": "自由动作动词不存在：do 触发前置条件违约（内核契约），铜币不被改变", "action": { "verb": "do", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "player.coins": 40 } } },
 				{ "name": "正常行动后守恒不变式仍成立", "action": { "verb": "gather", "params": { "entity": "flour" } }, "expect": { "ok": true, "state": { "player.coins": 40 } } }
 			]
 		},

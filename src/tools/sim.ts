@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Simulation, fmtChange, propGet } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
 import { getGame, getProbe } from "../games/registry.ts";
 import { probeScope } from "../games/space.ts";
@@ -15,6 +15,8 @@ interface StepExpect {
 	ok?: boolean;
 	reason?: string;
 	state?: Record<string, unknown>;
+	/** 内核契约断言（结构性墙）：期望本步骤触发前置条件违约（未知动词/schema 不符）*/
+	protocol?: "action.unknown" | "action.schema";
 }
 
 interface ScenarioStep {
@@ -51,7 +53,7 @@ interface ScenarioReport {
 	steps: StepReport[];
 }
 
-/** 场景文件是手写 JSON，参数原样入裁决瓶颈：类型错写走 sim 的协议性拒绝 */
+/** 场景文件是手写 JSON，参数原样入裁决瓶颈：动词/schema 错写触发内核前置条件违约（ProtocolViolation） */
 function asAction(a: ScenarioAction): Action {
 	return { verb: a.verb, params: a.params as Record<string, PropValue> };
 }
@@ -75,6 +77,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	for (const [i, step] of scenario.steps.entries()) {
 		let ok: boolean;
 		let reason: string;
+		const problems: string[] = [];
 		if (step.tick != null) {
 			const results = sim.tick(step.tick);
 			if (results.length === 0) {
@@ -85,15 +88,28 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				reason = results.map((r) => r.reason).join(" ");
 			}
 		} else if (step.action) {
-			const r = sim.apply(asAction(step.action));
-			ok = r.ok;
-			reason = r.reason;
+			try {
+				const r = sim.apply(asAction(step.action));
+				ok = r.ok;
+				reason = r.reason;
+			} catch (e) {
+				// 前置条件违约在裁决之外：场景文件的动词/参数笔误，不得洗白为「世界拒绝」类的合法失败；
+				// 显式声明 expect.protocol 的步骤例外——作者在此断言内核契约（结构性墙）
+				ok = false;
+				reason = e instanceof Error ? e.message : String(e);
+				if (step.expect.protocol && e instanceof ProtocolViolation) {
+					ok = e.law === step.expect.protocol;
+					reason = e.debug;
+					if (!ok) problems.push(`协议违约类不符: expected ${step.expect.protocol} got ${e.law}`);
+				} else {
+					problems.push(`协议违约（场景笔误，非世界拒绝）: ${reason}`);
+				}
+			}
 		} else {
 			ok = false;
 			reason = "（无效步骤）";
 		}
 
-		const problems: string[] = [];
 		if (step.expect.ok !== undefined && ok !== step.expect.ok) {
 			problems.push(`ok: expected ${step.expect.ok} got ${ok}`);
 		}
@@ -107,7 +123,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
-			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
+			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
 			actual: `ok=${ok} reason="${reason}"`,
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
