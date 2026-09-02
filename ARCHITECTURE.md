@@ -26,7 +26,6 @@
 
 ## 3. GameDef 表面契约
 
-- **`verbs`**：游戏声明的动词表，每个动词含 `schema`（TypeBox，生成 act 工具参数校验，并经 `defineVerb` 推导规则参数的编译期类型）、`cost`（尝试时价：无论裁决成败都消耗的刻数，协议性拒绝除外；时间律的动词面）、`entityParams`（哪些参数是实体 id，供可见性校验）、`rules`（卫语句式规则函数，按序裁决首个表态即判决；末尾可挂 fallback 兜底规则）。动词集由各游戏声明。
 - **环境响应（声明式动词）**：非预设的自由动作由游戏声明动词 + 法则承担——法则网络形态按属性键控一条规则覆盖全部可达实体；authored 形态则逐实体书写互动子句。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底。
 - **`Rule`（卫语句式规则，按动词分组）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/player/time/params + `rel/relNum/roll/visible/name` 等引擎自有语义唯一入口；施动前提是规则侧语义，由 games 层构件供给），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses）。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc/spawn/despawn`——生灭原语让梦核/authored 世界可动态生长，relSet 值 null 即删边（拓扑收缩与生长对称），despawn 级联清理核心结构、悬空 id 引用由完整性硬墙回滚），LLM 不提案数值。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码。
 - **`fallback` 兜底规则**：动词末尾的无条件拒绝规则，其 Denial 带 `fallback: true` 作者自声明标记；runner 对全部规则未表态的动作回落 noResponse（引擎闭合拒绝，同样携带 fallback 标记，law `action.unanswered`）。散文内联在规则文本里，`sim probe` 据标记报告法则缺口。
