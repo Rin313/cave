@@ -5,7 +5,7 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 桌面壳 | **Electron** | |
-| LLM 编排 | **pi coding-agent SDK** | `@earendil-works/pi-coding-agent`，进程内集成；SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/` |
+| LLM 编排 | **pi coding-agent SDK** | 进程内集成，SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/` |
 | 持久化 | **SQLite** | 存档 + 回合审计 |
 
 ## 2. 核心架构主张
