@@ -22,7 +22,7 @@
 4. **上下文裁剪（`context` 事件 + 近况记录）**：每次 LLM 调用前经内联扩展（`DefaultResourceLoader.extensionFactories` 的 `cave-context`，`core/context.ts` 为策略单一来源）把消息裁剪为「近况记录 + 当前运行后缀」——后缀 = 最后一条 user 消息起的原样保留（toolCall/toolResult 配对天然完整），近况 = 最近 N 回合的「意图 → 世界腔裁决行」，并入该 user 消息头部。会话文件仍累积全量消息作审计；近况另以 custom 条目持久化于同一文件（custom 不参与 LLM 上下文），进程重启由其重建窗口。**缓存代价是显式决策**：状态每回合重注入使消息前缀跨回合天然不稳定，跨回合前缀复用只剩 [tools+system] 头块——因此系统提示与工具数组必须字节级稳定，且不做 setActiveTools 相位切换（工具块位于序列化前缀头部，每次切换即整体前缀失效）。回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变），provider 缓存可全程复用。compaction 保持关闭：pi 缺省摘要是编码任务形状、且把旧叙述摘要重新注入，与「模拟层唯一真相源」相悖；长度兜底走显式新开会话。
 5. **单 pass 回合** 每回合一次 `session.prompt()`：模型先调 `act`（一次性提交，one-shot 门闩封闭变异窗口），工具结果即本回合世界回应的世界腔策展（尝试行/时间流逝/法则事实/新见，经 fmtChange 线性化），模型基于它输出散文；叙述只能跟随工具结果。
 6. **core 只提供通用工具，不耦合游戏**：games 代码允许任意写法与重复样板——这是创作者的自由，即便多个游戏收敛出相同形态，也不得「提升为 core 工具」。共享的游戏侧语义只走 games/ 内自愿接入的构件。随机由 games 层以 World 状态自持（纯函数派生），`World` 即完整真相源，apply/dryTick/存档/恢复天然一致，无隐藏变量。core 提供的通用原语：`hashStr`（确定性哈希）、`roll`（确定性骰子，`hashStr(time#key)` 派生 [1,sides]，key 需同 tick 唯一——规则经 `Q.roll(key, sides)` 调用，apply/dryTick 天然一致）、`sumProp`（聚合助手，守恒不变式用）、`integrityInvariant`（引用完整性与注册表类型契约硬墙）。引擎隐式语义经只读上下文 `Q` 具名入口收口。
-
+7. 大部分审计都没有任何意义，编译成功、sim验证通过什么都说明不了，e2e映射准确、表达准确也并不说明设计准确。全部是伪信号，要验证效果，必须靠阅读e2e会话和分析源码，引擎只承担机械检查。
 
 ## 3. GameDef 表面契约
 
@@ -36,7 +36,7 @@
 - **关系边表**：`world.relations` 为 `{ from, to, type, value }` 边表，表达社会/叙事状态（信任、记忆、派系）。规则以 `relSet/relInc` 变更，核心提供 `relVal/relAll` 查询。变更记录为 sum-typed `Change`（kind: prop/rel/spawn/despawn，与 Delta 同构）。变更在表达层格式化为「from 对 to 的 type」的世界腔文本，快照/克隆/序列化完整保留。
 - **事件流两形态**：systems 产出为刻步 `TickStep`（`kind:"tick"`，携带时刻 `at`、变更/事实/src），动作裁决为 `ActionStep`（`kind:"action"`）——刻是世界的因（提交失败不回退时间），不是意志的果，二者不共用形状。
 - **游戏挂载点**：`props`（属性注册表：type/label/internal）。
-- **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性与注册表类型契约（`integrityInvariant`：实体 id 唯一、id 型属性——标量或引用数组——与关系端点指向存在的实体；注册属性值与声明类型一致，number 拒非有限值——NaN 经 JSON 序列化即静默变 null；null/缺席放行，any 豁免），游戏可追加领域不变式。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。完整性审的是提交终点：同一提交内 despawn 后 spawn 同 id 合法（同 id 生灭——中途悬空在终点自愈），留下悬空引用的抹除才被回滚。**两种形态同一接口**：`InvariantCtx` 除 `genesis` 外携带 `changes`（本提交全部变更，含 spawn/despawn 与 src）——状态不变式只读 world（守恒类），过渡不变式读提交（provenance 类）；每条规则/系统的提交独立过墙。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式，凭空铸币/灭币一律被回滚。**种子锚点是 `InvariantCtx.genesis`**——本 Simulation 实际起点世界的冻结快照（首提交前情性捕获），存档恢复/变体开局时 ≠ def.world，守恒不错锚。**引用清点原语 `refsTo(def, world, id)`**：despawn 前的悬空引用盘点（按注册表 type:"id" 枚举指向实体的 (entity, prop)，标量与引用数组同覆盖——与硬墙管辖面一致，墙拦下的悬空这里必须找得到），清理策略留规则；关系边由 despawn 自动级联。**提交执行校验（fidelity）同属这条原子通道**：每条 delta 应用时必须可执行——目标实体/关系端点存在、spawn id 未占用、inc/relInc 现值为有限数（缺席按 0）、数值后果有限——不可执行即整体回滚拒绝（law `invariant.commit`，deniedBy 不变，debug 诊断）；执行翼审「裁决被如实执行」，不变式审「提交后的世界成立」，幂等跳过的唯一判据是「目标状态已成立」（relSet 删不存在的边成立——无边即状态；set 同值与增量零效果以目标存在为前提，主语缺失即拒绝，永不回落为跳过）。
+- **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性与注册表类型契约（`integrityInvariant`：实体 id 唯一、id 型属性——标量或引用数组——与关系端点指向存在的实体；注册属性值与声明类型一致，number 拒非有限值——NaN 经 JSON 序列化即静默变 null；null/缺席放行，any 豁免），游戏可追加领域不变式。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。完整性审的是提交终点：同一提交内 despawn 后 spawn 同 id 合法（同 id 生灭——中途悬空在终点自愈），留下悬空引用的抹除才被回滚。**两种形态同一接口**：`InvariantCtx` 除 `genesis` 外携带 `changes`（本提交全部变更，含 spawn/despawn 与 src）——状态不变式只读 world（守恒类），过渡不变式读提交（provenance 类）；每条规则/系统的提交独立过墙。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式，凭空铸币/灭币一律被回滚。**种子锚点是 `InvariantCtx.genesis`**——本 Simulation 实际起点世界的冻结快照（首提交前情性捕获），存档恢复/变体开局时 ≠ def.world，守恒不错锚。**引用清点原语 `refsTo(def, world, id)`**：despawn 前的悬空引用盘点（按注册表 type:"id" 枚举指向实体的 (entity, prop)，标量与引用数组同覆盖——与硬墙管辖面一致，墙拦下的悬空这里必须找得到），清理策略留规则；关系边由 despawn 自动级联。**提交执行校验（fidelity）同属这条原子通道**：每条 delta 应用时必须可执行——目标实体/关系端点存在、spawn id 未占用、inc/relInc 现值为有限数（缺席按 0）、数值后果有限、授予刻数为非负整数（非法走 law `invariant.grant`；动词时价合法性在构造期验证）——不可执行即整体回滚拒绝（law `invariant.commit`，deniedBy 不变，debug 诊断）；执行翼审「裁决被如实执行」，不变式审「提交后的世界成立」，幂等跳过的唯一判据是「目标状态已成立」（relSet 删不存在的边成立——无边即状态；set 同值与增量零效果以目标存在为前提，主语缺失即拒绝，永不回落为跳过）。
 
 ## 4. 持久化边界
 
@@ -49,8 +49,3 @@
 | `sessions` | pi SDK 会话索引（SDK 自己写 JSONL，这里只存元数据 + 映射关系） |
 
 **重放边界**：决策是代码、代码不序列化——transcript 可重放事件流（裁决结果），不可重放裁决过程；存档兼容须钉住整个 def（规则代码的版本耦合），这是「规则即代码」的定义性代价。
-
-## 5. 研究与验证经验
-
-1. **端到端 `loop` 才是有效验证，`sim` 只验证确定性裁决。** `sim scenario` 断言"能授予/能拒绝 + 状态正确"，但真实质量只有 `loop` 能测，编译无错误和sim验证通过什么都说明不了。
-2. **映射层会拆解复合意图，掩盖"菜单"缺陷。** AI 把复合意图拆成多条动作各自命中，单动作 e2e 上机制差异常被掩盖；真实差异藏在**授予理由一致性**、**实现审阅**（malformed op 静默假授予）与**作者负担行数**里。**e2e 成功率高不等于设计好。**

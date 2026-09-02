@@ -27,9 +27,8 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 const ACT_TOOL = "act";
 
 export interface ActOutcome {
-	kind: "applied" | "rejected" | "refused" | "partial";
 	results: ActionStep[];
-	/** 本回合时间流逝产出（动作授予刻数逐刻运行 systems 的刻步；时间律：无裁决即无流逝），不计入 kind。 */
+	/** 本回合时间流逝产出（动作授予刻数逐刻运行 systems 的刻步；时间律：无裁决即无流逝）。 */
 	elapsed: TickStep[];
 }
 
@@ -73,7 +72,7 @@ export class Engine {
 	private readonly memory: MemoryTurn[];
 	private readonly turn: TurnState;
 	private readonly channel: TurnChannel;
-	private outcome: ActOutcome = { kind: "refused", results: [], elapsed: [] };
+	private outcome: ActOutcome = { results: [], elapsed: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
@@ -96,13 +95,6 @@ export class Engine {
 			if (patch.results) {
 				this.outcome.results.push(...patch.results);
 				this.emit({ type: "tool_result", results: patch.results });
-				// kind 从累计结果重算
-				const anyApplied = this.outcome.results.some((r) => r.ok);
-				const anyRejected = this.outcome.results.some((r) => !r.ok);
-				if (anyApplied && anyRejected) this.outcome.kind = "partial";
-				else if (anyApplied) this.outcome.kind = "applied";
-				else if (anyRejected) this.outcome.kind = "rejected";
-				else this.outcome.kind = "refused";
 			}
 			if (patch.elapsed?.length) {
 				this.outcome.elapsed = patch.elapsed;
@@ -225,7 +217,7 @@ export class Engine {
 
 	/** 单 pass 回合：一次会话运行内 act（一次性提交，门闩封闭变异窗口）→ 工具结果承载世界回应 → declare（可选）→ 散文。 */
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
-		this.outcome = { kind: "refused", results: [], elapsed: [] };
+		this.outcome = { results: [], elapsed: [] };
 		this.openTurn(action.intent);
 		const state = this.sim.digest();
 		try {
@@ -261,7 +253,6 @@ export class Engine {
 		const turn: MemoryTurn = {
 			time: this.sim.world.time,
 			intent,
-			kind: o.kind,
 			moves,
 		};
 		this.memory.push(turn);

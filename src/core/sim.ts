@@ -162,17 +162,9 @@ export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: 
 	return { ok: true, deltas, reason, facts, ticks };
 }
 
-/** 尝试时价（刻，非负整数，缺省 0）：凡入裁决即尝试，成败皆消耗。 */
+/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。 */
 function attemptCost(verb: VerbDef | undefined): number {
-	const n = Math.floor(verb?.cost ?? 0);
-	return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-/** 授予刻数：规则改写优先（非负整数），否则回落尝试时价。 */
-function grantedTicks(ticks: number | undefined, cost: number): number {
-	if (ticks === undefined) return cost;
-	const n = Math.floor(ticks);
-	return Number.isFinite(n) && n > 0 ? n : 0;
+	return verb?.cost ?? 0;
 }
 
 export function deny(law: string, o: { reason?: string; fallback?: boolean } = {}): Verdict {
@@ -473,6 +465,7 @@ export class Simulation {
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
+			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
 		}
 		// 「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
 		// 否则 t=0 是必要性自由区，def 结构错误与损坏存档要到首次提交才以全量拒绝的形式显形。
@@ -514,7 +507,11 @@ export class Simulation {
 			const v = r.judge(q);
 			if (!v) continue;
 			if (v.ok) {
-				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}`, ticks: grantedTicks(v.ticks, cost) };
+				// 刻数不可执行即授予不可执行（世界不修正判决）：走不变式通道拒绝（probe 据此报 bug），尝试仍耗动词时价
+				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
+					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
+				}
+				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}`, ticks: v.ticks ?? cost };
 			}
 			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}

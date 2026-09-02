@@ -4,11 +4,10 @@ import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 
 export type CtxMessages = ContextEvent["messages"];
 
-/** 单回合动作记录（世界腔，无 id）：映射层的指代/续接锚点。 */
+/** 单回合动作记录（世界腔，无 id）：映射层的指代/续接锚点。空 moves 即意图未落地（空提案或未调 act），渲染为「未解析」。 */
 export interface MemoryTurn {
 	time: number;
 	intent: string;
-	kind: "applied" | "rejected" | "refused" | "partial";
 	moves: string[];
 }
 
@@ -30,7 +29,6 @@ export function loadMemory(entries: readonly EntryLike[], limit: number): Memory
 		out.push({
 			time: Number(d.time ?? 0),
 			intent: String(d.intent),
-			kind: d.kind === "applied" || d.kind === "rejected" || d.kind === "partial" ? d.kind : "refused",
 			moves: Array.isArray(d.moves) ? d.moves.map(String) : [],
 		});
 	}

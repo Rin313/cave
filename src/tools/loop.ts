@@ -155,7 +155,7 @@ function printAct(sim: Simulation, o: {
 	usages: UsageRow[]; narration: string; brief?: boolean;
 }): void {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
-	console.log(`\n【#${o.turn} act】${o.intent}${sel} → ${o.outcome.kind}`);
+	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
 	for (const l of proposalLines(o.toolCalls)) console.log(l);
 	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action)}：${r.reason}`);
 	for (const r of o.outcome.elapsed) {
@@ -246,7 +246,6 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			intent,
 			selection: selection ?? null,
 			toolCalls,
-			kind: outcome.kind,
 			results: outcome.results,
 			elapsed: outcome.elapsed,
 			narration,
@@ -278,7 +277,7 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 				const narration = texts.join("");
 				const entry = {
 					turn: meta.turn, phase: "act", intent: line, selection: null, toolCalls,
-					kind: outcome.kind, results: outcome.results, elapsed: outcome.elapsed,
+					results: outcome.results, elapsed: outcome.elapsed,
 					narration, validations, usage: usages,
 				};
 				appendTranscript(dir, entry);
@@ -345,10 +344,10 @@ async function cmdReset(runId: string, game?: string): Promise<void> {
 
 interface ReportRow {
 	dir: string;
-	game: string;
+	provider?: string;
+	model?: string;
 	acts: number;
 	waits: number;
-	kinds: Record<string, number>;
 	fails: number;
 	tin: number;
 	tout: number;
@@ -357,7 +356,8 @@ interface ReportRow {
 	lastIn: number | null;
 }
 
-/** 汇总 runs/ 下各 run 的回合数、裁决分布、叙述兜底次数与 token 用量（对照实验的一眼视图）。 */
+/** 汇总 runs/ 下各 run 的回合数、过程报警次数与 token 用量（对照实验的一眼视图）。
+ *  语义质量不做聚合——回合记录只是实验日志，供人阅读（确定性 core 的度量走 sim verify/probe）。 */
 function collectReport(gameId: string | undefined): ReportRow[] {
 	const rows: ReportRow[] = [];
 	if (!existsSync(RUNS_ROOT)) return rows;
@@ -365,12 +365,20 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 		if (gameId && g !== gameId) continue;
 		const gdir = join(RUNS_ROOT, g);
 		for (const id of readdirSync(gdir).sort()) {
-			const tp = transcriptPath(join(gdir, id));
+			const dir = join(gdir, id);
+			const tp = transcriptPath(dir);
 			if (!existsSync(tp)) continue;
-			const row: ReportRow = { dir: `${g}/${id}`, game: g, acts: 0, waits: 0, kinds: {}, fails: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
+			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, waits: 0, fails: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
+			try {
+				const meta = JSON.parse(readFileSync(metaPath(dir), "utf8")) as Partial<RunMeta>;
+				row.provider = meta.provider;
+				row.model = meta.model;
+			} catch {
+				// meta 缺失不阻断聚合
+			}
 			for (const l of readFileSync(tp, "utf8").split(/\r?\n/)) {
 				if (!l.trim()) continue;
-				let e: { phase?: string; kind?: string; validations?: unknown[]; usage?: UsageRow[] };
+				let e: { phase?: string; validations?: unknown[]; usage?: UsageRow[] };
 				try {
 					e = JSON.parse(l);
 				} catch {
@@ -378,7 +386,6 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 				}
 				if (e.phase === "act") row.acts++;
 				if (e.phase === "wait") row.waits++;
-				if (e.phase === "act" && e.kind) row.kinds[e.kind] = (row.kinds[e.kind] ?? 0) + 1;
 				row.fails += Array.isArray(e.validations) ? e.validations.length : 0;
 				for (const u of Array.isArray(e.usage) ? e.usage : []) {
 					row.tin += u.input;
@@ -401,24 +408,22 @@ function printReport(rows: ReportRow[], gameId: string | undefined): void {
 		return;
 	}
 	console.log(`=== loop report（${scope}）===`);
-	const kindsStr = (r: ReportRow): string =>
-		["applied", "rejected", "partial", "refused"].map((kd) => (r.kinds[kd] ? `${kd}=${r.kinds[kd]}` : "")).filter(Boolean).join(" ");
 	for (const r of rows) {
 		// provider 的 usage.input 不含缓存命中，缓存份额分母 = input + cacheRead
 		const cache = r.tin + r.cread ? `${Math.round((r.cread / (r.tin + r.cread)) * 100)}%` : "-";
 		const trend = r.firstIn != null ? `${k(r.firstIn)}→${k(r.lastIn ?? 0)}` : "-";
+		const model = [r.provider, r.model].filter(Boolean).join("/") || "-";
 		console.log(
-			`${r.dir.padEnd(30)} act=${r.acts} wait=${r.waits}  ${(kindsStr(r) || "-").padEnd(44)} 兜底=${r.fails}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
+			`${r.dir.padEnd(26)} ${model.padEnd(24)} act=${r.acts} wait=${r.waits}  兜底=${r.fails}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
 		);
 	}
 	if (rows.length > 1) {
 		const sum = (f: (r: ReportRow) => number): number => rows.reduce((a, r) => a + f(r), 0);
-		const kinds: Record<string, number> = {};
-		for (const r of rows) for (const [kd, v] of Object.entries(r.kinds)) kinds[kd] = (kinds[kd] ?? 0) + v;
 		console.log(
-			`${"TOTAL".padEnd(30)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  ${kindsStr({ dir: "", game: "", acts: 0, waits: 0, kinds, fails: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null }).padEnd(44)} 校验失败=${sum((r) => r.fails)}  出 ${k(sum((r) => r.tout))}`,
+			`${"TOTAL".padEnd(26)} ${"-".padEnd(24)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  兜底=${sum((r) => r.fails)}  出 ${k(sum((r) => r.tout))}`,
 		);
 	}
+	console.log("注：缓读% 依赖 provider 的 usage 口径（input 不含缓存命中），跨 provider 比较仅作参考。");
 }
 
 /** 解析位置参数为完整意图文本（支持不带引号的多词意图）。 */
@@ -444,7 +449,7 @@ async function main() {
 输出为紧凑人类可读视图（提案/裁决/叙述兜底警告/token 用量与叙述）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
 render/wait 是协议外操作（不计回合）：render 调用场景呈现服务（叙述仪器），wait 直接摇钟。
-report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、叙述兜底次数（散文为空/未调 act 的摘要回落）与 token 用量（入列首→末展示裁剪后的输入趋势）。
+report 汇总 runs/ 各 run 的回合数、过程报警次数（散文为空/未调 act 的摘要回落）与 token 用量（入列首→末展示裁剪后的输入趋势）；缓读% 依赖 provider 的 usage 口径，跨 provider 仅作参考。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
 `);
