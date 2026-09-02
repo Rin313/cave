@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, departedNames, entity, fmtChange, internalPropsOf, messagesFor, viewCard, type Action, type ActionStep, type Change, type Entity, type GameDef, type PropValue, type TickStep } from "./sim.ts";
+import { Simulation, departedNames, entity, fmtChange, internalPropsOf, messagesFor, viewCard, type Action, type ActionStep, type Change, type Entity, type GameDef, type PropValue, type Step, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -178,6 +178,7 @@ export class Engine {
 		});
 		const memoryLimit = def.memoryLimit ?? 0;
 		if (!Number.isInteger(memoryLimit) || memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(def.memoryLimit)}`);
+		if (typeof def.summarize !== "function") throw new Error("GameDef.summarize 必填：叙述通道的确定性兜底须由游戏注入世界腔");
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const memory = loadMemory(sessionManager.getEntries(), memoryLimit);
 		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
@@ -248,8 +249,8 @@ export class Engine {
 			this.turn.warnings.push({ round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
 			narration = this.summarize([]);
 		} else {
-			// 摘要兜底原料 = 本回合全部可见变更（玩家动作 + 时间流逝）
-			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed].flatMap((r) => narratableChanges(this.def, r.changes)));
+			// 摘要兜底原料 = 本回合全部事件（玩家动作 + 时间流逝）
+			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed]);
 		}
 		this.recordTurn(action.intent, this.outcome.elapsed);
 		return {
@@ -290,7 +291,6 @@ export class Engine {
 	/** 场景呈现服务（表达层的场景模式；与 summarize/digest 同类的呈现设施）：
 	 *  无意志、无 act 通道、无时间流逝——不写近况、不触门闩。 */
 	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<NarrationOutcome> {
-		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
 		this.turn.gateOpen = false;
 		this.turn.acted = false;
 		this.turn.settled = "";
@@ -299,22 +299,21 @@ export class Engine {
 		this.turn.warnings = [];
 		this.turn.usage = [];
 		await this.session.prompt(buildNarratePrompt(this.sim, elapsed, instruction));
-		return { narration: this.settleNarration(visibleChanges), warnings: this.turn.warnings, usage: this.turn.usage };
+		return { narration: this.settleNarration(elapsed), warnings: this.turn.warnings, usage: this.turn.usage };
 	}
 
 	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地）。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
-	private settleNarration(summaryChanges: Change[]): string {
+	private settleNarration(steps: Step[]): string {
 		const text = this.turn.settled + this.turn.current;
 		if (text.trim() === "") {
 			this.turn.warnings.push({ round: 1, error: "散文为空。", attempt: text });
-			return this.summarize(summaryChanges);
+			return this.summarize(steps);
 		}
 		return text;
 	}
 
-	private summarize(changes: Change[]): string {
-		if (this.def.summarize) return this.def.summarize({ world: this.sim.world, changes, player: this.sim.player });
-		return this.sim.digest();
+	private summarize(steps: Step[]): string {
+		return this.def.summarize({ world: this.sim.world, player: this.sim.player, steps });
 	}
 
 	dispose(): void {

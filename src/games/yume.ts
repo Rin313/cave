@@ -1,4 +1,4 @@
-import type { Change, GameDef, PropDef, PropValue, Q, World } from "../core/sim.ts";
+import type { GameDef, PropDef, PropValue, Q, Step, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { denyUnreachable, inTreeReach } from "./space.ts";
 import { Type } from "typebox";
@@ -36,8 +36,8 @@ const hasAllEffects = (q: Q): boolean => EFFECTS.every((e) => hasEffect(q, e));
 const hereOf = (q: Q): string => String(q.entity(q.player)?.props["in"] ?? "");
 const canReach = (q: Q, id: string): boolean => inTreeReach(q.world, q.player, id).ok;
 
-function summarizeYume(input: { world: World; changes: Change[]; player: string }): string {
-	const { world, changes, player } = input;
+function summarizeYume(input: { world: World; player: string; steps: Step[] }): string {
+	const { world, player, steps } = input;
 	const me = entity(world, player);
 	const cur = me?.props["in"] as string | null;
 	const lines = [`你在${entity(world, cur ?? "")?.name ?? "一片空白"}。`];
@@ -45,9 +45,14 @@ function summarizeYume(input: { world: World; changes: Change[]; player: string 
 	if (around.length) lines.push(`附近有：${around.map((e) => e.name).join("、")}。`);
 	const carried = world.entities.filter((e) => e.id !== player && e.props["in"] === player);
 	if (carried.length) lines.push(`带着：${carried.map((e) => e.name).join("、")}。`);
-	for (const c of changes) {
+	for (const c of steps.flatMap((s) => s.changes)) {
 		if (c.kind === "spawn") lines.push(`出现了：${c.name}。`);
 		else if (c.kind === "despawn") lines.push(`消失了：${c.name}。`);
+	}
+	// 被拒尝试的理由与法则事实（低语）同样是世界的回应
+	for (const s of steps) {
+		if (s.kind === "action" && !s.ok) lines.push(s.reason);
+		if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
 	}
 	return lines.join("\n");
 }

@@ -225,8 +225,10 @@ export interface GameDef {
 	systems?: SystemRule[];
 	/** 属性注册表：属性类型/世界化标签/内部标记/值域。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
 	props?: Record<string, PropDef>;
-	/** 确定性回退摘要钩子（player = 意志居所）。 */
-	summarize?: (input: { world: World; changes: Change[]; player: string }) => string;
+	/** 确定性回退摘要：叙述通道的世界腔兜底——散文为空/未裁决时玩家所见（回退摘要属世界语言，由游戏注入）。
+	 *  steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
+	 *  （internal 隔离是模型面纪律，不约束世界侧文案），玩家文案的忠实自负。 */
+	summarize: (input: { world: World; player: string; steps: Step[] }) => string;
 	/** 近况窗口的回合数（映射层的指代视野）。缺省 0。*/
 	memoryLimit?: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */

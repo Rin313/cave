@@ -1,4 +1,4 @@
-import type { Change, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
+import type { Change, GameDef, PropDef, Q, Step, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
 import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
@@ -79,8 +79,8 @@ function summarizeChange(world: World, c: Change): string {
 	return `变更：${name(world, c.entity)}的${label} ${String(c.prev)} → ${String(c.next)}。`;
 }
 
-function summarizeVillage(input: { world: World; changes: Change[]; player: string }): string {
-	const { world, changes, player } = input;
+function summarizeVillage(input: { world: World; player: string; steps: Step[] }): string {
+	const { world, player, steps } = input;
 	const me = entity(world, player);
 	const bits: string[] = [];
 	if (me) {
@@ -89,7 +89,13 @@ function summarizeVillage(input: { world: World; changes: Change[]; player: stri
 		if (Number(me.props.water ?? 0) > 0) bits.push(`清水 ${me.props.water}`);
 		if (me.props.down === true) bits.push("你昏迷着。");
 	}
-	return ["你站在河畔村。"].concat(bits, changes.map((c) => summarizeChange(world, c))).join("\n");
+	const lines = ["你站在河畔村。"].concat(bits, steps.flatMap((s) => s.changes).map((c) => summarizeChange(world, c)));
+	// 被拒尝试的理由与法则事实同样是世界的回应：回退摘要忠实于整个回合
+	for (const s of steps) {
+		if (s.kind === "action" && !s.ok) lines.push(s.reason);
+		if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
+	}
+	return lines.join("\n");
 }
 
 export const village: GameDef = {
