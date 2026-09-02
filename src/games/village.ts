@@ -157,7 +157,7 @@ export const village: GameDef = {
 			schema: Type.Object({ span: Type.Optional(Type.Number({ description: "等待的刻数（1–12），缺省一刻" })) }),
 			rules: [{
 				id: "wait.pass",
-				// 时长经类型化参数由语言提案、由规则裁决（限制在 1–12）——「LLM 从不提案数值」的正面形态
+				// 时长经类型化参数由语言提案、由规则裁决（限制在 1–12）
 				judge: (q, p) => {
 					const span = Math.min(12, Math.max(1, Math.floor(Number(p.span ?? 1))));
 					return grant([], span >= 4 ? "你安静地待了好一阵子。" : "你静静地待了一会儿。", undefined, span);
