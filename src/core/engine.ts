@@ -112,7 +112,7 @@ export class Engine {
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
-					// 实时叙述只转译裁决后的正文（门闩已翻转；渲染回合恒为关）：叙述只能跟随裁决
+					// 实时叙述只转译裁决后的正文
 					if (event.assistantMessageEvent.type === "text_delta" && !this.turn.gateOpen) {
 						const delta = event.assistantMessageEvent.delta;
 						this.turn.current += delta;
@@ -270,16 +270,13 @@ export class Engine {
 		}
 	}
 
-	/** 独立渲染（无动作裁决的叙述回合，如开场/等待后的场景描写）：elapsed 为本回合时间流逝的刻步（含 facts）。 */
-	async render(instruction: string, elapsed: TickStep[] = []): Promise<void> {
+	/** 场景呈现服务（表达层的场景模式；与 summarize/digest 同类的呈现设施）：
+	 *  无意志、无 act 通道、无时间流逝——不写近况、不触门闩。 */
+	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<void> {
 		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
 		this.turn.settled = "";
 		this.turn.current = "";
-		try {
-			await this.session.prompt(buildRenderPrompt(this.sim, elapsed, instruction));
-		} finally {
-			this.turn.gateOpen = false;
-		}
+		await this.session.prompt(buildNarratePrompt(this.sim, elapsed, instruction));
 		this.emit({ type: "narration", text: this.settleNarration(visibleChanges) });
 	}
 
@@ -326,7 +323,7 @@ function buildSystemPrompt(def: GameDef): string {
 		.map(([name, v]) => `- ${name}「${v.label}」：${v.description}${v.entityParams?.length ? `（实体参数：${v.entityParams.join("/")}，只能取可见实体 id）` : ""}`)
 		.join("\n");
 	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
-部分回合没有行动窗口（渲染回合，如开场或纯时间流逝）：回合 prompt 顶部会标注「渲染回合」，此时不要调用 act，直接输出散文正文。
+呈现调用（开场、时间流逝后的场景描写）没有行动窗口：prompt 顶部标注「呈现服务」，此时不要调用 act，直接输出散文正文。
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名。
 可用动词（模拟层强制执行）：
 ${verbs}
@@ -345,7 +342,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
-/** 回合事件的世界腔策展（act 工具结果与独立渲染共用）：
+/** 回合事件的世界腔策展（act 工具结果与呈现服务共用）：
  *  尝试行、时间流逝、新见。core 只做符号连接。
  *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
@@ -392,10 +389,9 @@ function buildResultView(sim: Simulation, results: ActionStep[], refused: boolea
 	return lines.join("\n");
 }
 
-/** 独立渲染 prompt（无动作裁决的叙述回合，如开场/等待后的场景描写）。 */
-function buildRenderPrompt(sim: Simulation, elapsed: TickStep[], instruction: string): string {
-	const lines = ["[回合相位] 渲染回合：没有行动窗口，本回合不可调用 act 工具。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], false, undefined, [], elapsed)];
-	lines.push("", `${instruction} 直接输出散文正文。`);
+function buildNarratePrompt(sim: Simulation, elapsed: TickStep[], instruction: string): string {
+	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], false, undefined, [], elapsed)];
+	lines.push("", instruction);
 	return lines.join("\n");
 }
 

@@ -118,9 +118,9 @@ function collectEvents(engine: Engine): CollectEventsResult {
 	return { unsub, texts, validations, toolCalls, usages };
 }
 
-async function renderScene(engine: Engine, instruction: string, elapsed: TickStep[] = []): Promise<{ text: string; validations: ValidationFailure[]; usages: UsageRow[] }> {
+async function narrateScene(engine: Engine, instruction: string, elapsed: TickStep[] = []): Promise<{ text: string; validations: ValidationFailure[]; usages: UsageRow[] }> {
 	const { unsub, texts, validations, usages } = collectEvents(engine);
-	await engine.render(instruction, elapsed);
+	await engine.narrate(instruction, elapsed);
 	unsub();
 	return { text: texts.join(""), validations, usages };
 }
@@ -207,18 +207,18 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const sessionManager = SessionManager.create(process.cwd(), dir);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sim, sessionManager });
 	try {
-		const { text: scene, validations, usages } = await renderScene(engine, "请用文学笔触描写当前场景。");
+		const { text: scene, validations, usages } = await narrateScene(engine, "请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
 			game: gameId,
 			runId,
 			createdAt: new Date().toISOString(),
-			turn: 1,
+			turn: 0,
 			sessionFile: engine.sessionFile,
 			...engineOptsFromEnv(gameId),
 		};
 		saveMeta(dir, meta);
 		saveState(dir, sim);
-		appendTranscript(dir, { turn: 1, phase: "start", scene, validations, usage: usages });
+		appendTranscript(dir, { phase: "start", scene, validations, usage: usages });
 		console.log(`【${runId}·start】${def.title}`);
 		console.log(scene);
 		warnValidations(validations);
@@ -268,9 +268,8 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 			if (line.startsWith("@wait")) {
 				const n = Number(line.split(/\s+/)[1] ?? 1);
 				const results = sim.tick(n);
-				meta.turn += 1;
-				appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, usage: [] });
-				console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+				appendTranscript(dir, { phase: "wait", ticks: n, events: results, usage: [] });
+				console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
 			} else {
 				const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
 				const outcome = await engine.act({ intent: line });
@@ -293,12 +292,10 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 }
 
 async function cmdRender(runId: string, instruction: string, gameId: string | undefined): Promise<void> {
-	await withEngine(runId, gameId, async ({ dir, meta, engine }) => {
-		const { text: scene, validations, usages } = await renderScene(engine, instruction);
-		meta.turn += 1;
-		saveMeta(dir, meta);
-		appendTranscript(dir, { turn: meta.turn, phase: "render", instruction, scene, validations, usage: usages });
-		console.log(`\n【#${meta.turn} render】${instruction}`);
+	await withEngine(runId, gameId, async ({ dir, engine }) => {
+		const { text: scene, validations, usages } = await narrateScene(engine, instruction);
+		appendTranscript(dir, { phase: "render", instruction, scene, validations, usage: usages });
+		console.log(`\n【render】${instruction}`);
 		console.log(scene);
 		warnValidations(validations);
 		const u = usageLine(usages);
@@ -309,17 +306,16 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
 		const results = sim.tick(n);
-		const { text: scene, validations, usages } = await renderScene(
+		const { text: scene, validations, usages } = await narrateScene(
 			engine,
 			"时间流逝。请用文学笔触描写当前场景发生的变化。",
 			results,
 		);
-		meta.turn += 1;
 		meta.sessionFile = engine.sessionFile;
 		saveMeta(dir, meta);
 		saveState(dir, sim);
-		appendTranscript(dir, { turn: meta.turn, phase: "wait", ticks: n, events: results, scene, validations, usage: usages });
-		console.log(`\n【#${meta.turn} wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+		appendTranscript(dir, { phase: "wait", ticks: n, events: results, scene, validations, usage: usages });
+		console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
 		console.log(scene);
 		warnValidations(validations);
 		const u = usageLine(usages);
@@ -333,7 +329,7 @@ async function cmdState(runId: string, gameId: string | undefined): Promise<void
 	const meta = loadMeta(dir);
 	const def = getGame(meta.game);
 	const sim = new Simulation(def, loadState(dir));
-	console.log(`【${runId}】${meta.game} 第${meta.turn}回合`);
+	console.log(`【${runId}】${meta.game} 已进行 ${meta.turn} 回合`);
 	console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
 }
 
@@ -447,6 +443,7 @@ async function main() {
 
 输出为紧凑人类可读视图（提案/裁决/叙述兜底警告/token 用量与叙述）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
+render/wait 是协议外操作（不计回合）：render 调用场景呈现服务（叙述仪器），wait 直接摇钟。
 report 汇总 runs/ 各 run 的回合数、applied/rejected/refused 分布、叙述兜底次数（散文为空/未调 act 的摘要回落）与 token 用量（入列首→末展示裁剪后的输入趋势）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
