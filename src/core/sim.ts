@@ -54,13 +54,14 @@ export interface Action {
 	params: Record<string, PropValue>;
 }
 
-/** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言。
- *  契约只收解析后的 referent（实体名等世界语），不收 id/属性名——机器诊断一律走 Denial.debug。 */
+/** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言、
+ *  不解析实体名进文案——涉及实体的指称由规则在自家世界腔理由内解析（法则可见世界真相，门只可见公开状态）；
+ *  机器诊断一律走 Denial.debug。 */
 export interface Messages {
 	/** 所有法则均未表态时的兜底回应；core 完整性不变式违反也回落此文案。 */
 	noResponse: string;
-	/** 实体参数不可见/不存在（core 校验层拒绝）：收已存在实体的解析名；全为幻觉 id 时为空列表。 */
-	invisibleEntity?: (names: string[]) => string;
+	/** 实体参数不可见/不存在（core 校验层拒绝）的统一世界腔：幻觉 id 与隐藏实体同一文案。 */
+	invisibleEntity?: string;
 	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
 	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
@@ -476,10 +477,9 @@ export class Simulation {
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
 		if (invalid.length) {
-			// 世界腔由游戏 messages 注入：已存在但不可见的实体收解析名，幻觉 id 无名字（收空列表）
-			const first = invalid[0]!;
-			const hit = entity(this.world, first);
-			const reason = msgs.invisibleEntity?.(hit ? [hit.name] : []) ?? msgs.noResponse;
+			// 门的世界腔是可见状态的函数：幻觉 id 与隐藏实体同一文案，不解析门外实体——
+			// 「拒绝不携带涉及实体」在门上同样成立（审计 id 走 debug），否则 id 盲猜即存在性 oracle
+			const reason = msgs.invisibleEntity ?? msgs.noResponse;
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
 		}
 		const q = this.query(action.params);
@@ -590,14 +590,20 @@ export class Simulation {
 	}
 
 	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。
-	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。 */
-	describeAction(action: Action, departed?: ReadonlyMap<string, string>): string {
+	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。
+	 *  指称解析是公开状态（在世可见 ∪ 窗口内离场）的函数：可见性拒绝（law action.invisible）的尝试不解析活世界——
+	 *  未入参照域的 id 不得获得名字（否则门构成存在性 oracle）；已离场者名字已经变更行公开，仍由 departed 兜底。 */
+	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
+		const action = step.action;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
+		const raw = step.denial?.law === "action.invisible";
 		const name = (v: PropValue): string => {
 			if (typeof v === "string") {
-				const hit = entity(this.world, v);
-				if (hit) return hit.name;
+				if (!raw) {
+					const hit = entity(this.world, v);
+					if (hit) return hit.name;
+				}
 				const gone = departed?.get(v);
 				if (gone !== undefined) return gone;
 			}

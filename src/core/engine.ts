@@ -268,7 +268,8 @@ export class Engine {
 		const passed = messagesFor(this.def).timePassed;
 		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || passed}`);
 		const granted = o.results.reduce((n, r) => n + r.ticks, 0);
-		const moves = [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves];
+		const departed = departedNames([...o.results, ...o.elapsed]);
+		const moves = [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r, departed)}：${r.reason}`), ...elapsedMoves];
 		// 静默流逝（零产出刻）也入近况：授予的刻数必须可说
 		if (granted > 0 && elapsed.length === 0) moves.push(`⏱ ${passed}（${granted} 刻）`);
 		const turn: MemoryTurn = {
@@ -383,7 +384,7 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c, departed)).join("；")}` : "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
 			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
-			lines.push(`- 尝试「${sim.describeAction(r.action, departed)}」→ ${verdict}${changes}${facts}`);
+			lines.push(`- 尝试「${sim.describeAction(r, departed)}」→ ${verdict}${changes}${facts}`);
 		}
 	} else if (!refused && !elapsedEvents.length && granted === 0) {
 		lines.push("没有任何改变。");

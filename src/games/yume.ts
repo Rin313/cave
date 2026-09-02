@@ -242,7 +242,7 @@ export const yume: GameDef = {
 	memoryLimit: 6,
 	messages: {
 		noResponse: "什么也没有发生。",
-		invisibleEntity: (names) => (names.length ? `${names.join("、")}不在你的视野里。` : "你的视野里没有那样的东西。"),
+		invisibleEntity: "你的视野里没有那样的东西。",
 		defaultReason: "……",
 		notInActionPhase: "梦境此刻不接受操作。",
 		timePassed: "梦里的时间悄悄流走",

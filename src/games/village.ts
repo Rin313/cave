@@ -99,7 +99,7 @@ export const village: GameDef = {
 	memoryLimit: 6,
 	messages: {
 		noResponse: "世界没有以这种方式回应。",
-		invisibleEntity: (names) => (names.length ? `你看不到${names.join("、")}在哪里。` : "这里没有那样的东西。"),
+		invisibleEntity: "你看不到那样东西在哪里。",
 		defaultReason: "……",
 		notInActionPhase: "当前不在行动阶段，无法执行操作。",
 		timePassed: "时间流逝",

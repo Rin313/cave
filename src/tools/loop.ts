@@ -105,7 +105,7 @@ function printAct(sim: Simulation, o: {
 	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
 	for (const a of o.outcome.proposals) console.log(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
 	const departed = departedNames([...o.outcome.results, ...o.outcome.elapsed]);
-	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action, departed)}：${r.reason}`);
+	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r, departed)}：${r.reason}`);
 	for (const r of o.outcome.elapsed) {
 		const bits = [r.changes.map((c) => fmtChange(sim, c, departed)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
 		console.log(`  ⏱ ${bits.join("；") || r.reason}`);
