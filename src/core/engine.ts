@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, fmtChange, fmtValue, internalPropsOf, messagesFor, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
+import { Simulation, departedNames, fmtChange, fmtValue, internalPropsOf, messagesFor, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -343,6 +343,8 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
  *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
 function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
 	const lines: string[] = [];
+	// 渲染窗口内的 despawn 实体以其变更记录兜底解析：先引用后生灭是合法书写，裸 id 不得进世界腔
+	const departed = departedNames([...results, ...elapsed]);
 	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
 	const granted = results.reduce((n, r) => n + r.ticks, 0);
 	if (refused) {
@@ -352,11 +354,10 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 		lines.push("本回合尝试：");
 		for (const r of results) {
 			const visible = narratableChanges(sim.def, r.changes);
-			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c)).join("；")}` : "";
+			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c, departed)).join("；")}` : "";
 			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
 			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
-			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
-			lines.push(`- 尝试「${sim.describeAction(r.action)}」→ ${verdict}${changes}${facts}${involved}`);
+			lines.push(`- 尝试「${sim.describeAction(r.action, departed)}」→ ${verdict}${changes}${facts}`);
 		}
 	} else if (!refused && !elapsedEvents.length && granted === 0) {
 		lines.push("没有任何改变。");
@@ -364,7 +365,7 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 	if (elapsedEvents.length) {
 		lines.push(`${messagesFor(sim.def).timePassed}：`);
 		for (const r of elapsedEvents) {
-			const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
+			const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c, departed)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
 			const body = bits.length ? bits.join("。") : (r.reason || messagesFor(sim.def).defaultReason);
 			lines.push(`- ${r.ok ? body : `${body}（被拒绝）`}`);
 		}

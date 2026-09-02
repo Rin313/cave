@@ -73,7 +73,7 @@ export interface Messages {
 export interface Fact {
 	/** 世界腔陈述。 */
 	text: string;
-	/** 陈述涉及的实体 id（结果视图「涉及」行与审计的依据）。 */
+	/** 陈述涉及的实体 id（审计依据，不进世界腔策展）。 */
 	entities: string[];
 }
 
@@ -206,7 +206,7 @@ export function defineVerb<S extends TObject>(spec: {
 	};
 }
 
-/** 从 deltas + facts 收集涉及实体（表达层声明校验与审计用）。 */
+/** 从 deltas + facts 收集涉及实体（审计依据；世界腔策展不渲染参与清单）。 */
 function collectInvolved(deltas: Delta[], facts: Fact[] = []): string[] {
 	const s = new Set<string>();
 	for (const d of deltas) {
@@ -405,27 +405,38 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return messagesFor(def).noResponse;
 }
 
-/** 值的语言无关取值：id 解析为展示名，其余原样字符串化（core 只做符号连接）。 */
-export function fmtValue(sim: Simulation, v: PropValue): string {
+/** 离开状态者的名字底表：despawn 变更是其名字的唯一载体（身份卡随实体离开状态）。
+ *  渲染历史事件（变更行/尝试行）时必须以渲染窗口内的 despawn 记录兜底解析。 */
+export function departedNames(window: readonly { changes: Change[] }[]): Map<string, string> {
+	const m = new Map<string, string>();
+	for (const s of window) for (const c of s.changes) if (c.kind === "despawn") m.set(c.entity, c.name);
+	return m;
+}
+
+/** 值的语言无关取值：id 解析为展示名，其余原样字符串化。 */
+export function fmtValue(sim: Simulation, v: PropValue, departed?: ReadonlyMap<string, string>): string {
 	if (v === null) return "null";
 	if (typeof v === "string") {
 		const hit = sim.world.entities.find((e) => e.id === v);
 		if (hit) return hit.name;
+		const gone = departed?.get(v);
+		if (gone !== undefined) return gone;
 	}
 	return String(v);
 }
 
 /** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）：
  *  普通变更 `<name>.<label>: <prev> → <next>`；rel 变更 `<from>.<type>.<to>: <prev> → <next>`；生灭 `+ name` / `- name`。
- *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。 */
-export function fmtChange(sim: Simulation, c: Change): string {
+ *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。
+ *  渲染窗口内 despawn 的实体以 departed 兜底解析。 */
+export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
 	if (c.kind === "spawn") return `+ ${c.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
-	if (c.kind === "rel") return `${fmtValue(sim, c.from)}.${c.type}.${fmtValue(sim, c.to)}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
+	if (c.kind === "rel") return `${fmtValue(sim, c.from, departed)}.${c.type}.${fmtValue(sim, c.to, departed)}: ${fmtValue(sim, c.prev, departed)} → ${fmtValue(sim, c.next, departed)}`;
 	const e = sim.world.entities.find((x) => x.id === c.entity);
-	const name = e?.name ?? c.entity;
+	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	return `${name}.${label}: ${fmtValue(sim, c.prev)} → ${fmtValue(sim, c.next)}`;
+	return `${name}.${label}: ${fmtValue(sim, c.prev, departed)} → ${fmtValue(sim, c.next, departed)}`;
 }
 
 /** 属性读取 */
@@ -622,14 +633,17 @@ export class Simulation {
 		return { step, elapsed };
 	}
 
-	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。 */
-	describeAction(action: Action): string {
+	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。
+	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。 */
+	describeAction(action: Action, departed?: ReadonlyMap<string, string>): string {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
 		const name = (v: PropValue): string => {
 			if (typeof v === "string") {
 				const hit = entity(this.world, v);
 				if (hit) return hit.name;
+				const gone = departed?.get(v);
+				if (gone !== undefined) return gone;
 			}
 			return String(v);
 		};

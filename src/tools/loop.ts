@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome } from "../core/engine.ts";
-import { Simulation, fmtChange } from "../core/sim.ts";
+import { Simulation, departedNames, fmtChange } from "../core/sim.ts";
 import type { GameDef, TickStep, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -157,9 +157,10 @@ function printAct(sim: Simulation, o: {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
 	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
 	for (const l of proposalLines(o.toolCalls)) console.log(l);
-	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action)}：${r.reason}`);
+	const departed = departedNames([...o.outcome.results, ...o.outcome.elapsed]);
+	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action, departed)}：${r.reason}`);
 	for (const r of o.outcome.elapsed) {
-		const bits = [r.changes.map((c) => fmtChange(sim, c)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
+		const bits = [r.changes.map((c) => fmtChange(sim, c, departed)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
 		console.log(`  ⏱ ${bits.join("；") || r.reason}`);
 	}
 	warnValidations(o.validations);

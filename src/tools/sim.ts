@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, fmtChange, propGet } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
 import { getGame, getProbe } from "../games/registry.ts";
 import { probeScope } from "../games/space.ts";
@@ -365,11 +365,12 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 			console.log("（时间流逝，什么也没发生）");
 			continue;
 		}
+		const departed = departedNames(results);
 		for (const r of results) {
 			console.log(`\n>>> ${actionDesc}`);
 			const ticks = r.kind === "action" && r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : "";
 			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${ticks}${!r.ok && r.deniedBy === "invariant" && r.denial?.debug && r.denial.reason == null ? ` ⚠ ${r.denial.debug}` : ""}`);
-			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch)}`);
+			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch, departed)}`);
 		}
 	}
 
