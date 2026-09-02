@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, departedNames, fmtChange, fmtValue, internalPropsOf, messagesFor, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
+import { Simulation, departedNames, entity, fmtChange, internalPropsOf, messagesFor, viewCard, type Action, type ActionStep, type Change, type Entity, type GameDef, type PropValue, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -367,7 +367,9 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 /** 回合事件的世界腔策展（act 工具结果与呈现服务共用）：
  *  尝试行、时间流逝、新见。core 只做符号连接。
  *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
- *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。 */
+ *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。
+ *  新见段是状态视图装配线的回合内增量：本回合新进入参照域的实体（规则/系统生灭、移动揭晓）
+ *  以状态视图同形的实体卡承载——纹理与 id 在裁决当回合即可说、可指名，不欠下一回合的 digest。 */
 function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
 	const lines: string[] = [];
 	// 渲染窗口内的 despawn 实体以其变更记录兜底解析：先引用后生灭是合法书写，裸 id 不得进世界腔
@@ -400,11 +402,11 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 		// 静默流逝（零产出刻）也是裁决授予的时间后果，必须可说（时间律：授予的刻数必须可说）
 		lines.push(`${messagesFor(sim.def).timePassed}（${granted} 刻）：没有任何改变。`);
 	}
-	const revealedVisible = revealed.filter((id) => sim.world.entities.some((e) => e.id === id));
+	const revealedVisible = revealed.map((id) => entity(sim.world, id)).filter((e): e is Entity => e !== undefined);
 	if (revealedVisible.length) {
 		lines.push("本回合新见：");
-		for (const id of revealedVisible) {
-			lines.push(`  ${fmtValue(sim, id)}`);
+		for (const e of revealedVisible) {
+			lines.push(`  ${JSON.stringify(viewCard(sim.def, e))}`);
 		}
 	}
 	return lines;

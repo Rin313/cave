@@ -317,6 +317,12 @@ export function internalPropsOf(def: GameDef): Set<string> {
 	return s;
 }
 
+/** 实体视图卡（状态视图与新见段共用的唯一形状）：身份卡 + 注册表过滤后的属性包。 */
+export function viewCard(def: GameDef, e: Entity): { id: string; name: string; kind: string; tags: string[]; props: Record<string, PropValue> } {
+	const internal = internalPropsOf(def);
+	return { id: e.id, name: e.name, kind: e.kind, tags: e.tags, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))) };
+}
+
 /** 属性世界化标签（拒绝/变更文本中的说法；无则返回 undefined）。 */
 export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
@@ -675,16 +681,7 @@ export class Simulation {
 	 *  参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名，可指名的必看得见。 */
 	digest(): string {
 		const vis = this.visible();
-		const internal = internalPropsOf(this.def);
-		const entities = this.world.entities
-			.filter((e) => vis.has(e.id))
-			.map((e) => ({
-				id: e.id,
-				name: e.name,
-				kind: e.kind,
-				tags: e.tags,
-				props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))),
-			}));
+		const entities = this.world.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
 		const relations = (this.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
 		const extra = this.def.digestExtra?.(this.world, this.player) ?? {};
 		// 保留键归装配线：extra 不得覆写 time/relations/entities（参照域契约的构造保证），冲突键被忽略并告警
