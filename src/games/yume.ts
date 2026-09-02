@@ -13,6 +13,8 @@ import { Type } from "typebox";
 
 const YUME_PROPS: Record<string, PropDef> = {
 	"in": { type: "id", label: "所在" },
+	kind: { type: "string", label: "类别" },
+	tags: { type: "tags", label: "标记" },
 	space: { type: "boolean", label: "地点" },
 	awake: { type: "boolean", label: "清醒" },
 	ended: { type: "boolean", internal: true },
@@ -48,6 +50,7 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 	for (const c of steps.flatMap((s) => s.changes)) {
 		if (c.kind === "spawn") lines.push(`出现了：${c.name}。`);
 		else if (c.kind === "despawn") lines.push(`消失了：${c.name}。`);
+		else if (c.kind === "rename") lines.push(`改名：${c.prev} → ${c.next}。`);
 	}
 	// 被拒尝试的理由与法则事实（低语）同样是世界的回应
 	for (const s of steps) {
@@ -67,7 +70,7 @@ function digestExtraYume(world: World, player: string): Record<string, PropValue
 		exits: (world.relations ?? [])
 			.filter((r) => r.type === "path" && r.from === cur)
 			.map((r) => ({ id: r.to, name: entity(world, r.to)?.name ?? r.to })),
-		carried: world.entities.filter((e) => e.kind === "effect" && e.props["in"] === player).map((e) => e.name),
+		carried: world.entities.filter((e) => e.props.kind === "effect" && e.props["in"] === player).map((e) => e.name),
 	};
 }
 
@@ -135,7 +138,7 @@ const takeVerb = defineVerb({
 				const t = q.entity(p.entity);
 				if (t?.props.takable !== true) return deny("take.heavy", { reason: `${q.name(p.entity)}带不走。` });
 				if (t.props["in"] === q.player) return deny("take.held", { reason: `${q.name(p.entity)}已经收好了。` });
-				return grant([D.set(p.entity, "in", q.player)], t.kind === "effect"
+				return grant([D.set(p.entity, "in", q.player)], t.props.kind === "effect"
 					? `你收下了${q.name(p.entity)}。说不清为什么，世界的质地变了一点。`
 					: `你把${q.name(p.entity)}收好了。`);
 			},
@@ -189,7 +192,7 @@ const interactVerb = defineVerb({
 				return grant(
 					[
 						D.despawn("bird"),
-						D.spawn({ id: "feather", name: "一根长羽", kind: "item", tags: [], props: { "in": hereOf(q), takable: true, desc: "羽根是温的。" } }),
+						D.spawn({ id: "feather", name: "一根长羽", props: { kind: "item", "in": hereOf(q), takable: true, desc: "羽根是温的。" } }),
 					],
 					"刀落下去的时候没有血。原地只剩一根长羽。",
 				);
@@ -202,7 +205,7 @@ const interactVerb = defineVerb({
 				if (q.entity("machine")?.props.vended === true) return grant([], "自贩机只剩嗡嗡声。按钮全都不亮了。");
 				return grant([
 					D.set("machine", "vended", true),
-					D.spawn({ id: "can", name: "冰凉的罐子", kind: "item", tags: [], props: { "in": "neon", takable: true, desc: "找不到任何标签。" } }),
+					D.spawn({ id: "can", name: "冰凉的罐子", props: { kind: "item", "in": "neon", takable: true, desc: "找不到任何标签。" } }),
 				], "哐当。口渴的机器吐出一罐东西。");
 			},
 		},
@@ -212,10 +215,10 @@ const interactVerb = defineVerb({
 				if (p.entity !== "stone_cat") return null;
 				if (entity(q.world, "hut")) return grant([], "石猫闭着眼。它身后那扇门开着一条缝。");
 				return grant([
-					D.spawn({ id: "hut", name: "石猫身后的小屋", kind: "space", tags: [], props: { space: true, desc: "从正面看只有一扇门的宽度。" } }),
+					D.spawn({ id: "hut", name: "石猫身后的小屋", props: { kind: "space", tags: [], space: true, desc: "从正面看只有一扇门的宽度。" } }),
 					D.relSet("desert", "hut", "path", true),
 					D.relSet("hut", "desert", "path", true),
-					D.spawn({ id: "cat_effect", name: "猫效果", kind: "effect", tags: [], props: { "in": "hut", takable: true, desc: "抱起来的瞬间，整个世界的轮廓都软了一下。" } }),
+					D.spawn({ id: "cat_effect", name: "猫效果", props: { kind: "effect", tags: [], "in": "hut", takable: true, desc: "抱起来的瞬间，整个世界的轮廓都软了一下。" } }),
 				], "石猫睁开了眼。它身后多出了一扇门。");
 			},
 		},
@@ -262,32 +265,32 @@ export const yume: GameDef = {
 	world: {
 		time: 0,
 		entities: [
-			{ id: "room", name: "玩家的房间", kind: "space", tags: ["home"], props: { space: true, desc: "午后的光线里浮着灰尘。房间很小，小得很安全。" } },
-			{ id: "futon", name: "床垫", kind: "structure", tags: [], props: { "in": "room", desc: "摊在地上，被面洗得发白。" } },
-			{ id: "tv", name: "电视机", kind: "structure", tags: [], props: { "in": "room", desc: "老式的显像管电视，屏幕上全是雪花。" } },
-			{ id: "window", name: "阳台窗", kind: "structure", tags: [], props: { "in": "room", desc: "玻璃外是天台和栏杆，天永远是黄昏。" } },
-			{ id: "journal", name: "手帐", kind: "item", tags: [], props: { "in": "room", desc: "锁扣开着。纸页边缘卷起来了。" } },
-			{ id: "nexus", name: "梦之门厅", kind: "space", tags: ["hub"], props: { space: true, desc: "四壁全是门。数不清有多少扇，亮着的永远只有几扇。" } },
-			{ id: "door_warm", name: "发热的门", kind: "structure", tags: [], props: { "in": "nexus", desc: "木纹里透出暖意。" } },
-			{ id: "door_breath", name: "起伏的门", kind: "structure", tags: [], props: { "in": "nexus", desc: "门板像胸口一样起伏。" } },
-			{ id: "door_cold", name: "结霜的门", kind: "structure", tags: [], props: { "in": "nexus", desc: "门缝凝着细小的冰晶。" } },
-			{ id: "door_hum", name: "嗡鸣的门", kind: "structure", tags: [], props: { "in": "nexus", desc: "贴上去能感到低频的震动。" } },
-			{ id: "wheel_man", name: "独轮车人", kind: "creature", tags: [], props: { "in": "nexus", desc: "骑着一辆独轮车原地转圈，始终没有回头。" } },
-			{ id: "forest", name: "枯森森林", kind: "space", tags: [], props: { space: true, desc: "树都是灰色的。叶子摩擦的声音太响了，响得不像风。" } },
-			{ id: "deep", name: "密林深处", kind: "space", tags: [], props: { space: true, desc: "树冠在头顶合拢成屋顶。光到这里就旧了。" } },
-			{ id: "bird", name: "无脸鸟", kind: "creature", tags: [], props: { "in": "forest", desc: "它站在一根横枝上，头转过来的时候没有脸。" } },
-			{ id: "knife_effect", name: "刀效果", kind: "effect", tags: [], props: { "in": "deep", takable: true, desc: "半插在树皮里。握柄比看上去更冷。" } },
-			{ id: "neon", name: "霓虹巷", kind: "space", tags: [], props: { space: true, desc: "招牌全都亮着，没有一个字你认识。" } },
-			{ id: "machine", name: "自贩机", kind: "structure", tags: [], props: { "in": "neon", desc: "灯箱亮得过火。里面的饮料全部反着排。" } },
-			{ id: "alley", name: "死巷", kind: "space", tags: [], props: { space: true, dark: true, desc: "巷子深处没有光。声音走到一半就停了。" } },
-			{ id: "bike_effect", name: "自行车效果", kind: "effect", tags: [], props: { "in": "alley", takable: true, desc: "靠在墙上的自行车。跨上去的话，大概哪里都能去。" } },
-			{ id: "desert", name: "沙之海", kind: "space", tags: [], props: { space: true, desc: "沙子一直延伸到天空中间。分不清哪边是地平线。" } },
-			{ id: "lamp_effect", name: "灯效果", kind: "effect", tags: [], props: { "in": "desert", takable: true, desc: "半埋在沙里。拧亮的话，是一盏很旧的提灯。" } },
-			{ id: "stone_cat", name: "石猫", kind: "structure", tags: [], props: { "in": "desert", desc: "蹲坐的石猫。眼睛的位置只有两个浅坑。" } },
-			{ id: "snow", name: "雪原", kind: "space", tags: [], props: { space: true, desc: "雪停了。安静得耳朵发胀。" } },
-			{ id: "snowman", name: "双脸雪人", kind: "structure", tags: [], props: { "in": "snow", desc: "一个雪堆，前后各有一张脸。" } },
-			{ id: "lake", name: "冻湖", kind: "structure", tags: [], props: { "in": "snow", desc: "整片湖冻成了哑光的镜子。" } },
-			{ id: "player", name: "你", kind: "actor", tags: [], props: { "in": "room", awake: true } },
+			{ id: "room", name: "玩家的房间", props: { kind: "space", tags: ["home"], space: true, desc: "午后的光线里浮着灰尘。房间很小，小得很安全。" } },
+			{ id: "futon", name: "床垫", props: { kind: "structure", tags: [], "in": "room", desc: "摊在地上，被面洗得发白。" } },
+			{ id: "tv", name: "电视机", props: { kind: "structure", tags: [], "in": "room", desc: "老式的显像管电视，屏幕上全是雪花。" } },
+			{ id: "window", name: "阳台窗", props: { kind: "structure", tags: [], "in": "room", desc: "玻璃外是天台和栏杆，天永远是黄昏。" } },
+			{ id: "journal", name: "手帐", props: { kind: "item", tags: [], "in": "room", desc: "锁扣开着。纸页边缘卷起来了。" } },
+			{ id: "nexus", name: "梦之门厅", props: { kind: "space", tags: ["hub"], space: true, desc: "四壁全是门。数不清有多少扇，亮着的永远只有几扇。" } },
+			{ id: "door_warm", name: "发热的门", props: { kind: "structure", tags: [], "in": "nexus", desc: "木纹里透出暖意。" } },
+			{ id: "door_breath", name: "起伏的门", props: { kind: "structure", tags: [], "in": "nexus", desc: "门板像胸口一样起伏。" } },
+			{ id: "door_cold", name: "结霜的门", props: { kind: "structure", tags: [], "in": "nexus", desc: "门缝凝着细小的冰晶。" } },
+			{ id: "door_hum", name: "嗡鸣的门", props: { kind: "structure", tags: [], "in": "nexus", desc: "贴上去能感到低频的震动。" } },
+			{ id: "wheel_man", name: "独轮车人", props: { kind: "creature", tags: [], "in": "nexus", desc: "骑着一辆独轮车原地转圈，始终没有回头。" } },
+			{ id: "forest", name: "枯森森林", props: { kind: "space", tags: [], space: true, desc: "树都是灰色的。叶子摩擦的声音太响了，响得不像风。" } },
+			{ id: "deep", name: "密林深处", props: { kind: "space", tags: [], space: true, desc: "树冠在头顶合拢成屋顶。光到这里就旧了。" } },
+			{ id: "bird", name: "无脸鸟", props: { kind: "creature", tags: [], "in": "forest", desc: "它站在一根横枝上，头转过来的时候没有脸。" } },
+			{ id: "knife_effect", name: "刀效果", props: { kind: "effect", tags: [], "in": "deep", takable: true, desc: "半插在树皮里。握柄比看上去更冷。" } },
+			{ id: "neon", name: "霓虹巷", props: { kind: "space", tags: [], space: true, desc: "招牌全都亮着，没有一个字你认识。" } },
+			{ id: "machine", name: "自贩机", props: { kind: "structure", tags: [], "in": "neon", desc: "灯箱亮得过火。里面的饮料全部反着排。" } },
+			{ id: "alley", name: "死巷", props: { kind: "space", tags: [], space: true, dark: true, desc: "巷子深处没有光。声音走到一半就停了。" } },
+			{ id: "bike_effect", name: "自行车效果", props: { kind: "effect", tags: [], "in": "alley", takable: true, desc: "靠在墙上的自行车。跨上去的话，大概哪里都能去。" } },
+			{ id: "desert", name: "沙之海", props: { kind: "space", tags: [], space: true, desc: "沙子一直延伸到天空中间。分不清哪边是地平线。" } },
+			{ id: "lamp_effect", name: "灯效果", props: { kind: "effect", tags: [], "in": "desert", takable: true, desc: "半埋在沙里。拧亮的话，是一盏很旧的提灯。" } },
+			{ id: "stone_cat", name: "石猫", props: { kind: "structure", tags: [], "in": "desert", desc: "蹲坐的石猫。眼睛的位置只有两个浅坑。" } },
+			{ id: "snow", name: "雪原", props: { kind: "space", tags: [], space: true, desc: "雪停了。安静得耳朵发胀。" } },
+			{ id: "snowman", name: "双脸雪人", props: { kind: "structure", tags: [], "in": "snow", desc: "一个雪堆，前后各有一张脸。" } },
+			{ id: "lake", name: "冻湖", props: { kind: "structure", tags: [], "in": "snow", desc: "整片湖冻成了哑光的镜子。" } },
+			{ id: "player", name: "你", props: { kind: "actor", tags: [], "in": "room", awake: true } },
 		],
 		relations: [
 			{ from: "nexus", to: "forest", type: "path", value: true },
@@ -329,7 +332,7 @@ export const yume: GameDef = {
 				return {
 					deltas: [
 						D.set(q.player, "ended", true),
-						D.spawn({ id: "shadow", name: "阳台上的人影", kind: "figure", tags: [], props: { "in": "room", desc: "隔着玻璃看不清脸。它抬起了一只手。" } }),
+						D.spawn({ id: "shadow", name: "阳台上的人影", props: { kind: "figure", tags: [], "in": "room", desc: "隔着玻璃看不清脸。它抬起了一只手。" } }),
 					],
 					facts: [{ text: "阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。" }],
 				};

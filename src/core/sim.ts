@@ -7,8 +7,6 @@ export type PropValue = string | number | boolean | null | PropValue[] | { [k: s
 export interface Entity {
 	id: string;
 	name: string;
-	kind: string;
-	tags: string[];
 	props: Record<string, PropValue>;
 }
 
@@ -28,7 +26,7 @@ export interface World {
 }
 
 /** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
- *  提交产出按基底类别同构分形的 Change（kind: prop/rel/spawn/despawn）
+ *  提交产出按基底类别同构分形的 Change（kind: prop/rename/rel/spawn/despawn）
  *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 建边/删边（值 null），配合生灭原语让拓扑生长与收缩对称）。
  *  despawn 只级联清理核心结构（关系边）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
 export type Delta =
@@ -36,14 +34,16 @@ export type Delta =
 	| { op: "inc"; entity: string; prop: string; by: number }
 	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean | null }
 	| { op: "relInc"; from: string; to: string; type: string; by: number }
+	| { op: "rename"; entity: string; value: string }
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-/** 世界变更记录（快照线以下的数据协议，commit 的唯一产出）：与 Delta 按基底类别同构——属性写 / 关系边写 / 实体生灭。
- *  set/inc 合流为 prop（提交后不区分操作形态，prev/next 即差异）；rel 携带完整边端点（from/to）与边值（prev/next，next null 即删边）——
+/** 世界变更记录（快照线以下的数据协议，commit 的唯一产出）：与 Delta 按基底类别同构——属性写 / 名字写 / 关系边写 / 实体生灭。
+ *  set/inc 合流为 prop（提交后不区分操作形态，prev/next 即差异）；rel 携带完整边端点（from/to）与边值（prev/next，next null 即删边）；
  *  spawn/despawn 的 name 是生灭实体的展示名（实体已离开状态，变更是唯一载体）。*/
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue; src: string }
+	| { kind: "rename"; entity: string; prev: string; next: string; src: string }
 	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue; src: string }
 	| { kind: "spawn"; entity: string; name: string; src: string }
 	| { kind: "despawn"; entity: string; name: string; src: string };
@@ -76,7 +76,7 @@ export interface Fact {
 }
 
 /** 属性类型。 */
-export type PropType = "string" | "number" | "boolean" | "id" | "any";
+export type PropType = "string" | "number" | "boolean" | "id" | "tags" | "any";
 
 /** 属性注册表条目：类型的声明、世界化标签、内部标记 */
 export interface PropDef {
@@ -173,6 +173,7 @@ export const D = {
 	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
 	relSet: (from: string, to: string, type: string, value: number | string | boolean | null): Delta => ({ op: "relSet", from, to, type, value }),
 	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
+	rename: (entity: string, value: string): Delta => ({ op: "rename", entity, value }),
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
@@ -261,10 +262,8 @@ export interface Invariant {
 	check: (world: World, ctx: InvariantCtx) => string | null;
 }
 
-/** core 默认硬墙：引用完整性与注册表类型契约——实体 id 唯一、id 型属性（标量或引用数组）与关系端点指向存在的实体、
- *  注册属性的值与声明类型一致（number 拒非有限值：NaN/Infinity 经 JSON 序列化静默变 null，是账本腐蚀通道；
- *  null/缺席为缺省惯例放行，any 显式豁免）。世界全域扫描：spawn 整包与 t=0 构造期自动覆盖。
- *  检测规则把世界改坏的 bug（悬空引用、类型错写），任何提交都无法绕过。 */
+/** core 默认硬墙：引用完整性与注册表类型契约。
+ * 世界全域扫描：spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug（悬空引用、类型错写）。 */
 export function integrityInvariant(): Invariant {
 	const got = (v: PropValue): string => {
 		if (v === null) return "null";
@@ -283,6 +282,9 @@ export function integrityInvariant(): Invariant {
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
 			const registry = Object.entries(ctx.def.props ?? {});
 			for (const e of world.entities) {
+				// 卡片契约：id 与名字是引擎自有词汇的在场保证（存档恢复路径无类型检查，腐蚀通道在此封死）
+				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
+				if (typeof e.name !== "string" || e.name === "") return `integrity: ${e.id}.name must be non-empty string`;
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
 					if (v === null || v === undefined || pd.type === "any") continue;
@@ -292,6 +294,11 @@ export function integrityInvariant(): Invariant {
 							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
 							if (ref !== "" && !ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
 						}
+						continue;
+					}
+					if (pd.type === "tags") {
+						if (!Array.isArray(v)) return `integrity: ${e.id}.${p} expects tags (string array), got ${got(v)}`;
+						for (const t of v) if (typeof t !== "string") return `integrity: ${e.id}.${p} expects string element, got ${got(t)}`;
 						continue;
 					}
 					if (pd.type === "number" && (typeof v !== "number" || !Number.isFinite(v))) return `integrity: ${e.id}.${p} expects number, got ${got(v)}`;
@@ -319,10 +326,10 @@ export function internalPropsOf(def: GameDef): Set<string> {
 	return s;
 }
 
-/** 实体视图卡（状态视图与新见段共用的唯一形状）：身份卡 + 注册表过滤后的属性包。 */
-export function viewCard(def: GameDef, e: Entity): { id: string; name: string; kind: string; tags: string[]; props: Record<string, PropValue> } {
+/** 实体视图卡（状态视图与新见段共用的唯一形状）：id + 名字 + 注册表过滤后的属性包。 */
+export function viewCard(def: GameDef, e: Entity): { id: string; name: string; props: Record<string, PropValue> } {
 	const internal = internalPropsOf(def);
-	return { id: e.id, name: e.name, kind: e.kind, tags: e.tags, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))) };
+	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))) };
 }
 
 /** 属性世界化标签（拒绝/变更文本中的说法；无则返回 undefined）。 */
@@ -386,7 +393,7 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return messagesFor(def).noResponse;
 }
 
-/** 离开状态者的名字底表：despawn 变更是其名字的唯一载体（身份卡随实体离开状态）。
+/** 离开状态者的名字底表：despawn 变更是其名字的唯一载体（名字随实体离开状态）。
  *  渲染历史事件（变更行/尝试行）时必须以渲染窗口内的 despawn 记录兜底解析。 */
 export function departedNames(window: readonly { changes: Change[] }[]): Map<string, string> {
 	const m = new Map<string, string>();
@@ -406,13 +413,13 @@ export function fmtValue(sim: Simulation, v: PropValue, departed?: ReadonlyMap<s
 	return String(v);
 }
 
-/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）：
- *  普通变更 `<name>.<label>: <prev> → <next>`；rel 变更 `<from>.<type>.<to>: <prev> → <next>`；生灭 `+ name` / `- name`。
+/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）。
  *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。
  *  渲染窗口内 despawn 的实体以 departed 兜底解析。 */
 export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
 	if (c.kind === "spawn") return `+ ${c.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
+	if (c.kind === "rename") return `~ ${c.prev} → ${c.next}`;
 	if (c.kind === "rel") return `${fmtValue(sim, c.from, departed)}.${c.type}.${fmtValue(sim, c.to, departed)}: ${fmtValue(sim, c.prev, departed)} → ${fmtValue(sim, c.next, departed)}`;
 	const e = sim.world.entities.find((x) => x.id === c.entity);
 	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
@@ -685,11 +692,8 @@ export class Simulation {
 	}
 
 	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行
-	 *  （逐条校验而非提交前预检：同一授予内 spawn 后 set 是合法书写）：目标实体/关系端点必须存在、spawn 的 id 必须未占用、
-	 *  inc/relInc 的现值必须是有限数（缺席/null 按 0 的既定语义——承重墙泛化承重于它，如 field.grow 对新实体；
-	 *  非数现值拒绝而非静默跳过或改写类型）、一切数值后果必须有限可说（NaN/Infinity 无法经 JSON 存活，
-	 *  序列化即静默变 null——账本腐蚀通道在提交侧封死）。不可执行即拒绝整个提交（commitChecked 原子回滚，
-	 *  与不变式同一通道）——裁决是判决，世界执行它或拒绝它，从不修正它；静默丢弃 delta 即裁决理由对变更流说谎。
+	 *  逐条校验而非提交前预检：同一授予内 spawn 后 set 是合法书写
+	 * 不可执行即拒绝整个提交（commitChecked 原子回滚，与不变式同一通道）
 	 *  幂等跳过的唯一判据是目标状态已成立：relSet 删不存在的边成立（无边即状态，悬空端点之间本不容边）；
  *  set 同值与零效果增量以目标存在为前提——主语不存在的「已成立」不可判定，存在性拒绝在前，永不回落为跳过。 */
 	private commit(deltas: Delta[], src: string): { changes: Change[] } | { refusal: Denial } {
@@ -754,6 +758,16 @@ export class Simulation {
 				if (next === prev) continue;
 				upsertRel(d.from, d.to, d.type, next);
 				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next, src });
+				continue;
+			}
+			if (d.op === "rename") {
+				const e = entity(this.world, d.entity);
+				if (!e) return refuse(`rename "${d.entity}": target entity missing`);
+				if (typeof d.value !== "string" || d.value === "") return refuse(`rename "${d.entity}": name must be non-empty string`);
+				if (e.name === d.value) continue;
+				const prev = e.name;
+				e.name = d.value;
+				changes.push({ kind: "rename", entity: d.entity, prev, next: d.value, src });
 				continue;
 			}
 			const e = entity(this.world, d.entity);

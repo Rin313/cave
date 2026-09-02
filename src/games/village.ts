@@ -1,4 +1,4 @@
-import type { Change, GameDef, PropDef, Q, Step, SystemRule, World } from "../core/sim.ts";
+import type { Change, Entity, GameDef, PropDef, Q, Step, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
 import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
@@ -9,8 +9,6 @@ import { Type } from "typebox";
  * 用现有 core 原语构造最小"强一致数值系统"：
  * 多尺度时间调度、三数值互锁、经济守恒、NPC 关系、顺序过程（阶段链）。
  * 法则纪律（承重墙）：规则代码零实体 id 字面量——交易对象/卖家/出资人/货源全部由实体属性声明
- * （price/resale/vendor/patron/yields/phase/bounty…），携带同组属性的任何新实体即被既有法则自动接纳；
- * 「规则读取数据中的 id」合法，「规则写死 id」即越墙。
  */
 
 const VILLAGE_PROPS: Record<string, PropDef> = {
@@ -18,6 +16,8 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	// 游戏词汇：身体需模拟的实体标记（供 systems 迭代），非 core 概念
 	actor: { type: "boolean", internal: true },
 	space: { type: "boolean", label: "场景" },
+	kind: { type: "string", label: "类别" },
+	tags: { type: "tags", label: "标记" },
 	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册
 	openable: { type: "boolean", label: "可开" },
 	open: { type: "boolean", label: "已开" },
@@ -70,10 +70,15 @@ const loyalCut = (q: Q, vendorId: string): number => {
 };
 const canReach = (q: Q, id: string): boolean => inTreeReach(q.world, q.player, id).ok;
 const holdable = (q: Q, id: string): boolean => entity(q.world, id)?.props.grabbable === true;
+const tagsOf = (e: Entity | undefined): string[] => {
+	const t = e?.props.tags;
+	return Array.isArray(t) ? (t as string[]) : [];
+};
 
 function summarizeChange(world: World, c: Change): string {
 	if (c.kind === "spawn") return `出现了：${c.name}。`;
 	if (c.kind === "despawn") return `消失了：${c.name}。`;
+	if (c.kind === "rename") return `改名：${c.prev} → ${c.next}。`;
 	if (c.kind === "rel") return `${name(world, c.from)}对${name(world, c.to)}的${c.type}：${String(c.prev)} → ${String(c.next)}。`;
 	const label = PROP_LABELS[c.prop] ?? c.prop;
 	return `变更：${name(world, c.entity)}的${label} ${String(c.prev)} → ${String(c.next)}。`;
@@ -311,7 +316,7 @@ export const village: GameDef = {
 						if (!s || ph === null) return deny("repair.nostructure", { reason: `${q.name(p.structure)}不需要修葺。` });
 						if (ph === 0) return grant([D.inc(p.structure, "phase", 1)], `你清理了${q.name(p.structure)}里的淤泥。`);
 						if (ph === 1) {
-							const material = q.world.entities.find((e) => e.props.in === q.player && e.tags.includes("wood"));
+							const material = q.world.entities.find((e) => e.props.in === q.player && tagsOf(e).includes("wood"));
 							if (!material) return deny("repair.nomaterial", { reason: `你得先把木料拿到手，才修得了${q.name(p.structure)}。` });
 							return grant([D.inc(p.structure, "phase", 1)], `你用${material.name}加固了${q.name(p.structure)}。`);
 						}
@@ -372,16 +377,16 @@ export const village: GameDef = {
 	world: {
 		time: 0,
 		entities: [
-			{ id: "village", name: "河畔村", kind: "space", tags: ["room"], props: { space: true, coins: 4 } },
-			{ id: "player", name: "你", kind: "actor", tags: [], props: { actor: true, in: "village", hp: 50, fatigue: 0, satiety: 60, coins: 40, berries: 2, grain: 0, water: 0, down: false } },
-			{ id: "merchant", name: "老店主", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 80, closesNight: true, dealTrust: 2, dealCut: 2 } },
-			{ id: "farmer", name: "老农", kind: "npc", tags: ["villager"], props: { in: "village", alive: true, coins: 60, closesNight: true, dealTrust: 2, dealCut: 2 } },
-			{ id: "flour", name: "一袋米", kind: "item", tags: ["goods"], props: { in: "village", grabbable: true, price: 10, resale: 5, vendor: "merchant" } },
-			{ id: "timber", name: "木料", kind: "item", tags: ["wood"], props: { in: "village", grabbable: true } },
-			{ id: "bush", name: "浆果丛", kind: "plant", tags: [], props: { in: "village", ripe: true } },
-			{ id: "well", name: "枯井", kind: "structure", tags: ["quest"], props: { in: "village", phase: 0, supply: false, water: 0, patron: "merchant", bounty: 10, capacity: 10 } },
-			{ id: "wheatfield", name: "麦田", kind: "plant", tags: ["farm"], props: { in: "village", grain: 10, priceBase: 13, yields: "grain", vendor: "farmer" } },
-			{ id: "dog", name: "野狗", kind: "creature", tags: ["beast"], props: { in: "village", alive: true, aggressive: true, hp: 10 } },
+			{ id: "village", name: "河畔村", props: { kind: "space", tags: ["room"], space: true, coins: 4 } },
+			{ id: "player", name: "你", props: { kind: "actor", tags: [], actor: true, in: "village", hp: 50, fatigue: 0, satiety: 60, coins: 40, berries: 2, grain: 0, water: 0, down: false } },
+			{ id: "merchant", name: "老店主", props: { kind: "npc", tags: ["villager"], in: "village", alive: true, coins: 80, closesNight: true, dealTrust: 2, dealCut: 2 } },
+			{ id: "farmer", name: "老农", props: { kind: "npc", tags: ["villager"], in: "village", alive: true, coins: 60, closesNight: true, dealTrust: 2, dealCut: 2 } },
+			{ id: "flour", name: "一袋米", props: { kind: "item", tags: ["goods"], in: "village", grabbable: true, price: 10, resale: 5, vendor: "merchant" } },
+			{ id: "timber", name: "木料", props: { kind: "item", tags: ["wood"], in: "village", grabbable: true } },
+			{ id: "bush", name: "浆果丛", props: { kind: "plant", tags: [], in: "village", ripe: true } },
+			{ id: "well", name: "枯井", props: { kind: "structure", tags: ["quest"], in: "village", phase: 0, supply: false, water: 0, patron: "merchant", bounty: 10, capacity: 10 } },
+			{ id: "wheatfield", name: "麦田", props: { kind: "plant", tags: ["farm"], in: "village", grain: 10, priceBase: 13, yields: "grain", vendor: "farmer" } },
+			{ id: "dog", name: "野狗", props: { kind: "creature", tags: ["beast"], in: "village", alive: true, aggressive: true, hp: 10 } },
 		],
 		relations: [
 			{ from: "merchant", to: "player", type: "信任", value: 0 },

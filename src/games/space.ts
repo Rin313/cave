@@ -6,7 +6,7 @@ import { entity } from "../core/sim.ts";
  *  关容器对实体的放行（楔住等）由游戏经 containerAccess 裁决。
  *  锚点拓扑：锚点（玩家/魂）可位于包含链任意深度——附身 = 地址的空间迁移（魂以 in 居于器皿），
  *  可达性 = 目标与锚点共享围合场景，或目标在锚点子树内（贴身必达）；关容器沿双链对称拦截。
- *  现宿主 = 链上最近器皿（hostOf，tag 键控，缺省锚点自身）。 */
+ *  现宿主 = 链上最近器皿（hostOf，器皿布尔属性键控，缺省锚点自身）。 */
 
 const REACH_MSGS = {
 	reachMissing: "这里没有这个东西。",
@@ -21,8 +21,8 @@ export interface SpaceOpts {
 	/** 关着的容器（openable 且未 open）是否对实体 id 放行。缺省一律拦截。
 	 *  如"楔在门缝里的东西仍可够到"由游戏以容器属性裁决，构件不内嵌具体机制。 */
 	containerAccess?: (world: World, container: Entity, id: string) => boolean;
-	/** 器皿 tag（hostOf 键控用；承重墙：禁止特判实体 id）。缺省 "vessel"。 */
-	vesselTag?: string;
+	/** 器皿布尔属性的键名（hostOf 键控用；承重墙：禁止特判实体 id）。缺省 "vessel"。 */
+	vesselProp?: string;
 }
 
 /** 链顶：from 沿 `in` 上溯的终止点——场景（space）即围合（场景自围合），锚点即同域（目标在锚点子树内），
@@ -89,14 +89,14 @@ export function enclosingSpace(world: World, id: string): string | null {
  *  附身 = 地址的空间迁移（D.set(地址, "in", 器皿)）——迁移必经 delta 入账：id 引用契约使器皿 despawn
  *  前的迁出成为强制（静默回退不存在）；单宿主由标量 id 类型契约结构强制。 */
 export function hostOf(world: World, anchor: string, opts: SpaceOpts = {}): string {
-	const tag = opts.vesselTag ?? "vessel";
+	const key = opts.vesselProp ?? "vessel";
 	let cur: string | null = anchor;
 	const seen = new Set<string>();
 	while (cur != null && !seen.has(cur)) {
 		seen.add(cur);
 		const e = entity(world, cur);
 		if (!e) break;
-		if (e.tags.includes(tag)) return cur;
+		if (e.props[key] === true) return cur;
 		cur = (e.props["in"] as string | null) ?? null;
 	}
 	return anchor;
