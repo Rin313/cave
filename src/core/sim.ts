@@ -122,10 +122,10 @@ export class ProtocolViolation extends Error {
  *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
 export interface Q {
 	readonly world: World;
-	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值。
-	 *  对规则它只承担一个缺省角色——无主语动词的缺省主语；显式主语动词的语义主语从参数取
-	 *  （上帝视角的主语全在参数里，后果落在被指令者）。现宿主（附身/换躯的器皿）由游戏从世界态推导，
-	 *  不在此字段——第一人称游戏里居所=现宿主，二者同一。 */
+	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值——体验者推导的根与兜底。
+	 *  无主语动词的缺省主语是体验者而非本字段：第一人称下二者恒等（退化读法）；附身游戏经空间构件 hostOf
+	 *  从本字段推导链上器皿，不直接以本字段作主语。显式主语动词的语义主语从参数取
+	 *  （上帝视角的主语全在参数里，后果落在被指令者）。 */
 	readonly player: string;
 	readonly time: number;
 	readonly params: Record<string, PropValue>;
@@ -246,11 +246,11 @@ export interface VerbDef {
 export interface GameDef {
 	id: string;
 	title: string;
-	/** 意志的居所：def 指向世界的唯一数据引用。意志（act 通道的说话人，每回合恰好一个）不在世界里——账本里只有这根引用；
-	 *  它同时是四个缺省角色的缺省值：无主语动词的缺省主语、感知谓词的缺省视点、叙述「你」的缺省指称、
-	 *  integrity 墙的保护对象。前三者是「现宿主」角色的缺省（体验者一侧，附身时属器皿；附身游戏在钩子与规则内从世界态推导
-	 *  现宿主并无视本引用，居所退为空壳），只有墙保护属引用自身的必要性。居所上的状态全是身体态，意志自身无状态。
-	 *  视角是感知面钩子的现值（缺省全见全达即上帝视角；第一人称是游戏声明，非引擎立场）。 */
+	/** 意志的居所：def 指向世界的唯一数据引用。意志（act 通道的说话人，每回合恰好一个）不在世界里——账本里只有这根引用。
+	 *  它承担两个角色：integrity 墙的保护对象（凡被解引用者必须可解），与体验者推导的根与兜底——无主语动词的缺省主语是
+	 *  体验者而非本地址，第一人称下二者恒等（退化读法）；附身 = 地址的空间迁移（魂以 in 居于器皿），体验者 =
+	 *  链上最近器皿（space 构件 hostOf 推导，视角与门随链跟随）。居所上的状态全是游戏建模态（第一人称下恰好是身体态），
+	 *  意志自身无状态。视角是感知面钩子的现值（缺省全见全达即上帝视角；第一人称是游戏声明）。 */
 	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
@@ -309,7 +309,7 @@ export function integrityInvariant(): Invariant {
 		check: (world, ctx) => {
 			const ids = new Set(world.entities.map((e) => e.id));
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
-			// playerId 是 def 指向世界的唯一数据引用（无主语动词与感知钩子的解引用原点），每次裁决都被解引用，
+			// playerId 是 def 指向世界的唯一数据引用（体验者推导与感知钩子的解引用原点），每次裁决都被解引用，
 			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
 			const registry = Object.entries(ctx.def.props ?? {});
