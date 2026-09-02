@@ -260,6 +260,8 @@ export interface GameDef {
 	props?: Record<string, PropDef>;
 	/** 确定性回退摘要钩子（player = 意志居所）。 */
 	summarize?: (input: { world: World; changes: Change[]; player: string }) => string;
+	/** 近况窗口的回合数（映射层的指代视野）。缺省 0。*/
+	memoryLimit?: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */
 	grounding?: (world: World, player: string) => string[];
 	/** 状态视图的派生纹理（世界 + 玩家 → 顶层附加字段）：出口、随身清单等游戏自持语义的呈现。

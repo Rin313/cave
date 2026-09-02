@@ -156,6 +156,7 @@ const game: GameDef = {
   // —— 词汇面：世界的语言
   messages,                  // 必填：core 产出的用户可见文案
   props: {...},              // 属性注册表：type/label/internal
+  memoryLimit,               // 近况窗口回合数
   summarize,
 };
 ```

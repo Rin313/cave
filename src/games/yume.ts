@@ -238,6 +238,7 @@ export const yume: GameDef = {
 	id: "yume",
 	title: "梦日记（梦核极：极少法则，极高自由）",
 	playerId: "player",
+	memoryLimit: 6,
 	messages: {
 		noResponse: "什么也没有发生。",
 		invisibleEntity: (names) => (names.length ? `${names.join("、")}不在你的视野里。` : "你的视野里没有那样的东西。"),

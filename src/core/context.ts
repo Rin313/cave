@@ -13,7 +13,6 @@ export interface MemoryTurn {
 }
 
 export const MEMORY_CUSTOM_TYPE = "cave.memory";
-export const MEMORY_LIMIT = 6;
 
 interface EntryLike {
 	type: string;
@@ -21,8 +20,8 @@ interface EntryLike {
 	data?: unknown;
 }
 
-/** 从会话 custom 条目重建近期窗口（取最近 MEMORY_LIMIT 条）。 */
-export function loadMemory(entries: readonly EntryLike[]): MemoryTurn[] {
+/** 从会话 custom 条目重建近期窗口（最近 limit 回合；limit 非正即空窗——未声明记忆语义的诚实零）。 */
+export function loadMemory(entries: readonly EntryLike[], limit: number): MemoryTurn[] {
 	const out: MemoryTurn[] = [];
 	for (const e of entries) {
 		if (e.type !== "custom" || e.customType !== MEMORY_CUSTOM_TYPE) continue;
@@ -35,7 +34,7 @@ export function loadMemory(entries: readonly EntryLike[]): MemoryTurn[] {
 			moves: Array.isArray(d.moves) ? d.moves.map(String) : [],
 		});
 	}
-	return out.slice(-MEMORY_LIMIT);
+	return limit > 0 ? out.slice(-limit) : [];
 }
 
 /** 近况渲染：符号连接 + 游戏自产的世界腔理由，core 不新增自然语句。 */

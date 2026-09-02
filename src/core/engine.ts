@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MEMORY_CUSTOM_TYPE, MEMORY_LIMIT, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
+import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
 import { Simulation, fmtChange, fmtValue, internalPropsOf, messagesFor, type Action, type ActionStep, type Change, type GameDef, type PropValue, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
@@ -172,8 +172,10 @@ export class Engine {
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
 			retry: { enabled: true, maxRetries: 2 },
 		});
+		const memoryLimit = def.memoryLimit ?? 0;
+		if (!Number.isInteger(memoryLimit) || memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(def.memoryLimit)}`);
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-		const memory = loadMemory(sessionManager.getEntries());
+		const memory = loadMemory(sessionManager.getEntries(), memoryLimit);
 		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
 		const loader = new DefaultResourceLoader({
 			cwd: process.cwd(),
@@ -252,15 +254,17 @@ export class Engine {
 		const o = this.outcome;
 		const passed = messagesFor(this.def).timePassed;
 		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || passed}`);
-		this.memory.push({
+		const turn: MemoryTurn = {
 			time: this.sim.world.time,
 			intent,
 			kind: o.kind,
 			moves: [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves],
-		});
-		if (this.memory.length > MEMORY_LIMIT) this.memory.splice(0, this.memory.length - MEMORY_LIMIT);
+		};
+		this.memory.push(turn);
+		const limit = this.def.memoryLimit ?? 0;
+		if (this.memory.length > limit) this.memory.splice(0, this.memory.length - limit);
 		try {
-			this.sessionManager.appendCustomEntry(MEMORY_CUSTOM_TYPE, this.memory[this.memory.length - 1]);
+			this.sessionManager.appendCustomEntry(MEMORY_CUSTOM_TYPE, turn);
 		} catch {
 			// 持久化失败不阻断回合：内存窗口仍有效
 		}

@@ -97,6 +97,7 @@ export const village: GameDef = {
 	id: "village",
 	title: "河畔村（era/DoL 极探针）",
 	playerId: "player",
+	memoryLimit: 6,
 	messages: {
 		noResponse: "世界没有以这种方式回应。",
 		invisibleEntity: (names) => (names.length ? `你看不到${names.join("、")}在哪里。` : "这里没有那样的东西。"),
