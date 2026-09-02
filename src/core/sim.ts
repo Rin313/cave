@@ -103,7 +103,7 @@ export interface Denial {
 
 /** 静态形态前置条件违约：未知动词 / schema 不符。
  *  静态形态错在裁决之外——工具边界由 pi 校验拒绝（错误回模型、可重试、门闩未耗）；
- *  内核收到同类动作即调用方违约（工具边界偏斜 / 场景笔误 / probe 域声明错误），响亮抛出。
+ *  内核收到同类动作即调用方违约（工具边界偏斜 / 场景笔误 / probe 域声明错误）。
  *  世界真相（含感知——不可见）在裁决之内，走世界性拒绝。 */
 export class ProtocolViolation extends Error {
 	readonly law: "action.unknown" | "action.schema";
