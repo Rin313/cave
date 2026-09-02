@@ -30,29 +30,49 @@ export interface ActOutcome {
 	results: ActionStep[];
 	/** 本回合时间流逝产出（动作授予刻数逐刻运行 systems 的刻步；时间律：无裁决即无流逝）。 */
 	elapsed: TickStep[];
+	/** 回合定稿权威全文（累积散文或确定性摘要兜底）。 */
+	narration: string;
+	/** act 工具实际收到的动作提案（审计记录）。 */
+	proposals: { verb: string; params: unknown }[];
+	/** 过程报警（未调 act / 散文为空等叙述兜底）。 */
+	warnings: TurnWarning[];
+	/** 单次 LLM 调用用量，按调用序。 */
+	usage: TokenUsage[];
 }
 
-/** 叙述通道三事件（Engine 是 pi 流到玩家视野的转译器：映射期文本与 thinking 永不入此通道）：
- *  narration_delta 实时正文（相位门控：仅裁决后的生成）；narration_reset 在重试丢弃在途生成时清零
- *  （与 pi「移除失败消息再重生成」镜像）；narration 是回合定稿的权威全文（累积散文或确定性摘要兜底），
- *  消费者以它校准——实时增量与定稿在重试等边缘情形下可能短暂不一致，定稿恒胜。 */
+/** 场景呈现（narrate）的返回：无意志、无 act 通道，故无 results/proposals。 */
+export interface NarrationOutcome {
+	narration: string;
+	warnings: TurnWarning[];
+	usage: TokenUsage[];
+}
+
+export interface TurnWarning {
+	round: number;
+	error: string;
+	attempt: string;
+}
+
+export interface TokenUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
+/** 流式叙述通道（渲染层推送骨干）：仅承载实时生成，权威数据走返回值——
+ *  narration_delta 实时正文（相位门控：仅裁决后的生成，thinking 与映射期文本不入通道），
+ *  narration_reset 在重试丢弃在途生成时清零（与 pi「移除失败消息再重生成」镜像）。 */
 export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
-	| { type: "narration_reset" }
-	| { type: "narration"; text: string }
-	| { type: "tool_call"; actionCount: number; actions?: unknown[] }
-	| { type: "tool_result"; results: ActionStep[] }
-	| { type: "elapsed"; steps: TickStep[] }
-	| { type: "validation"; round: number; error: string; attempt: string }
-	| { type: "usage"; input: number; output: number; cacheRead: number; cacheWrite: number };
+	| { type: "narration_reset" };
 
 /** act 工具 execute 向 Engine 直通回写裁决结果（不经事件流嗅探或工具结果解析往返）。 */
 interface TurnChannel {
 	onAdjudication: ((patch: { results?: ActionStep[]; elapsed?: TickStep[] }) => void) | null;
 }
 
-/** 单回合通道状态：变异窗口门闩 + 叙述账本（按生成代记账，镜像 pi 的重试语义）。
- *  Engine.act() 开启门闩并复位字段；act 工具首次执行即翻转（本回合唯一裁决）。
+/** 单回合通道状态：变异窗口门闩 + 叙述账本（按生成代记账，镜像 pi 的重试语义）+ 回合收集器
  *  current 是在途生成的正文：message_end 正常终结即并入 settled；error 暂扣——
  *  pi 丢弃重生成（auto_retry_start）则作废并广播 narration_reset，保留（重试预算耗尽）则定稿时入账。 */
 interface TurnState {
@@ -62,6 +82,9 @@ interface TurnState {
 	intent?: string;
 	settled: string;
 	current: string;
+	proposals: { verb: string; params: unknown }[];
+	warnings: TurnWarning[];
+	usage: TokenUsage[];
 }
 
 export class Engine {
@@ -72,7 +95,8 @@ export class Engine {
 	private readonly memory: MemoryTurn[];
 	private readonly turn: TurnState;
 	private readonly channel: TurnChannel;
-	private outcome: ActOutcome = { results: [], elapsed: [] };
+	/** 本回合裁决累积（act 工具经 channel 直通回写）。 */
+	private outcome: { results: ActionStep[]; elapsed: TickStep[] } = { results: [], elapsed: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
@@ -92,14 +116,8 @@ export class Engine {
 		this.turn = turn;
 		this.channel = channel;
 		channel.onAdjudication = (patch) => {
-			if (patch.results) {
-				this.outcome.results.push(...patch.results);
-				this.emit({ type: "tool_result", results: patch.results });
-			}
-			if (patch.elapsed?.length) {
-				this.outcome.elapsed = patch.elapsed;
-				this.emit({ type: "elapsed", steps: patch.elapsed });
-			}
+			if (patch.results) this.outcome.results.push(...patch.results);
+			if (patch.elapsed?.length) this.outcome.elapsed = patch.elapsed;
 		};
 		session.subscribe((event) => {
 			switch (event.type) {
@@ -126,16 +144,10 @@ export class Engine {
 						this.emit({ type: "narration_reset" });
 					}
 					break;
-				case "tool_execution_start":
-					if (event.toolName === ACT_TOOL) {
-						const args = event.args as { actions?: unknown[] };
-						this.emit({ type: "tool_call", actionCount: args.actions?.length ?? 0, actions: args.actions });
-					}
-					break;
 				case "agent_end":
 					for (const m of event.messages ?? []) {
 						const u = (m as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } }).usage;
-						if (m.role === "assistant" && u) this.emit({ type: "usage", input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
+						if (m.role === "assistant" && u) this.turn.usage.push({ input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
 					}
 					break;
 			}
@@ -158,7 +170,7 @@ export class Engine {
 
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
-		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), settled: "", current: "" };
+		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), settled: "", current: "", proposals: [], warnings: [], usage: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
@@ -213,6 +225,9 @@ export class Engine {
 		this.turn.current = "";
 		this.turn.visibleBefore = this.sim.visible();
 		this.turn.intent = intent;
+		this.turn.proposals = [];
+		this.turn.warnings = [];
+		this.turn.usage = [];
 	}
 
 	/** 单 pass 回合：一次会话运行内 act（一次性提交，门闩封闭变异窗口）→ 工具结果承载世界回应 → declare（可选）→ 散文。 */
@@ -230,15 +245,21 @@ export class Engine {
 		if (!this.turn.acted) {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
 			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
-			this.emit({ type: "validation", round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
+			this.turn.warnings.push({ round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
 			narration = this.summarize([]);
 		} else {
 			// 摘要兜底原料 = 本回合全部可见变更（玩家动作 + 时间流逝）
 			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed].flatMap((r) => narratableChanges(this.def, r.changes)));
 		}
 		this.recordTurn(action.intent, this.outcome.elapsed);
-		this.emit({ type: "narration", text: narration });
-		return this.outcome;
+		return {
+			results: this.outcome.results,
+			elapsed: this.outcome.elapsed,
+			narration,
+			proposals: this.turn.proposals,
+			warnings: this.turn.warnings,
+			usage: this.turn.usage,
+		};
 	}
 
 	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。 */
@@ -267,19 +288,24 @@ export class Engine {
 
 	/** 场景呈现服务（表达层的场景模式；与 summarize/digest 同类的呈现设施）：
 	 *  无意志、无 act 通道、无时间流逝——不写近况、不触门闩。 */
-	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<void> {
+	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<NarrationOutcome> {
 		const visibleChanges = elapsed.flatMap((r) => narratableChanges(this.def, r.changes));
+		this.turn.gateOpen = false;
+		this.turn.acted = false;
 		this.turn.settled = "";
 		this.turn.current = "";
+		this.turn.proposals = [];
+		this.turn.warnings = [];
+		this.turn.usage = [];
 		await this.session.prompt(buildNarratePrompt(this.sim, elapsed, instruction));
-		this.emit({ type: "narration", text: this.settleNarration(visibleChanges) });
+		return { narration: this.settleNarration(visibleChanges), warnings: this.turn.warnings, usage: this.turn.usage };
 	}
 
 	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地）。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
 	private settleNarration(summaryChanges: Change[]): string {
 		const text = this.turn.settled + this.turn.current;
 		if (text.trim() === "") {
-			this.emit({ type: "validation", round: 1, error: "散文为空。", attempt: text });
+			this.turn.warnings.push({ round: 1, error: "散文为空。", attempt: text });
 			return this.summarize(summaryChanges);
 		}
 		return text;
@@ -428,6 +454,7 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			// one-shot：首个 act 执行即本回合唯一裁决，此后世界只接受叙述
 			turn.gateOpen = false;
 			turn.acted = true;
+			turn.proposals = (params.actions ?? []) as { verb: string; params: unknown }[];
 			const hasActions = !!params.actions?.length;
 			const results: ActionStep[] = [];
 			const elapsed: TickStep[] = [];

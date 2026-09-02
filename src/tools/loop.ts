@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { Engine, type ActOutcome } from "../core/engine.ts";
+import { Engine, type ActOutcome, type TokenUsage, type TurnWarning } from "../core/engine.ts";
 import { Simulation, departedNames, fmtChange } from "../core/sim.ts";
 import type { GameDef, TickStep, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
@@ -16,14 +16,6 @@ interface RunMeta {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: string;
-}
-
-/** 单次 LLM 调用的用量（agent_end 的 assistant usage），进 transcript 供 report 聚合。 */
-interface UsageRow {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
 }
 
 const RUNS_ROOT = "runs";
@@ -90,87 +82,43 @@ function engineOptsFromEnv(gameId: string): { provider: string; model: string; t
 	return { provider, model, thinkingLevel: process.env[`${prefix}_THINKING`] };
 }
 
-interface ValidationFailure {
-	round: number;
-	error: string;
-	attempt: string;
-}
-
-interface CollectEventsResult {
-	unsub: () => void;
-	texts: string[];
-	validations: ValidationFailure[];
-	toolCalls: unknown[];
-	usages: UsageRow[];
-}
-
-function collectEvents(engine: Engine): CollectEventsResult {
-	const texts: string[] = [];
-	const validations: ValidationFailure[] = [];
-	const toolCalls: unknown[] = [];
-	const usages: UsageRow[] = [];
-	const unsub = engine.subscribe((e) => {
-		if (e.type === "narration") texts.push(e.text);
-		else if (e.type === "validation") validations.push({ round: e.round, error: e.error, attempt: e.attempt });
-		else if (e.type === "tool_call") toolCalls.push({ actionCount: e.actionCount, actions: e.actions });
-		else if (e.type === "usage") usages.push({ input: e.input, output: e.output, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite });
-	});
-	return { unsub, texts, validations, toolCalls, usages };
-}
-
-async function narrateScene(engine: Engine, instruction: string, elapsed: TickStep[] = []): Promise<{ text: string; validations: ValidationFailure[]; usages: UsageRow[] }> {
-	const { unsub, texts, validations, usages } = collectEvents(engine);
-	await engine.narrate(instruction, elapsed);
-	unsub();
-	return { text: texts.join(""), validations, usages };
-}
-
 // ---------- 人类输出：研究流程直接可读；结构化数据已落盘（transcript.jsonl / state.json / meta.json）----------
 
 const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-function usageLine(rows: UsageRow[]): string {
+function usageLine(rows: TokenUsage[]): string {
 	if (!rows.length) return "";
 	let i = 0, o = 0, cr = 0, cw = 0;
 	for (const r of rows) { i += r.input; o += r.output; cr += r.cacheRead; cw += r.cacheWrite; }
 	return `  tok ×${rows.length}：入 ${k(i)}（缓读 ${k(cr)}／缓写 ${k(cw)}）出 ${k(o)}`;
 }
 
-function warnValidations(vs: ValidationFailure[]): void {
-	for (const v of vs) console.log(`  ⚠ 叙述兜底 round${v.round}：${v.error}`);
-}
-
-function proposalLines(toolCalls: unknown[]): string[] {
-	const lines: string[] = [];
-	for (const tc of toolCalls) {
-		const t = tc as { actions?: { verb?: string; params?: unknown }[] };
-		for (const a of t.actions ?? []) lines.push(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
-	}
-	return lines;
+function warnWarnings(ws: TurnWarning[]): void {
+	for (const w of ws) console.log(`  ⚠ 叙述兜底 round${w.round}：${w.error}`);
 }
 
 function printAct(sim: Simulation, o: {
 	turn: number; intent: string; selection?: string | null;
-	outcome: ActOutcome; toolCalls: unknown[]; validations: ValidationFailure[];
-	usages: UsageRow[]; narration: string; brief?: boolean;
+	outcome: ActOutcome; brief?: boolean;
 }): void {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
 	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
-	for (const l of proposalLines(o.toolCalls)) console.log(l);
+	for (const a of o.outcome.proposals) console.log(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
 	const departed = departedNames([...o.outcome.results, ...o.outcome.elapsed]);
 	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r.action, departed)}：${r.reason}`);
 	for (const r of o.outcome.elapsed) {
 		const bits = [r.changes.map((c) => fmtChange(sim, c, departed)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
 		console.log(`  ⏱ ${bits.join("；") || r.reason}`);
 	}
-	warnValidations(o.validations);
-	const u = usageLine(o.usages);
+	warnWarnings(o.outcome.warnings);
+	const u = usageLine(o.outcome.usage);
 	if (u) console.log(u);
+	const narration = o.outcome.narration;
 	if (o.brief) {
-		const first = o.narration.split(/\n/).find((l) => l.trim()) ?? "";
+		const first = narration.split(/\n/).find((l) => l.trim()) ?? "";
 		console.log(`  ┈ ${first.length > 100 ? `${first.slice(0, 100)}…` : first}`);
 	} else {
-		console.log(`  ┈ ${o.narration.replace(/\n/g, "\n  ")}`);
+		console.log(`  ┈ ${narration.replace(/\n/g, "\n  ")}`);
 	}
 }
 
@@ -200,6 +148,12 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 	}
 }
 
+function persistRun(ctx: RunCtx): void {
+	ctx.meta.sessionFile = ctx.engine.sessionFile;
+	saveMeta(ctx.dir, ctx.meta);
+	saveState(ctx.dir, ctx.sim);
+}
+
 async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
@@ -208,7 +162,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const sessionManager = SessionManager.create(process.cwd(), dir);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sim, sessionManager });
 	try {
-		const { text: scene, validations, usages } = await narrateScene(engine, "请用文学笔触描写当前场景。");
+		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
 			game: gameId,
 			runId,
@@ -219,11 +173,11 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 		};
 		saveMeta(dir, meta);
 		saveState(dir, sim);
-		appendTranscript(dir, { phase: "start", scene, validations, usage: usages });
+		appendTranscript(dir, { phase: "start", scene, warnings, usage });
 		console.log(`【${runId}·start】${def.title}`);
 		console.log(scene);
-		warnValidations(validations);
-		const u = usageLine(usages);
+		warnWarnings(warnings);
+		const u = usageLine(usage);
 		if (u) console.log(u);
 	} finally {
 		engine.dispose();
@@ -231,29 +185,25 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 }
 
 async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined): Promise<void> {
-	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
-		const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
+	await withEngine(runId, gameId, async (ctx) => {
+		const { dir, meta, sim, engine } = ctx;
 		const outcome = await engine.act({ intent, selection });
-		unsub();
 
 		meta.turn += 1;
-		meta.sessionFile = engine.sessionFile;
-		saveMeta(dir, meta);
-		saveState(dir, sim);
-		const narration = texts.join("");
+		persistRun(ctx);
 		appendTranscript(dir, {
 			turn: meta.turn,
 			phase: "act",
 			intent,
 			selection: selection ?? null,
-			toolCalls,
+			proposals: outcome.proposals,
 			results: outcome.results,
 			elapsed: outcome.elapsed,
-			narration,
-			validations,
-			usage: usages,
+			narration: outcome.narration,
+			warnings: outcome.warnings,
+			usage: outcome.usage,
 		});
-		printAct(sim, { turn: meta.turn, intent, selection, outcome, toolCalls, validations, usages, narration });
+		printAct(sim, { turn: meta.turn, intent, selection, outcome });
 	});
 }
 
@@ -263,7 +213,8 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 		.map((l) => l.trim())
 		.filter((l) => l !== "" && !l.startsWith("#"));
 	if (!lines.length) throw new Error(`意图文件 ${file} 为空`);
-	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
+	await withEngine(runId, gameId, async (ctx) => {
+		const { dir, meta, sim, engine } = ctx;
 		for (const line of lines) {
 			if (line.startsWith("@wait")) {
 				const n = Number(line.split(/\s+/)[1] ?? 1);
@@ -271,54 +222,46 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 				appendTranscript(dir, { phase: "wait", ticks: n, events: results, usage: [] });
 				console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
 			} else {
-				const { unsub, texts, validations, toolCalls, usages } = collectEvents(engine);
 				const outcome = await engine.act({ intent: line });
-				unsub();
 				meta.turn += 1;
-				const narration = texts.join("");
-				const entry = {
-					turn: meta.turn, phase: "act", intent: line, selection: null, toolCalls,
-					results: outcome.results, elapsed: outcome.elapsed,
-					narration, validations, usage: usages,
-				};
-				appendTranscript(dir, entry);
-				printAct(sim, { turn: meta.turn, intent: line, outcome, toolCalls, validations, usages, narration, brief: true });
+				appendTranscript(dir, {
+					turn: meta.turn, phase: "act", intent: line, selection: null,
+					proposals: outcome.proposals, results: outcome.results, elapsed: outcome.elapsed,
+					narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
+				});
+				printAct(sim, { turn: meta.turn, intent: line, outcome, brief: true });
 			}
-			meta.sessionFile = engine.sessionFile;
-			saveMeta(dir, meta);
-			saveState(dir, sim);
+			persistRun(ctx);
 		}
 	});
 }
 
 async function cmdRender(runId: string, instruction: string, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async ({ dir, engine }) => {
-		const { text: scene, validations, usages } = await narrateScene(engine, instruction);
-		appendTranscript(dir, { phase: "render", instruction, scene, validations, usage: usages });
+		const { narration: scene, warnings, usage } = await engine.narrate(instruction);
+		appendTranscript(dir, { phase: "render", instruction, scene, warnings, usage });
 		console.log(`\n【render】${instruction}`);
 		console.log(scene);
-		warnValidations(validations);
-		const u = usageLine(usages);
+		warnWarnings(warnings);
+		const u = usageLine(usage);
 		if (u) console.log(u);
 	});
 }
 
 async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
-	await withEngine(runId, gameId, async ({ dir, meta, sim, engine }) => {
+	await withEngine(runId, gameId, async (ctx) => {
+		const { dir, meta, sim, engine } = ctx;
 		const results = sim.tick(n);
-		const { text: scene, validations, usages } = await narrateScene(
-			engine,
+		const { narration: scene, warnings, usage } = await engine.narrate(
 			"时间流逝。请用文学笔触描写当前场景发生的变化。",
 			results,
 		);
-		meta.sessionFile = engine.sessionFile;
-		saveMeta(dir, meta);
-		saveState(dir, sim);
-		appendTranscript(dir, { phase: "wait", ticks: n, events: results, scene, validations, usage: usages });
+		persistRun(ctx);
+		appendTranscript(dir, { phase: "wait", ticks: n, events: results, scene, warnings, usage });
 		console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
 		console.log(scene);
-		warnValidations(validations);
-		const u = usageLine(usages);
+		warnWarnings(warnings);
+		const u = usageLine(usage);
 		if (u) console.log(u);
 	});
 }
@@ -349,7 +292,6 @@ interface ReportRow {
 	model?: string;
 	acts: number;
 	waits: number;
-	fails: number;
 	tin: number;
 	tout: number;
 	cread: number;
@@ -357,8 +299,7 @@ interface ReportRow {
 	lastIn: number | null;
 }
 
-/** 汇总 runs/ 下各 run 的回合数、过程报警次数与 token 用量（对照实验的一眼视图）。
- *  语义质量不做聚合——回合记录只是实验日志，供人阅读（确定性 core 的度量走 sim verify/probe）。 */
+/** 汇总 runs/ 下各 run 的回合数与 token 用量 */
 function collectReport(gameId: string | undefined): ReportRow[] {
 	const rows: ReportRow[] = [];
 	if (!existsSync(RUNS_ROOT)) return rows;
@@ -369,7 +310,7 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 			const dir = join(gdir, id);
 			const tp = transcriptPath(dir);
 			if (!existsSync(tp)) continue;
-			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, waits: 0, fails: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
+			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, waits: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
 			try {
 				const meta = JSON.parse(readFileSync(metaPath(dir), "utf8")) as Partial<RunMeta>;
 				row.provider = meta.provider;
@@ -379,7 +320,7 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 			}
 			for (const l of readFileSync(tp, "utf8").split(/\r?\n/)) {
 				if (!l.trim()) continue;
-				let e: { phase?: string; validations?: unknown[]; usage?: UsageRow[] };
+				let e: { phase?: string; usage?: TokenUsage[] };
 				try {
 					e = JSON.parse(l);
 				} catch {
@@ -387,7 +328,6 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 				}
 				if (e.phase === "act") row.acts++;
 				if (e.phase === "wait") row.waits++;
-				row.fails += Array.isArray(e.validations) ? e.validations.length : 0;
 				for (const u of Array.isArray(e.usage) ? e.usage : []) {
 					row.tin += u.input;
 					row.tout += u.output;
@@ -415,16 +355,15 @@ function printReport(rows: ReportRow[], gameId: string | undefined): void {
 		const trend = r.firstIn != null ? `${k(r.firstIn)}→${k(r.lastIn ?? 0)}` : "-";
 		const model = [r.provider, r.model].filter(Boolean).join("/") || "-";
 		console.log(
-			`${r.dir.padEnd(26)} ${model.padEnd(24)} act=${r.acts} wait=${r.waits}  兜底=${r.fails}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
+			`${r.dir.padEnd(26)} ${model.padEnd(24)} act=${r.acts} wait=${r.waits}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
 		);
 	}
 	if (rows.length > 1) {
 		const sum = (f: (r: ReportRow) => number): number => rows.reduce((a, r) => a + f(r), 0);
 		console.log(
-			`${"TOTAL".padEnd(26)} ${"-".padEnd(24)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  兜底=${sum((r) => r.fails)}  出 ${k(sum((r) => r.tout))}`,
+			`${"TOTAL".padEnd(26)} ${"-".padEnd(24)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  出 ${k(sum((r) => r.tout))}`,
 		);
 	}
-	console.log("注：缓读% 依赖 provider 的 usage 口径（input 不含缓存命中），跨 provider 比较仅作参考。");
 }
 
 /** 解析位置参数为完整意图文本（支持不带引号的多词意图）。 */
@@ -447,10 +386,10 @@ async function main() {
   loop report [--game <id>]
   loop reset --run <id> [--game <id>]
 
-输出为紧凑人类可读视图（提案/裁决/叙述兜底警告/token 用量与叙述）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
+输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
 render/wait 是协议外操作（不计回合）：render 调用场景呈现服务（叙述仪器），wait 直接摇钟。
-report 汇总 runs/ 各 run 的回合数、过程报警次数（散文为空/未调 act 的摘要回落）与 token 用量（入列首→末展示裁剪后的输入趋势）；缓读% 依赖 provider 的 usage 口径，跨 provider 仅作参考。
+report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
 `);

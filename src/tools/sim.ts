@@ -2,8 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
-import { getGame, getProbe } from "../games/registry.ts";
-import { probeScope } from "../games/space.ts";
+import { getGame } from "../games/registry.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
@@ -248,97 +247,101 @@ function describeAction(action: Action, def: GameDef): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: string; reason: string; law?: string }[]; bugs: { verb: string; op: string; debug: string }[]; seen: number; truncated: boolean } {
+/** 裁决地图行：拒绝（含法则与理由）或协议违约。授予不逐行记，按动词计数。 */
+interface MapRow {
+	verb: string;
+	op: string;
+	law: string;
+	reason: string;
+	/** 核心级不变拒绝（deniedBy=invariant 且无世界腔理由）——规则/系统 bug 信号。 */
+	bug?: string;
+}
+
+/** 裁决地图：对每动词穷举 entityParams × 可见实体（每动作在初始世界的独立 Simulation 上裁决） */
+function probeDef(def: GameDef, maxCombos = 10000): { rows: MapRow[]; grants: Map<string, number>; skipped: { verb: string; params: string[] }[]; total: number; truncated: boolean } {
 	const sim = new Simulation(def);
-	/** 实体参数缺省域 = space 构件的探测投影（可见实体 - 玩家 - space 场景）；逐参数覆盖读游戏的探测域声明 */
-	const scope = new Set(probeScope(sim.world, def.playerId, sim.visible()));
-	const gaps: { verb: string; op: string; reason: string; law: string }[] = [];
-	/** 核心级不变拒绝（deniedBy=invariant 且无世界腔理由——integrity/commit 执行校验）= 规则/系统 bug 信号；
-	 *  游戏不变式的拒绝带 message（世界的必要性拦截，玩法），不在此列。 */
-	const bugs: { verb: string; op: string; debug: string }[] = [];
-	const seen = new Set<string>();
+	const scope = [...sim.visible()];
+	const rows: MapRow[] = [];
+	const grants = new Map<string, number>();
+	const skipped: { verb: string; params: string[] }[] = [];
+	let total = 0;
 	let truncated = false;
 
 	const probeAction = (action: Action) => {
+		if (total >= maxCombos) {
+			truncated = true;
+			return;
+		}
+		total++;
 		const fresh = new Simulation(def);
-		const { step, elapsed } = fresh.apply(action);
-		if (!step.ok && step.denial?.fallback === true) {
-			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: step.reason, law: step.denial.law });
-		}
-		if (!step.ok && step.deniedBy === "invariant" && step.denial && step.denial.reason == null) {
-			bugs.push({ verb: action.verb, op: describeAction(action, def), debug: step.denial.debug ?? step.denial.law });
-		}
-		for (const t of elapsed) {
-			if (!t.ok && t.deniedBy === "invariant" && t.denial && t.denial.reason == null) {
-				bugs.push({ verb: action.verb, op: describeAction(action, def), debug: t.denial.debug ?? t.denial.law });
+		const op = describeAction(action, def);
+		try {
+			const { step, elapsed } = fresh.apply(action);
+			if (step.ok) {
+				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
+			} else {
+				const bug = step.deniedBy === "invariant" && step.denial && step.denial.reason == null ? (step.denial.debug ?? step.denial.law) : undefined;
+				rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason, bug });
 			}
+			// 刻步只会被不变式硬墙拦截：拦截即系统 bug——授予与拒绝两条路径都要查（授予后落钟的 systems 产出同样过墙）
+			for (const t of elapsed) {
+				if (!t.ok && t.deniedBy === "invariant" && t.denial && t.denial.reason == null) {
+					rows.push({ verb: action.verb, op, law: t.denial.law ?? "invariant", reason: t.reason, bug: t.denial.debug ?? t.denial.law });
+				}
+			}
+		} catch (e) {
+			if (e instanceof ProtocolViolation) rows.push({ verb: action.verb, op, law: e.law, reason: "协议违约：探测组合越过动词 schema" });
+			else throw e;
 		}
 	};
 
-	/** 组合预算：按动词均分 maxCombos，超出即截断（报告 truncated），防止大实体量游戏 20^n 级爆炸。 */
-	const verbNames = Object.keys(def.verbs);
-	const perVerbBudget = verbNames.length ? Math.max(1, Math.ceil(maxCombos / verbNames.length)) : maxCombos;
-
-	for (const verbName of verbNames) {
+	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName]!;
 		const entityParams = verb.entityParams ?? [];
-		const domains = getProbe(def.id)?.[verbName]?.(sim) ?? {};
-		const paramLists: Record<string, PropValue[]> = {};
-
-		for (const p of entityParams) paramLists[p] = [...scope];
-		for (const [p, vals] of Object.entries(domains)) {
-			paramLists[p] = vals;
+		// 必填非实体参数的探测域无法机械穷举（如「地点恒可指名」的 dest）：显式跳过而非报违约
+		const required = ((verb.schema as unknown as { required?: string[] }).required ?? []).filter((p) => !entityParams.includes(p));
+		if (required.length) {
+			skipped.push({ verb: verbName, params: required });
+			continue;
 		}
-
-		const keys = Object.keys(paramLists);
-		if (!keys.length) continue;
-
-		let verbChecks = 0;
 		const generate = (idx: number, acc: Record<string, PropValue>) => {
-			if (verbChecks >= perVerbBudget) {
-				truncated = true;
+			if (truncated) return;
+			if (idx === entityParams.length) {
+				probeAction({ verb: verbName, params: { ...acc } });
 				return;
 			}
-			if (idx === keys.length) {
-				const action = { verb: verbName, params: { ...acc } };
-				const key = JSON.stringify(action);
-				if (seen.has(key)) return;
-				seen.add(key);
-				verbChecks++;
-				probeAction(action);
-				return;
-			}
-			const p = keys[idx]!;
-			for (const v of paramLists[p]!) {
-				acc[p] = v;
+			for (const v of scope) {
+				acc[entityParams[idx]!] = v;
 				generate(idx + 1, acc);
 			}
 		};
 		generate(0, {});
 	}
-
-	return { gaps, bugs, seen: seen.size, truncated };
+	return { rows, grants, skipped, total, truncated };
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
-	const { gaps, bugs, seen, truncated } = probeDef(def, maxCombos);
-	console.log(`=== 法则完整性探测（${def.id}，${seen} 个典型动作${truncated ? "，已按预算截断" : ""}）===`);
-	const byVerb = new Map<string, typeof gaps>();
-	for (const g of gaps) {
-		const list = byVerb.get(g.verb);
-		if (list) list.push(g);
-		else byVerb.set(g.verb, [g]);
+	const { rows, grants, skipped, total, truncated } = probeDef(def, maxCombos);
+	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
+	const byVerb = new Map<string, MapRow[]>();
+	for (const r of rows) {
+		const list = byVerb.get(r.verb);
+		if (list) list.push(r);
+		else byVerb.set(r.verb, [r]);
 	}
-	for (const [verbName, vg] of byVerb) {
-		console.log(`「${verbName}」缺口: ${vg.length}`);
-		for (const g of vg) console.log(`  [GAP] ${g.op} → ${g.reason}`);
+	const skippedVerbs = new Set(skipped.map((s) => s.verb));
+	for (const verbName of Object.keys(def.verbs)) {
+		if (skippedVerbs.has(verbName)) continue;
+		const vr = byVerb.get(verbName) ?? [];
+		console.log(`「${verbName}」✓ ×${grants.get(verbName) ?? 0}${vr.length ? `  ✗ ×${vr.length}` : ""}`);
+		for (const r of vr) console.log(`  ✗ ${r.op} → ${r.law}「${r.reason}」${r.bug ? ` ⚠ ${r.bug}` : ""}`);
 	}
-	if (!gaps.length) console.log(`缺口: 0（${Object.keys(def.verbs).length} 个动词全部越过兜底标记）`);
-	console.log(`执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
-	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.debug}`);
-	if (truncated) console.log("  注：探测被 maxCombos 预算截断，可能遗漏缺口；可用 --max 提高预算，或在游戏的探测域声明收窄候选域。");
-	console.log(gaps.length === 0 && bugs.length === 0 ? "\n无缺口，法则覆盖完整。" : `\n建议为缺口补充具体法则（世界性理由），否则模型会以幻觉填补。`);
+	for (const s of skipped) console.log(`「${s.verb}」跳过：必填参数 ${s.params.join("/")} 不在 entityParams，探测域无法机械穷举`);
+	const bugs = rows.filter((r) => r.bug);
+	console.log(`\n执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
+	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.bug}`);
+	if (truncated) console.log("注：已达 --max 预算，地图可能不完整。");
 }
 
 async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
@@ -382,35 +385,6 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 	for (const s of steps) console.log(`  ${s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`} → ${s.reason}`);
 }
 
-// ---------- 词汇 lint：游戏源文件的属性键读取对照 props 注册表 ----------
-
-/** 扫描游戏源文件（src/games/<id>.ts）静态可见的属性键：`.props.x` 与 `.props["x"]`。
- *  未注册键照常工作但失去 label/internal 控制且不受类型契约约束——internal 泄漏与 label 回退由此提前暴露。
- *  盲区（动态索引 props[var]、共享构件 space.ts 内的读取）属 review 面；构件契约键由使用方游戏注册。 */
-async function cmdLint(gameId: string): Promise<void> {
-	const def = getGame(gameId);
-	const file = join("src", "games", `${gameId}.ts`);
-	let src: string;
-	try {
-		src = readFileSync(file, "utf8");
-	} catch {
-		throw new Error(`找不到游戏源文件 ${file}（词汇 lint 按约定扫描 src/games/<id>.ts）`);
-	}
-	const declared = new Set(Object.keys(def.props ?? {}));
-	const unknown = new Map<string, number>();
-	for (const m of src.matchAll(/\.props\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*(["'`])([^"'`]+)\2\s*\])/g)) {
-		const key = m[1] ?? m[3]!;
-		if (!declared.has(key)) unknown.set(key, (unknown.get(key) ?? 0) + 1);
-	}
-	console.log(`=== 属性词汇 lint（${def.id}）：${declared.size} 个注册键，扫描 ${file} ===`);
-	if (!unknown.size) {
-		console.log("规则代码读取的全部属性键均已在 props 注册表声明。");
-		return;
-	}
-	for (const [key, n] of [...unknown].sort()) console.log(`  ⚠ 未声明属性「${key}」（${n} 处）`);
-	console.log("未声明属性照常工作（视为普通可见属性），但失去 label/internal 控制且不受注册表约束；建议登记进 GameDef.props。");
-}
-
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
@@ -421,8 +395,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
     动作按裁决授予的刻数自动流逝（时间律：apply 即完整裁决边界）；advance n 为协议外显式摇钟（纯等待）
-  sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到兜底标记（Denial.fallback）的法则缺口与执行校验 bug（--max 控制组合预算，默认 10000）
-  sim lint --game <id>    属性词汇 lint：扫描游戏源文件读取的属性键，报告未在 props 注册表声明的键（advisory）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举 entityParams × 可见实体，按法则分组呈现每输入的落点（授予计数/拒绝行）；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}
@@ -446,10 +419,6 @@ async function main(): Promise<void> {
 		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
 		const max = Number(flagStr(a, "max") ?? 10000);
 		await cmdProbe(gameId, Number.isFinite(max) && max > 0 ? max : 10000);
-		return;
-	}
-	if (cmd === "lint") {
-		await cmdLint(requireFlag(a, "game", "用 --game <id> 指定游戏"));
 		return;
 	}
 	throw new Error(`未知命令: ${cmd}`);

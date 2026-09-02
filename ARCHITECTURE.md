@@ -14,10 +14,10 @@
    | DESIGN.md 层 | pi SDK 落点 |
    |---|---|
    | 映射层 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；pi 在 execute 前按工具 schema 校验（错误回模型、可重试、门闩未耗）——静态形态的活跃门；one-shot 门闩内一次性提交，只产结构化结果 |
-   | 表达层 | Engine 转译 pi 流为叙述通道：`narration_delta` 实时正文（相位门控：仅裁决后的生成，thinking 与映射期文本不入通道）、`narration_reset`（重试丢弃在途生成时清零）、`narration`（回合定稿权威全文：累积散文，空散文/未裁决回落确定性摘要）；按生成代记账，与 pi 的「移除失败消息再重生成」镜像；与映射同一回合运行，输入 = 回合 prompt 的状态 + act 工具结果的世界腔策展|
+   | 表达层 | Engine 转译 pi 流为叙述通道：`narration_delta` 实时正文（相位门控：仅裁决后的生成，thinking 与映射期文本不入通道）、`narration_reset`（重试丢弃在途生成时清零）；回合定稿权威全文（累积散文，空散文/未裁决回落确定性摘要）由 `act()`/`narrate()` 返回值承载，不入事件流；按生成代记账，与 pi 的「移除失败消息再重生成」镜像；与映射同一回合运行，输入 = 回合 prompt 的状态 + act 工具结果的世界腔策展|
    | 模拟层 | tool 的 `execute()` 内部，确定性规则网络（按动词分组），唯一的游戏状态出口 |
    | 会话/上下文 | AgentSession 自带：messages + compact() + SessionManager |
-2. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的；Engine 将其转译为引擎事件流（`narration_delta` / `tool_result` / `elapsed` / …）后经转发器 `webContents.send()` 推给前端——原始 pi 流（含映射期文本与 thinking）不出 Engine。
+2. **IPC 形态：主进程 → 渲染层是推送（事件流），渲染层 → 主进程是请求（invoke）。** pi SDK 是事件流式的；Engine 将其转译为流式叙述事件（`narration_delta` / `narration_reset`）后经转发器 `webContents.send()` 推给前端——原始 pi 流（含映射期文本与 thinking）不出 Engine。
 3. **tool schema 是动作提案**——`act(actions)`，actions 为 `{ verb, params }` 列表；verb 必须取自 `GameDef.verbs`，非法/不可见实体 ID 在 `execute()` 校验层打回，不进入状态机。**无别名表、无关键词匹配、无语言限制**：动词与实体都由 LLM 从自由文本中纯语义解析（`name + attrs + 上下文`），不限制玩家输入语言；动词空间是游戏声明的。
 4. **上下文裁剪（`context` 事件 + 近况记录）**：每次 LLM 调用前经内联扩展（`DefaultResourceLoader.extensionFactories` 的 `cave-context`，`core/context.ts` 为策略单一来源）把消息裁剪为「近况记录 + 当前运行后缀」——后缀 = 最后一条 user 消息起的原样保留（toolCall/toolResult 配对天然完整），近况 = 最近 N 回合的「意图 → 世界腔裁决行」，并入该 user 消息头部。会话文件仍累积全量消息作审计；近况另以 custom 条目持久化于同一文件（custom 不参与 LLM 上下文），进程重启由其重建窗口。**缓存代价是显式决策**：状态每回合重注入使消息前缀跨回合天然不稳定，跨回合前缀复用只剩 [tools+system] 头块——因此系统提示与工具数组必须字节级稳定，且不做 setActiveTools 相位切换（工具块位于序列化前缀头部，每次切换即整体前缀失效）。回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变），provider 缓存可全程复用。compaction 保持关闭：pi 缺省摘要是编码任务形状、且把旧叙述摘要重新注入，与「模拟层唯一真相源」相悖；长度兜底走显式新开会话。
 5. **单 pass 回合** 每回合一次 `session.prompt()`：模型先调 `act`（一次性提交，one-shot 门闩封闭变异窗口），工具结果即本回合世界回应的世界腔策展（尝试行/时间流逝/法则事实/新见，经 fmtChange 线性化），模型基于它输出散文；叙述只能跟随工具结果。
@@ -28,7 +28,6 @@
 
 - **环境响应（声明式动词）**：非预设的自由动作由游戏声明动词 + 法则承担——法则网络形态按属性键控一条规则覆盖全部可达实体；authored 形态则逐实体书写互动子句。结构性属性（`in`/`material`/`lit`/`burning`/`open`/`coins`/`alive`…）仍只能由法则/系统变更；语义一致性由领域不变式（`invariants`）兜底。
 - **`Rule`（卫语句式规则，按动词分组）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/player/time/params + `rel/relNum/roll/visible/name` 等引擎自有语义唯一入口；施动前提是规则侧语义，由 games 层构件供给），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses）。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc/spawn/despawn`——生灭原语让梦核/authored 世界可动态生长，relSet 值 null 即删边（拓扑收缩与生长对称），despawn 级联清理核心结构、悬空 id 引用由完整性硬墙回滚）。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码。
-- **`fallback` 兜底规则**：动词末尾的无条件拒绝规则，其 Denial 带 `fallback: true` 作者自声明标记；runner 对全部规则未表态的动作回落 noResponse（引擎闭合拒绝，同样携带 fallback 标记，law `action.unanswered`）。散文内联在规则文本里，`sim probe` 据标记报告法则缺口。
 - **两种创作形态（authorial regimes）**：**法则网络形态**——规则按属性组合键控、随新实体自动泛化（承重墙针对此形态，防组合爆炸）；**authored 形态**——梦核/脚本化世界的正当写法：互动按实体逐个书写（每条一个卫语句子句 + 兜底）、效果改写互动结果、实体生灭与动态拓扑。两形态共用同一套裁决瓶颈与提交硬墙，差异只在作者书写风格与不变式密度，core 不感知形态。
 - **`grounding`**：可见实体索引钩子，决定哪些实体进状态视图；缺省全部可见（未声明认识论语义的诚实零）。感知面只有两个槽位（grounding/digestExtra）——准入门是「core 机器在协议通道内消费它」（状态视图装配/entityParams 可见性门/新见检测）。
 - **`props`（属性注册表）**：`{ prop: { type, label?, internal? } }`。`internal: true` 的属性不进 LLM 序列化 / 变更线性化，从源头杜绝泄漏；`label` 是属性世界化说法（拒绝/变更文本用），**并是表达 prompt 变更馈送的默认渲染源**——「本回合尝试/时间流逝」用实体名 + `label` 做语言无关线性化（`fmtChange`，`name.label: from → to`，core 只做符号连接、不内嵌语言词）；动作侧同一纪律：`describeAction` 以 `verb.label(param,…)` 符号连接；tick 伪动词无游戏词可线性化，走 `messages.timePassed`。`internalPropsOf(def)` 派生内部属性集。

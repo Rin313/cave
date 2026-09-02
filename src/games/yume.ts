@@ -1,7 +1,6 @@
 import type { Change, GameDef, PropDef, PropValue, Q, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { denyUnreachable, inTreeReach } from "./space.ts";
-import type { ProbeSpec } from "./probe.ts";
 import { Type } from "typebox";
 
 /**
@@ -136,7 +135,6 @@ const takeVerb = defineVerb({
 					: `你把${q.name(p.entity)}收好了。`);
 			},
 		},
-		fallback("take.fallback", (q) => `你带不走${q.name(String(q.params.entity))}。`),
 	],
 });
 
@@ -227,10 +225,13 @@ const interactVerb = defineVerb({
 		},
 		{ id: "int.snowman", judge: (q, p) => (p.entity !== "snowman" ? null : grant([], "雪人的两张脸都在笑。你又数了一遍，还是两张。")) },
 		{ id: "int.lake", judge: (q, p) => (p.entity !== "lake" ? null : grant([], "冰层很厚。厚冰下面，有什么东西慢慢地游了过去。")) },
-		fallback("interact.fallback", (q) => {
-			const t = q.entity(String(q.params.entity));
-			return t ? `${q.name(t.id)}没有任何反应。` : "那里已经什么都没有了。";
-		}),
+		{
+			id: "interact.fallback",
+			judge: (q) => {
+				const t = q.entity(String(q.params.entity));
+				return deny("interact.fallback", { reason: t ? `${q.name(t.id)}没有任何反应。` : "那里已经什么都没有了。" });
+			},
+		},
 	],
 });
 
@@ -310,7 +311,7 @@ export const yume: GameDef = {
 					"水滴声。找不到来源。",
 					"有什么东西在你身后站了一会儿，又走了。",
 				];
-				return { deltas: [], facts: [{ text: whispers[num(q.time) % whispers.length]!, entities: [q.player] }] };
+				return { deltas: [], facts: [{ text: whispers[num(q.time) % whispers.length]! }] };
 			},
 		},
 		{
@@ -325,7 +326,7 @@ export const yume: GameDef = {
 						D.set(q.player, "ended", true),
 						D.spawn({ id: "shadow", name: "阳台上的人影", kind: "figure", tags: [], props: { "in": "room", desc: "隔着玻璃看不清脸。它抬起了一只手。" } }),
 					],
-					facts: [{ text: "阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。", entities: [q.player, "shadow"] }],
+					facts: [{ text: "阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。" }],
 				};
 			},
 		},
@@ -351,10 +352,4 @@ export const yume: GameDef = {
 	},
 	summarize: summarizeYume,
 	digestExtra: digestExtraYume,
-};
-
-/** 探测域：移动的目的地是地点（space，缺省域排除场景故需显式纳入）；拾取域收窄到可拾取物。 */
-export const yumeProbe: ProbeSpec = {
-	go: (sim) => ({ dest: sim.world.entities.filter((e) => e.props.space === true).map((e) => e.id) }),
-	take: (sim) => ({ entity: [...sim.visible()].filter((id) => sim.world.entities.find((e) => e.id === id)?.props.takable === true) }),
 };

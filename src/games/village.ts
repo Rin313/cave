@@ -1,7 +1,6 @@
 import type { Change, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
-import type { ProbeSpec } from "./probe.ts";
 import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
@@ -123,7 +122,10 @@ export const village: GameDef = {
 						return grant([D.set(p.entity, "in", q.player)], `你拾起了${q.name(p.entity)}。`);
 					},
 				},
-				fallback("gather.fallback", (q) => `你拿不起${q.name(String(q.params.entity))}。`),
+				{
+					id: "gather.fallback",
+					judge: (q) => deny("gather.fallback", { reason: `你拿不起${q.name(String(q.params.entity))}。` }),
+				},
 			],
 		}),
 		eat: defineVerb({
@@ -191,7 +193,7 @@ export const village: GameDef = {
 						const vendor = vendorId ? q.entity(vendorId) : null;
 						const pb = fin(g?.props.priceBase);
 						const pr = fin(g?.props.price);
-						if (!g || !vendor || vendor.props.alive === false || (pb === null && pr === null)) return deny("buy.notgoods", { reason: `${q.name(p.goods)}不是待售的货品。`, fallback: true });
+						if (!g || !vendor || vendor.props.alive === false || (pb === null && pr === null)) return deny("buy.notgoods", { reason: `${q.name(p.goods)}不是待售的货品。` });
 						if (isNight(q) && vendor.props.closesNight === true) return deny("buy.closed", { reason: `夜色已深，${q.name(vendorId)}已经打烊歇息了。` });
 						const yields = typeof g.props.yields === "string" ? g.props.yields : null;
 						const stock = yields ? num(g.props[yields]) : 0;
@@ -227,7 +229,7 @@ export const village: GameDef = {
 						return grant([D.set(p.goods, "in", dest), D.inc(q.player, "coins", price), D.inc(vendorId, "coins", -price)], `你把${q.name(p.goods)}卖回给了${q.name(vendorId)}。`);
 					},
 				},
-				fallback("sell.fallback", () => "你手里没有可出卖的货品。"),
+				{ id: "sell.fallback", judge: () => deny("sell.fallback", { reason: "你手里没有可出卖的货品。" }) },
 			],
 		}),
 		eatGrain: defineVerb({
@@ -254,7 +256,7 @@ export const village: GameDef = {
 					judge: (q, p) => {
 						if (!canReach(q, p.source)) return denyUnreachable(q.world, q.player, p.source);
 						const w = q.entity(p.source);
-						if (!w || w.props.supply !== true) return deny("draw.dry", { reason: `${q.name(p.source)}还是枯的，打不出水。`, fallback: true });
+						if (!w || w.props.supply !== true) return deny("draw.dry", { reason: `${q.name(p.source)}还是枯的，打不出水。` });
 						if (num(w.props.water) < 1) return deny("draw.empty", { reason: `${q.name(p.source)}的存水已经见底了。` });
 						return grant([D.inc(p.source, "water", -1), D.inc(q.player, "water", 1)], `你从${q.name(p.source)}提上一桶清水。`);
 					},
@@ -283,7 +285,7 @@ export const village: GameDef = {
 				id: "harvest.bush",
 				judge: (q, p) => {
 					if (q.entity(p.bush)?.props.ripe !== true) return deny("harvest.unripe", { reason: `${q.name(p.bush)}还没有成熟。` });
-					if (!canReach(q, p.bush)) return deny("harvest.fallback", { reason: `${q.name(p.bush)}无法被采集。`, fallback: true });
+					if (!canReach(q, p.bush)) return deny("harvest.unreachable", { reason: `${q.name(p.bush)}无法被采集。` });
 					return grant([D.inc(q.player, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
 				},
 			}],
@@ -300,7 +302,7 @@ export const village: GameDef = {
 					judge: (q, p) => {
 						const s = q.entity(p.structure);
 						const ph = fin(s?.props.phase);
-						if (!s || ph === null) return deny("repair.nostructure", { reason: `${q.name(p.structure)}不需要修葺。`, fallback: true });
+						if (!s || ph === null) return deny("repair.nostructure", { reason: `${q.name(p.structure)}不需要修葺。` });
 						if (ph === 0) return grant([D.inc(p.structure, "phase", 1)], `你清理了${q.name(p.structure)}里的淤泥。`);
 						if (ph === 1) {
 							const material = q.world.entities.find((e) => e.props.in === q.player && e.tags.includes("wood"));
@@ -331,7 +333,7 @@ export const village: GameDef = {
 				id: "dog.chase",
 				// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 				judge: (q, p) => {
-					if (!canReach(q, p.dog)) return deny("subdue.fallback", { reason: `你没能赶走${q.name(p.dog)}。`, fallback: true });
+					if (!canReach(q, p.dog)) return deny("subdue.unreachable", { reason: `你没能赶走${q.name(p.dog)}。` });
 					// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
 					if (q.entity(p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { reason: `${q.name(p.dog)}不是赶得跑的野兽。` });
 					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
@@ -351,7 +353,7 @@ export const village: GameDef = {
 				judge: (q) => {
 					const cur = q.entity(q.player)?.props["in"];
 					const spot = typeof cur === "string" ? q.entity(cur) : null;
-					if (!spot) return deny("scout.fallback", { reason: "这里没什么可翻找的。", fallback: true });
+					if (!spot) return deny("scout.nospot", { reason: "这里没什么可翻找的。" });
 					if (q.roll("find.coin", 4) < 3) return deny("scout.unlucky", { reason: "你翻找了一圈，一无所获。" });
 					if (num(spot.props.coins) < 2) return deny("scout.picked", { reason: "能捡的都被人捡干净了。" });
 					return grant([D.inc(spot.id, "coins", -2), D.inc(q.player, "coins", 2)], "你四处翻了翻，在墙角捡到了两枚铜币。");
@@ -389,7 +391,7 @@ export const village: GameDef = {
 				if (q.time % 4 !== 2) return null;
 				const beasts = q.world.entities.filter((e) => e.props.alive === true && e.props.aggressive === true);
 				if (!beasts.length) return null;
-				return { deltas: [], facts: beasts.map((b) => ({ text: "夜色渐浓，远处隐约传来野狗的低吠。", entities: [b.id] })) };
+				return { deltas: [], facts: [{ text: "夜色渐浓，远处隐约传来野狗的低吠。" }] };
 			},
 		},
 		{
@@ -402,7 +404,7 @@ export const village: GameDef = {
 				if (!beasts.length) return null;
 				return {
 					deltas: beasts.map(() => D.inc(q.player, "hp", -1)),
-					facts: beasts.map((b) => ({ text: "夜色里，野狗窜出来在你小腿上咬了一口！", entities: [b.id, q.player] })),
+					facts: [{ text: "夜色里，野狗窜出来在你小腿上咬了一口！" }],
 				};
 			},
 		},
@@ -475,12 +477,4 @@ export const village: GameDef = {
 	],
 	grounding: (world, player) => [...inTreeVisible(world, player)],
 	summarize: summarizeVillage,
-};
-
-/** 探测域：法则具体覆盖面——goods 形（price/priceBase）、手中带回收价的货品、出水的水源、带阶段的结构。 */
-export const villageProbe: ProbeSpec = {
-	buy: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.price != null || e.props.priceBase != null).map((e) => e.id) }),
-	sell: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.in === sim.player && e.props.resale != null).map((e) => e.id) }),
-	draw: (sim) => ({ source: sim.world.entities.filter((e) => e.props.supply === true).map((e) => e.id) }),
-	repair: (sim) => ({ structure: sim.world.entities.filter((e) => typeof e.props.phase === "number").map((e) => e.id) }),
 };

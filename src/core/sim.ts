@@ -71,10 +71,7 @@ export interface Messages {
 
 /** 法则产出的世界腔事实：进结果视图，供叙述跟随。 */
 export interface Fact {
-	/** 世界腔陈述。 */
 	text: string;
-	/** 陈述涉及的实体 id（审计依据，不进世界腔策展）。 */
-	entities: string[];
 }
 
 /** 属性类型。 */
@@ -89,7 +86,7 @@ export interface PropDef {
 	internal?: boolean;
 }
 
-/** 结构化拒绝：法则身份 + 世界腔理由 + 机器诊断 + 兜底自声明。 */
+/** 结构化拒绝：法则身份 + 世界腔理由 + 机器诊断。 */
 export interface Denial {
 	/** 法则标识 */
 	law: string;
@@ -97,8 +94,6 @@ export interface Denial {
 	reason?: string;
 	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
 	debug?: string;
-	/** 作者的兜底自声明：probe 据此报告法则缺口 */
-	fallback?: boolean;
 }
 
 /** 静态形态前置条件违约：未知动词 / schema 不符。
@@ -167,13 +162,8 @@ function attemptCost(verb: VerbDef | undefined): number {
 	return verb?.cost ?? 0;
 }
 
-export function deny(law: string, o: { reason?: string; fallback?: boolean } = {}): Verdict {
+export function deny(law: string, o: { reason?: string } = {}): Verdict {
 	return { ok: false, denial: { law, ...o } };
-}
-
-/** 兜底规则：无条件拒绝，Denial 带 fallback 自声明标记（probe 据此报告法则缺口）。 */
-export function fallback(id: string, text: (q: Q) => string): Rule {
-	return { id, judge: (q: Q) => deny(id, { reason: text(q), fallback: true }) };
 }
 
 /** Delta 构造糖。 */
@@ -206,22 +196,6 @@ export function defineVerb<S extends TObject>(spec: {
 	};
 }
 
-/** 从 deltas + facts 收集涉及实体（审计依据；世界腔策展不渲染参与清单）。 */
-function collectInvolved(deltas: Delta[], facts: Fact[] = []): string[] {
-	const s = new Set<string>();
-	for (const d of deltas) {
-		if (d.op === "spawn") s.add(d.entity.id);
-		else if (d.op === "despawn") s.add(d.entity);
-		else if (d.op === "set" || d.op === "inc") s.add(d.entity);
-		else {
-			s.add(d.from);
-			s.add(d.to);
-		}
-	}
-	for (const f of facts) for (const e of f.entities) s.add(e);
-	return [...s];
-}
-
 export interface VerbDef {
 	label: string;
 	description: string;
@@ -231,7 +205,7 @@ export interface VerbDef {
 	cost?: number;
 	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
 	entityParams?: string[];
-	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为 fallback 兜底。 */
+	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为无条件拒绝的兜底规则。 */
 	rules: Rule[];
 }
 
@@ -367,7 +341,6 @@ export interface ActionStep {
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
-	involved?: string[];
 	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
 	src?: string;
 }
@@ -390,7 +363,6 @@ export interface TickStep {
 	deniedBy?: "invariant";
 	denial?: Denial;
 	facts?: Fact[];
-	involved?: string[];
 	/** 变更来源标识（system:<id>），审计依据。 */
 	src?: string;
 }
@@ -464,9 +436,6 @@ export class Simulation {
 	readonly world: World;
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
-	/** 骰子键碰撞追踪：同一动作复现同值是随机推论的必然，同刻键重复才是隐性相关 bug。 */
-	private rollEpoch = -1;
-	private readonly rollKeys = new Set<string>();
 	/** 动词参数严格校验器（additionalProperties:false），构造期从动词 schema 编译——所有入口（act 工具/场景/CLI/probe）共用同一裁决瓶颈。 */
 	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
 
@@ -522,11 +491,11 @@ export class Simulation {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
-				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, involved: collectInvolved(v.deltas, v.facts), src: `rule:${r.id}`, ticks: v.ticks ?? cost };
+				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, src: `rule:${r.id}`, ticks: v.ticks ?? cost };
 			}
 			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}
-		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered", fallback: true }, ticks: cost };
+		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
 	/** 构造规则判定上下文：引擎隐式语义在此唯一收口。 */
@@ -547,22 +516,9 @@ export class Simulation {
 				const n = Number(v);
 				return Number.isFinite(n) ? n : dflt;
 			},
-			roll: (key, sides) => {
-				this.traceRollKey(key);
-				return rollDice(world, key, sides);
-			},
+			roll: (key, sides) => rollDice(world, key, sides),
 			visible: () => this.visible(),
 		};
-	}
-
-	/** 同一时刻内骰子键应唯一：重复即两个不同判定共享同一随机值（隐性相关 bug）。 */
-	private traceRollKey(key: string): void {
-		if (this.world.time !== this.rollEpoch) {
-			this.rollEpoch = this.world.time;
-			this.rollKeys.clear();
-		}
-		if (this.rollKeys.has(key)) console.warn(`[sim] t${this.world.time} 骰子键重复：「${key}」——同一时刻两个判定共享同一随机值，应把实体 id 等并入 key`);
-		else this.rollKeys.add(key);
 	}
 
 	/** 实际起点世界：首个提交前的冻结快照（一切变异都经 commitChecked，此刻必为未变异状态）。 */
@@ -624,7 +580,7 @@ export class Simulation {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
 				step = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 			} else {
-				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
+				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, src, ticks: r.ticks };
 			}
 		} else {
 			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
@@ -691,7 +647,6 @@ export class Simulation {
 				reason: res.facts?.length ? res.facts.map((f) => f.text).join(" ") : (res.reason ?? messagesFor(this.def).defaultReason),
 				changes: cc.changes,
 				facts: res.facts,
-				involved: collectInvolved(res.deltas, res.facts),
 				src,
 			});
 		}
