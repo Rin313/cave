@@ -230,7 +230,7 @@ export class Engine {
 		this.turn.usage = [];
 	}
 
-	/** 单 pass 回合：一次会话运行内 act（一次性提交，门闩封闭变异窗口）→ 工具结果承载世界回应 → declare（可选）→ 散文。 */
+	/** 回合编排：同一次会话运行内 act（一次性提交，门闩封闭变异窗口）→ 工具结果承载世界回应 → 散文。 */
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
 		this.outcome = { results: [], elapsed: [] };
 		this.openTurn(action.intent);
