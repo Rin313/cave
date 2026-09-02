@@ -1,6 +1,7 @@
 import type { Change, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
+import type { ProbeSpec } from "./probe.ts";
 import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
@@ -473,4 +474,12 @@ export const village: GameDef = {
 	],
 	grounding: (world, player) => [...inTreeVisible(world, player)],
 	summarize: summarizeVillage,
+};
+
+/** 探测域：法则具体覆盖面——goods 形（price/priceBase）、手中带回收价的货品、出水的水源、带阶段的结构。 */
+export const villageProbe: ProbeSpec = {
+	buy: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.price != null || e.props.priceBase != null).map((e) => e.id) }),
+	sell: (sim) => ({ goods: sim.world.entities.filter((e) => e.props.in === sim.player && e.props.resale != null).map((e) => e.id) }),
+	draw: (sim) => ({ source: sim.world.entities.filter((e) => e.props.supply === true).map((e) => e.id) }),
+	repair: (sim) => ({ structure: sim.world.entities.filter((e) => typeof e.props.phase === "number").map((e) => e.id) }),
 };

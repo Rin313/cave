@@ -1,6 +1,7 @@
 import type { Change, GameDef, PropDef, PropValue, Q, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, fallback, grant } from "../core/sim.ts";
 import { denyUnreachable, inTreeReach } from "./space.ts";
+import type { ProbeSpec } from "./probe.ts";
 import { Type } from "typebox";
 
 /**
@@ -349,4 +350,10 @@ export const yume: GameDef = {
 	},
 	summarize: summarizeYume,
 	digestExtra: digestExtraYume,
+};
+
+/** 探测域：移动的目的地是地点（space，缺省域排除场景故需显式纳入）；拾取域收窄到可拾取物。 */
+export const yumeProbe: ProbeSpec = {
+	go: (sim) => ({ dest: sim.world.entities.filter((e) => e.props.space === true).map((e) => e.id) }),
+	take: (sim) => ({ entity: [...sim.visible()].filter((id) => sim.world.entities.find((e) => e.id === id)?.props.takable === true) }),
 };
