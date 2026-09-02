@@ -254,11 +254,15 @@ export class Engine {
 		const o = this.outcome;
 		const passed = messagesFor(this.def).timePassed;
 		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || passed}`);
+		const granted = o.results.reduce((n, r) => n + r.ticks, 0);
+		const moves = [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves];
+		// 静默流逝（零产出刻）也入近况：授予的刻数必须可说
+		if (granted > 0 && elapsed.length === 0) moves.push(`⏱ ${passed}（${granted} 刻）`);
 		const turn: MemoryTurn = {
 			time: this.sim.world.time,
 			intent,
 			kind: o.kind,
-			moves: [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r.action)}：${r.reason}`), ...elapsedMoves],
+			moves,
 		};
 		this.memory.push(turn);
 		const limit = this.def.memoryLimit ?? 0;
@@ -349,6 +353,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
 	const lines: string[] = [];
 	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
+	const granted = results.reduce((n, r) => n + r.ticks, 0);
 	if (refused) {
 		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	}
@@ -362,7 +367,7 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 			const involved = r.involved?.length ? `  涉及：${r.involved.map((id) => fmtValue(sim, id)).join("、")}` : "";
 			lines.push(`- 尝试「${sim.describeAction(r.action)}」→ ${verdict}${changes}${facts}${involved}`);
 		}
-	} else if (!refused && !elapsedEvents.length) {
+	} else if (!refused && !elapsedEvents.length && granted === 0) {
 		lines.push("没有任何改变。");
 	}
 	if (elapsedEvents.length) {
@@ -372,6 +377,9 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 			const body = bits.length ? bits.join("。") : (r.reason || messagesFor(sim.def).defaultReason);
 			lines.push(`- ${r.ok ? body : `${body}（被拒绝）`}`);
 		}
+	} else if (granted > 0) {
+		// 静默流逝（零产出刻）也是裁决授予的时间后果，必须可说（时间律：授予的刻数必须可说）
+		lines.push(`${messagesFor(sim.def).timePassed}（${granted} 刻）：没有任何改变。`);
 	}
 	const revealedVisible = revealed.filter((id) => sim.world.entities.some((e) => e.id === id));
 	if (revealedVisible.length) {
@@ -396,7 +404,7 @@ function buildNarratePrompt(sim: Simulation, elapsed: TickStep[], instruction: s
 }
 
 /** act 工具：本回合唯一的动作提交口（one-shot 门闩）。
- *  execute 内完成：裁决（单一瓶颈 adjudicateRaw 口径）→ 回合时间流逝 → 世界腔策展作为工具结果返回。 */
+ *  execute 内完成：逐动作 apply（裁决→提交→按授予逐刻落钟——时间律的执行在裁决边界内）→ 世界腔策展作为工具结果返回。 */
 function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: TurnChannel) {
 	const actionSchema = Type.Union(
 		Object.entries(def.verbs).map(([name, v]) =>
@@ -436,11 +444,11 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 					// 静态形态已在工具边界由 pi 校验（Convert + 严格 Check：错误回模型、可重试、门闩未耗）；
 					// 内核的同型检查是前置条件——此处若抛 ProtocolViolation 即 pi/sim 校验偏斜（引擎 bug），pi 的 execute catch 兑为 error result
 					const a = raw as { verb: string; params: Record<string, PropValue> };
-					const r = sim.apply({ verb: a.verb, params: a.params } satisfies Action);
-					results.push(r);
-					// 时间律：世界时间只经裁决边界流逝，刻数由裁决授予——按动作交织推进，
+					// 时间律的执行点在 core：apply 裁决 → 提交 → 按授予刻数逐刻落钟——
 					// 后续动作与 systems 都在后一世界态上裁决/运行（世界能在行为之间反应）。
-					if (r.ticks > 0) elapsed.push(...sim.tick(r.ticks));
+					const res = sim.apply({ verb: a.verb, params: a.params } satisfies Action);
+					results.push(res.step);
+					elapsed.push(...res.elapsed);
 				}
 			}
 			if (hasActions) channel.onAdjudication?.({ results, elapsed });

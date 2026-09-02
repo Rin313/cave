@@ -86,12 +86,14 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			} else {
 				ok = true;
 				reason = results.map((r) => r.reason).join(" ");
+				for (const t of results) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
 			}
 		} else if (step.action) {
 			try {
-				const r = sim.apply(asAction(step.action));
-				ok = r.ok;
-				reason = r.reason;
+				const res = sim.apply(asAction(step.action));
+				ok = res.step.ok;
+				reason = res.step.reason;
+				for (const t of res.elapsed) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
 			} catch (e) {
 				// 前置条件违约在裁决之外：场景文件的动词/参数笔误，不得洗白为「世界拒绝」类的合法失败；
 				// 显式声明 expect.protocol 的步骤例外——作者在此断言内核契约（结构性墙）
@@ -259,12 +261,17 @@ function probeDef(def: GameDef, maxCombos = 10000): { gaps: { verb: string; op: 
 
 	const probeAction = (action: Action) => {
 		const fresh = new Simulation(def);
-		const r = fresh.apply(action);
-		if (!r.ok && r.denial?.fallback === true) {
-			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: r.reason, law: r.denial.law });
+		const { step, elapsed } = fresh.apply(action);
+		if (!step.ok && step.denial?.fallback === true) {
+			gaps.push({ verb: action.verb, op: describeAction(action, def), reason: step.reason, law: step.denial.law });
 		}
-		if (!r.ok && r.deniedBy === "invariant" && r.denial && r.denial.reason == null) {
-			bugs.push({ verb: action.verb, op: describeAction(action, def), debug: r.denial.debug ?? r.denial.law });
+		if (!step.ok && step.deniedBy === "invariant" && step.denial && step.denial.reason == null) {
+			bugs.push({ verb: action.verb, op: describeAction(action, def), debug: step.denial.debug ?? step.denial.law });
+		}
+		for (const t of elapsed) {
+			if (!t.ok && t.deniedBy === "invariant" && t.denial && t.denial.reason == null) {
+				bugs.push({ verb: action.verb, op: describeAction(action, def), debug: t.denial.debug ?? t.denial.law });
+			}
 		}
 	};
 
@@ -344,7 +351,14 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		const isAdvance = head === "advance";
 		const n = isAdvance ? Number(parts[1] ?? 1) : 0;
 		const actionDesc = isAdvance ? `advance ${n}` : token;
-		const results: Step[] = isAdvance ? sim.tick(n) : [sim.apply(parseActionToken(token, sim))];
+		// apply 即完整裁决边界：动作按授予刻数自动流逝（时间律）；advance n 是协议外的显式摇钟（纯等待）
+		let results: Step[];
+		if (isAdvance) {
+			results = sim.tick(n);
+		} else {
+			const res = sim.apply(parseActionToken(token, sim));
+			results = [res.step, ...res.elapsed];
+		}
 		steps.push(...results);
 		if (results.length === 0) {
 			console.log(`\n>>> ${actionDesc}`);
@@ -405,7 +419,7 @@ async function main(): Promise<void> {
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
-    研究工具不自动流逝时间（时间律：刻数由裁决授予，引擎按动作交织推进）；advance n 显式摇钟
+    动作按裁决授予的刻数自动流逝（时间律：apply 即完整裁决边界）；advance n 为协议外显式摇钟（纯等待）
   sim probe --game <id> [--max <n>]    穷举可见实体的动作组合，报告落到兜底标记（Denial.fallback）的法则缺口与执行校验 bug（--max 控制组合预算，默认 10000）
   sim lint --game <id>    属性词汇 lint：扫描游戏源文件读取的属性键，报告未在 props 注册表声明的键（advisory）
 `);

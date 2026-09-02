@@ -367,7 +367,7 @@ export interface ActionStep {
 	changes: Change[];
 	action: Action;
 	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价（凡入裁决即尝试）。
-	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；引擎据此逐刻推进 systems。 */
+	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；apply 据此在裁决边界内逐刻推进 systems。 */
 	ticks: number;
 	/** 否决来源：rule——动词法则网络的否决（含全部规则未表态时的引擎闭合回落，law "action.unanswered"；
 	 *  可见性门同归此值——感知是世界真相）；invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。*/
@@ -378,6 +378,13 @@ export interface ActionStep {
 	involved?: string[];
 	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
 	src?: string;
+}
+
+/** 动作裁决的完整解析：动作步（意志的果）+ 本动作授予执行出的刻步（世界的因）。
+ *  二者在事件流中是并列形态（刻不是动作）；授予数以 ActionStep.ticks 为权威记录。 */
+export interface Resolution {
+	step: ActionStep;
+	elapsed: TickStep[];
 }
 
 /** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻）。零产出系统不产生条目。 */
@@ -599,23 +606,23 @@ export class Simulation {
 		return null;
 	}
 
-	apply(action: Action): ActionStep {
+	apply(action: Action): Resolution {
 		const r = this.adjudicateRaw(action);
-		let sr: ActionStep;
+		let step: ActionStep;
 		if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(r.deltas, src);
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
-				sr = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
-				return sr;
+				step = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
+			} else {
+				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
 			}
-			sr = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, involved: r.involved, src, ticks: r.ticks };
 		} else {
-			sr = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
+			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
-
-		return sr;
+		const elapsed = step.ticks > 0 ? this.tick(step.ticks) : [];
+		return { step, elapsed };
 	}
 
 	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。 */
@@ -638,6 +645,8 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
+	/** 协议外裸钟：不经裁决直接推进 n 刻并运行 systems（时间律的显式豁免通道，测试/开发工具用）。
+	 *  产品路径的唯一合法时钟在 apply 的裁决边界内。 */
 	tick(n = 1): TickStep[] {
 		const out: TickStep[] = [];
 		for (let i = 0; i < n; i++) {

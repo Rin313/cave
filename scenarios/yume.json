@@ -97,8 +97,7 @@
 				{ "name": "取猫效果（第四枚）", "action": { "verb": "take", "params": { "entity": "cat_effect" } }, "expect": { "ok": true } },
 				{ "name": "出小屋回沙之海", "action": { "verb": "go", "params": { "dest": "desert" } }, "expect": { "ok": true } },
 				{ "name": "回门厅", "action": { "verb": "go", "params": { "dest": "nexus" } }, "expect": { "ok": true } },
-				{ "name": "睡醒回家", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true, "state": { "player.in": "room", "player.awake": true } } },
-				{ "name": "时刻推进：人影出现在阳台上", "tick": 1, "expect": { "ok": true, "state": { "shadow.in": "room", "player.ended": true } } },
+				{ "name": "睡醒回家（收齐四效果后醒来：终局观测在授予的一刻内显形）", "action": { "verb": "sleep", "params": {} }, "expect": { "ok": true, "state": { "player.in": "room", "player.awake": true, "player.ended": true, "shadow.in": "room" } } },
 				{ "name": "隔窗拉住那只手：终局成立", "action": { "verb": "interact", "params": { "entity": "window" } }, "expect": { "ok": true, "reason": "拉住", "state": { "player.ending": true } } }
 			]
 		}
