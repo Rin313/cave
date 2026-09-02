@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
+import { devWait, withDevWait } from "./dev.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
@@ -78,7 +79,8 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		let reason: string;
 		const problems: string[] = [];
 		if (step.tick != null) {
-			const results = sim.tick(step.tick);
+			const res = sim.apply(devWait(step.tick));
+			const results = res.elapsed;
 			if (results.length === 0) {
 				ok = false;
 				reason = "时间流逝，什么也没有发生。";
@@ -139,7 +141,8 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 
 function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
-	const def = getGame(file.game);
+	// Simulation 挂研究动词（tick 步骤经同一裁决边界落钟）；断言只涉及游戏动词，不受影响
+	const def = withDevWait(getGame(file.game));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);
@@ -223,7 +226,7 @@ function parseActionToken(token: string, sim: Simulation): Action {
 	const [verbName, ...rest] = token.split(/\s+/);
 	const verb = sim.def.verbs[verbName!];
 	if (!verb) {
-		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；advance n 显式摇钟；实体参数可用名称或 id）`);
+		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；advance n 研究摇钟；实体参数可用名称或 id）`);
 	}
 	const props = verb.schema.properties;
 	const paramOrder = Object.keys(props);
@@ -346,7 +349,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 
 async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
 	const def = getGame(gameId);
-	const sim = new Simulation(def);
+	const sim = new Simulation(withDevWait(def));
 	const steps: Step[] = [];
 	for (const token of tokens) {
 		const parts = token.split(/\s+/);
@@ -354,10 +357,11 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		const isAdvance = head === "advance";
 		const n = isAdvance ? Number(parts[1] ?? 1) : 0;
 		const actionDesc = isAdvance ? `advance ${n}` : token;
-		// apply 即完整裁决边界：动作按授予刻数自动流逝（时间律）；advance n 是协议外的显式摇钟（纯等待）
+		// apply 即完整裁决边界：动作按授予刻数自动流逝（时间律）；advance 是研究摇钟（dev.wait 合成动词，同一扇门）
 		let results: Step[];
 		if (isAdvance) {
-			results = sim.tick(n);
+			const res = sim.apply(devWait(n));
+			results = [res.step, ...res.elapsed];
 		} else {
 			const res = sim.apply(parseActionToken(token, sim));
 			results = [res.step, ...res.elapsed];
@@ -394,7 +398,7 @@ async function main(): Promise<void> {
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
-    动作按裁决授予的刻数自动流逝（时间律：apply 即完整裁决边界）；advance n 为协议外显式摇钟（纯等待）
+    动作按裁决授予的刻数自动流逝（时间律：apply 即完整裁决边界）；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
   sim probe --game <id> [--max <n>]    裁决地图：每动词穷举 entityParams × 可见实体，按法则分组呈现每输入的落点（授予计数/拒绝行）；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;

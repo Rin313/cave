@@ -5,6 +5,7 @@ import { Engine, type ActOutcome, type TokenUsage, type TurnWarning } from "../c
 import { Simulation, departedNames, fmtChange } from "../core/sim.ts";
 import type { GameDef, TickStep, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
+import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
@@ -139,7 +140,8 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	const sim = new Simulation(def, loadState(dir));
+	// Simulation 挂研究动词（wait 走同一裁决边界）；Engine 仍持原始 def——合成动词不进映射层
+	const sim = new Simulation(withDevWait(def), loadState(dir));
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager: SessionManager.open(meta.sessionFile) });
 	try {
 		await fn({ dir, meta, def, sim, engine });
@@ -158,7 +160,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
 	mkdirSync(dir, { recursive: true });
-	const sim = new Simulation(def);
+	const sim = new Simulation(withDevWait(def));
 	const sessionManager = SessionManager.create(process.cwd(), dir);
 	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sim, sessionManager });
 	try {
@@ -218,8 +220,9 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 		for (const line of lines) {
 			if (line.startsWith("@wait")) {
 				const n = Number(line.split(/\s+/)[1] ?? 1);
-				const results = sim.tick(n);
-				appendTranscript(dir, { phase: "wait", ticks: n, events: results, usage: [] });
+				const res = sim.apply(devWait(n));
+				const results = res.elapsed;
+				appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, usage: [] });
 				console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
 			} else {
 				const outcome = await engine.act({ intent: line });
@@ -251,13 +254,14 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, meta, sim, engine } = ctx;
-		const results = sim.tick(n);
+		const res = sim.apply(devWait(n));
+		const results = res.elapsed;
 		const { narration: scene, warnings, usage } = await engine.narrate(
 			"时间流逝。请用文学笔触描写当前场景发生的变化。",
 			results,
 		);
 		persistRun(ctx);
-		appendTranscript(dir, { phase: "wait", ticks: n, events: results, scene, warnings, usage });
+		appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, scene, warnings, usage });
 		console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
 		console.log(scene);
 		warnWarnings(warnings);
@@ -388,7 +392,7 @@ async function main() {
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
-render/wait 是协议外操作（不计回合）：render 调用场景呈现服务（叙述仪器），wait 直接摇钟。
+render/wait 是研究仪器操作（不计回合、不进近况）：render 调用场景呈现服务；wait 以合成研究动词过裁决落钟（tools/dev.ts）。
 report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）

@@ -131,7 +131,7 @@ export interface Q {
 	rel(from: string, to: string, type: string): number | string | boolean | null;
 	/** 关系数值比较：缺边/非数按 dflt 参与——缺省语义显式命名在调用点。 */
 	relNum(from: string, to: string, type: string, dflt: number): number;
-	/** 确定性骰子（World 纯函数，check/apply/dryTick 一致）。 */
+	/** 确定性骰子（World 纯函数，apply/存档恢复一致）。 */
 	roll(key: string, sides: number): number;
 	visible(): Set<string>;
 }
@@ -448,7 +448,7 @@ export class Simulation {
 	/** 动词参数严格校验器（additionalProperties:false），构造期从动词 schema 编译——所有入口（act 工具/场景/CLI/probe）共用同一裁决瓶颈。 */
 	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
 
-	/** 缺省克隆 def.world 作为初始世界；显式传入 world（存档恢复/dryTick 克隆源）则以其为完整真相。 */
+	/** 缺省克隆 def.world 作为初始世界；显式传入 world（存档恢复克隆源）则以其为完整真相。 */
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
@@ -626,9 +626,8 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
-	/** 协议外裸钟：不经裁决直接推进 n 刻并运行 systems（时间律的显式豁免通道，测试/开发工具用）。
-	 *  产品路径的唯一合法时钟在 apply 的裁决边界内。 */
-	tick(n = 1): TickStep[] {
+	/** 落钟执行器（apply 的内部机构）：推进一刻并运行 systems。 */
+	private tick(n = 1): TickStep[] {
 		const out: TickStep[] = [];
 		for (let i = 0; i < n; i++) {
 			this.world.time += 1;
@@ -665,13 +664,6 @@ export class Simulation {
 			});
 		}
 		return out;
-	}
-
-	/** 克隆世界，模拟 n 个 tick，返回将要发生的变更（不改变自身状态）。合法外推原语：纯函数派生自状态，
-	 *  克隆即完整外推（无需序列快照机制）——但派生合法 ≠ 必然：下一动作的 deltas 先于预测刻落地，外推可被干预作废。*/
-	dryTick(n = 1): TickStep[] {
-		const clone = new Simulation(this.def, this.world);
-		return clone.tick(n);
 	}
 
 	snapshot(): World {
