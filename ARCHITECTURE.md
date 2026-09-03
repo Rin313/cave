@@ -10,8 +10,7 @@
 
 ## 2. 核心架构主张
 
-1. DESIGN.md 的三层架构落到 pi SDK 概念：
-   | DESIGN.md 层 | pi SDK 落点 |
+1. | DESIGN.md 层 | pi SDK 落点 |
    |---|---|
    | 映射层 | 一个自定义 tool：`defineTool({ name: "act", ... })`（actions 列表：`{ verb, params }`，schema 从游戏动词表生成）；pi 在 execute 前按工具 schema 校验（错误回模型、可重试、门闩未耗）——静态形态的活跃门；one-shot 门闩内一次性提交，只产结构化结果 |
    | 表达层 | Engine 转译 pi 流为叙述通道：`narration_delta` 实时正文（相位门控：仅裁决后的生成，thinking 与映射期文本不入通道）、`narration_reset`（重试丢弃在途生成时清零）；回合定稿权威全文（累积散文，空散文/未裁决回落确定性摘要）由 `act()`/`narrate()` 返回值承载，不入事件流；按生成代记账，与 pi 的「移除失败消息再重生成」镜像；与映射同一回合运行，输入 = 回合 prompt 的状态 + act 工具结果的世界腔策展|
