@@ -150,7 +150,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	};
 }
 
-/** 墙/协议的测试夹具（tools 层自有，不进 games 注册表）：scenario 文件按 id 引用。 */
+/** 墙/协议的测试夹具 */
 const FIXTURES: Record<string, GameDef> = { [walltest.id]: walltest };
 
 function resolveGame(id: string): GameDef {
