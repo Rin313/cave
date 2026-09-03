@@ -232,6 +232,9 @@ export interface GameDef {
 	memoryLimit?: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */
 	grounding?: (world: World, player: string) => string[];
+	/** 边感知（感知推论在关系边上的闭合）：体验者知觉哪些关系边。core 只保留不可覆写的结构过滤。
+	 *  同一谓词约束两面：状态视图（digest.relations）与事件投影（rel 变更行，经 FieldSpan.edges 随步快照） */
+	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
 	/** 状态视图的派生纹理（世界 + 玩家 → 视图 extra 键下的附加纹理）：出口、随身清单等游戏自持语义的呈现。
 	 *  命名空间分区：core 装配字段（time/relations/entities）独占视图顶层，纹理覆写不可表示。
 	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，纹理不承载它；携带可指名 id 时应配合
@@ -346,10 +349,17 @@ export function propLabelOf(def: GameDef, prop: string): string | undefined {
 }
 
 /** 参照域跨度：裁决边界两侧的感知投影快照——事件投影的判定输入
- *  与 Change.prev/next 同一本体：提交后不可重算的历史，只存在于记录，不是账本状态。 */
+ *  与 Change.prev/next 同一本体：提交后不可重算的历史，只存在于记录，不是账本状态。
+ *  edges 是边感知快照 */
 export interface FieldSpan {
 	before: string[];
 	after: string[];
+	edges?: { before: string[]; after: string[] };
+}
+
+/** 边键：跨度内边感知快照的形态（from|to|type——知觉判定只需边的身份，值随变更行携带）。 */
+function edgeKey(r: Pick<Rel, "from" | "to" | "type">): string {
+	return `${r.from}|${r.to}|${r.type}`;
 }
 
 /** 事件流条目（审计与表达输入的基本形态）：动作裁决与世界刻步是两种本体——
@@ -489,7 +499,12 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 	}
 	const perceivableOf = (s: Step): ((c: Change) => boolean) => {
 		const field = spanOf(s);
-		return (c) => referentsOf(sim, c, departedAll).every((r) => (departedAll.has(r) ? shownDeparted.has(r) : field.has(r)));
+		// 边感知（与状态视图同一谓词的跨度快照）：rel 变更行要求边在跨度两侧知觉的并集内
+		const edgeSpan = s.field.edges ? new Set([...s.field.edges.before, ...s.field.edges.after]) : undefined;
+		return (c) => {
+			if (c.kind === "rel" && edgeSpan && !edgeSpan.has(edgeKey(c))) return false;
+			return referentsOf(sim, c, departedAll).every((r) => (departedAll.has(r) ? shownDeparted.has(r) : field.has(r)));
+		};
 	};
 	const msgs = messagesFor(sim.def);
 	const compact = opts?.compact === true;
@@ -578,6 +593,15 @@ export class Simulation {
 	private visibleIn(world: World): Set<string> {
 		if (this.def.grounding) return new Set(this.def.grounding(world, this.player));
 		return new Set(world.entities.map((e) => e.id));
+	}
+
+	/** 边感知快照：结构过滤（端点可见）∧ 游戏语义谓词。*/
+	private edgeField(world: World, vis: Set<string>): string[] | undefined {
+		const perceive = this.def.edgePerception?.(world, this.player);
+		if (!perceive) return undefined;
+		const out: string[] = [];
+		for (const r of world.relations ?? []) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(edgeKey(r));
+		return out;
 	}
 
 	/** 裁决时读态：快照 + 深冻结。裁决侧代码（Q.world / grounding / digestExtra / summarize）一律收此读态——
@@ -721,6 +745,7 @@ export class Simulation {
 		// 出口世界 ≡ S0 ⊕ 已提交 deltas 按构造成立。
 		const s0 = this.readState();
 		const before = this.visibleIn(s0);
+		const edgesBefore = this.edgeField(s0, before);
 		const r = this.adjudicateRaw(action, before, s0);
 		let step: Omit<ActionStep, "field">;
 		if (r.ok) {
@@ -737,7 +762,10 @@ export class Simulation {
 		}
 		// 跨度在落钟前闭合：提交边界是感知的离散单位，刻步自带跨度；
 		// 无提交（法则拒绝或硬墙回滚）则边界未跨越——世界仍是前态，after 即 before
-		const field: FieldSpan = { before: [...before], after: [...(step.ok ? this.visible() : before)] };
+		const afterVis = step.ok ? this.visible() : before;
+		const afterEdges = step.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
+		const field: FieldSpan = { before: [...before], after: [...afterVis] };
+		if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
 		const elapsed = step.ticks > 0 ? this.tick(step.ticks) : [];
 		return { step: { ...step, field }, elapsed };
 	}
@@ -796,8 +824,12 @@ export class Simulation {
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			// 每系统的提交是独立过墙边界；回滚即未跨越——世界仍是前态，after 即 before
 			const before = this.visibleIn(s0);
+			const edgesBefore = this.edgeField(s0, before);
 			const cc = this.commitChecked(s0, res.deltas, src);
-			const field: FieldSpan = { before: [...before], after: [...(cc.ok ? this.visible() : before)] };
+			const afterVis = cc.ok ? this.visible() : before;
+			const afterEdges = cc.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
+			const field: FieldSpan = { before: [...before], after: [...afterVis] };
+			if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
 			const at = this.world.time;
 			if (!cc.ok) {
 				emit({ kind: "tick", at, ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
@@ -822,13 +854,14 @@ export class Simulation {
 	}
 
 	/** 状态视图（唯一装配线）：prompt 的状态呈现由 core 组装——可见实体（grounding）× 注册表过滤
-	 *  × 关系端点可见过滤；def.digestExtra 派生纹理入独立 extra 键
+	 *  × 关系投影（端点可见的结构过滤 ∧ edgePerception 语义谓词）；def.digestExtra 派生纹理入独立 extra 键
 	 *  参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名，可指名的必看得见。 */
 	digest(): string {
 		const w = this.readState();
 		const vis = this.visibleIn(w);
+		const perceiveEdge = this.def.edgePerception?.(w, this.player);
 		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
-		const relations = (w.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
+		const relations = (w.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to) && (!perceiveEdge || perceiveEdge(r)));
 		const view: Record<string, unknown> = { time: w.time, relations, entities };
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
 		if (Object.keys(extra).length) view.extra = extra;

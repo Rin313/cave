@@ -342,6 +342,9 @@ export const yume: GameDef = {
 		},
 	],
 	props: YUME_PROPS,
+	// 边感知：path 边是世界拓扑的实现细节（出口经 digestExtra 以地点名呈现），不进模型视图——
+	// 石猫建路的 relSet 变更行随之沉默（小屋 spawn 卡与法则理由承载揭示）；法则层照常读全真相（Q.rel 不过投影）
+	edgePerception: () => (r) => r.type !== "path",
 	grounding: (world, player) => {
 		// 视野 = 自己 + 所在地 + 同地存在 + 随身携带（in 指向自己）+ 相邻地点（路径另一端）；其余世界藏在雾里。
 		const cur = entity(world, player)?.props["in"] as string | null;
