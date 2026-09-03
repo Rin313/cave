@@ -651,10 +651,12 @@ export class Simulation {
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
 	}
 
-	/** 原子回滚：世界内容恢复为 s0（先删提交期间新建的顶层键——relations 等快照中不存在的——再整体覆写）。 */
+	/** 原子回滚：世界内容恢复为 s0（先删提交期间新建的顶层键——relations 等快照中不存在的——再整体覆写）。
+	 *  s0 是裁决读态（深冻结）：回滚以克隆赋值解冻——冻结是裁决侧的读隔离手段，不是账本的属性，
+	 *  冻结引用入账即砖死后续提交。 */
 	private restore(s0: World): void {
 		for (const k of Object.keys(this.world)) if (!(k in s0)) delete (this.world as unknown as Record<string, unknown>)[k];
-		Object.assign(this.world, s0);
+		Object.assign(this.world, JSON.parse(JSON.stringify(s0)) as World);
 	}
 
 	/** 提交 + 硬墙：以裁决时读态 s0 为回滚基线（提交成功就地生效，任一翼违反即恢复 s0 并拒绝）。

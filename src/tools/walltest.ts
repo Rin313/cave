@@ -14,6 +14,7 @@ import { Type } from "typebox";
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
 	touched: { type: "number", label: "触及" },
+	vault: { type: "boolean", label: "封印" },
 };
 
 /** 蓄意越权：经 Q 读态直改属性（冻结视图上写入即抛）。 */
@@ -63,6 +64,12 @@ export const walltest: GameDef = {
 				},
 			}],
 		}),
+		trip: defineVerb({
+			label: "触封印",
+			description: "合法授予但被领域不变式否决（墙否决路径：原子回滚后账本必须仍可提交）。",
+			schema: Type.Object({}),
+			rules: [{ id: "trip.grant", judge: (q) => grant([D.set(q.player, "vault", true)], "你碰了封印。") }],
+		}),
 	},
 	world: {
 		time: 0,
@@ -79,4 +86,10 @@ export const walltest: GameDef = {
 		},
 	],
 	props: PROPS,
+	invariants: [{
+		// 墙契约的另一半：否决路径的原子回滚。回滚若把冻结引用留在账本上，此场景后的任何提交即抛——
+		// 场景的干净对照步（回滚后 touch 照常）就是该回归的探针。
+		id: "vault.sealed",
+		check: (_world, ctx) => (ctx.changes.some((c) => c.kind === "prop" && c.prop === "vault") ? "封印纹丝不动。" : null),
+	}],
 };

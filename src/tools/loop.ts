@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage, type TurnWarning } from "../core/engine.ts";
 import { Simulation, spineLines } from "../core/sim.ts";
-import type { GameDef, TickStep, World } from "../core/sim.ts";
+import type { GameDef, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";

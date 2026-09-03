@@ -11,6 +11,13 @@
 				{ "name": "越权未遂后世界仍健康：时间未走、数值无漂移，干净动作照常", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.hp": 10 } } },
 				{ "name": "系统越权写属性：刻步在系统写入点即抛", "tick": 1, "expect": { "throws": "read only" } }
 			]
+		},
+		{
+			"name": "墙否决的原子回滚：回滚后账本仍可提交（冻结引用不得入账）",
+			"steps": [
+				{ "name": "合法授予被领域不变式否决：整提交回滚，状态零漂移", "action": { "verb": "trip", "params": {} }, "expect": { "ok": false, "reason": "封印", "state": { "player.vault": null, "player.touched": 0 } } },
+				{ "name": "回滚后的干净提交照常（回滚冻结的探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.vault": null } } }
+			]
 		}
 	]
 }

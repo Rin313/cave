@@ -19,7 +19,7 @@ interface EntryLike {
 	data?: unknown;
 }
 
-/** 从会话 custom 条目重建近期窗口（最近 limit 回合；limit 非正即空窗——未声明记忆语义的诚实零）。 */
+/** 从会话 custom 条目重建近期窗口 */
 export function loadMemory(entries: readonly EntryLike[], limit: number): MemoryTurn[] {
 	const out: MemoryTurn[] = [];
 	for (const e of entries) {
