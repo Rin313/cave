@@ -83,8 +83,6 @@ function engineOptsFromEnv(gameId: string): { provider: string; model: string; t
 	return { provider, model, thinkingLevel: process.env[`${prefix}_THINKING`] };
 }
 
-// ---------- 人类输出：研究流程直接可读；结构化数据已落盘（transcript.jsonl / state.json / meta.json）----------
-
 const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 function usageLine(rows: TokenUsage[]): string {
