@@ -234,8 +234,9 @@ export interface GameDef {
 	memoryLimit?: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */
 	grounding?: (world: World, player: string) => string[];
-	/** 状态视图的派生纹理（世界 + 玩家 → 顶层附加字段）：出口、随身清单等游戏自持语义的呈现。
-	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，extra 不承载它；携带可指名 id 时应配合
+	/** 状态视图的派生纹理（世界 + 玩家 → 视图 extra 键下的附加纹理）：出口、随身清单等游戏自持语义的呈现。
+	 *  命名空间分区：core 装配字段（time/relations/entities）独占视图顶层，纹理覆写不可表示。
+	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，纹理不承载它；携带可指名 id 时应配合
 	 *  非 entityParams 参数消费（地点恒可指名，由法则层回答）。 */
 	digestExtra?: (world: World, player: string) => Record<string, PropValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
@@ -726,17 +727,16 @@ export class Simulation {
 	}
 
 	/** 状态视图（唯一装配线）：prompt 的状态呈现由 core 组装——可见实体（grounding）× 注册表过滤
-	 *  × 关系端点可见过滤，顶层并入 def.digestExtra 派生纹理。
+	 *  × 关系端点可见过滤；def.digestExtra 派生纹理入独立 extra 键
 	 *  参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名，可指名的必看得见。 */
 	digest(): string {
 		const vis = this.visible();
 		const entities = this.world.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
 		const relations = (this.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
+		const view: Record<string, unknown> = { time: this.world.time, relations, entities };
 		const extra = this.def.digestExtra?.(this.world, this.player) ?? {};
-		// 保留键归装配线：extra 不得覆写 time/relations/entities（参照域契约的构造保证），冲突键被忽略并告警
-		const collisions = Object.keys(extra).filter((k) => k === "time" || k === "relations" || k === "entities");
-		if (collisions.length) console.warn(`[sim] digestExtra 与状态视图保留键冲突（被忽略）：${collisions.join("、")}`);
-		return JSON.stringify({ ...extra, time: this.world.time, relations, entities });
+		if (Object.keys(extra).length) view.extra = extra;
+		return JSON.stringify(view);
 	}
 
 	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行
