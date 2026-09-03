@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, entity, messagesFor, spineLines, viewCard, type Action, type ActionStep, type GameDef, type PropValue, type Step, type TickStep } from "./sim.ts";
+import { Simulation, entity, messagesFor, spineLines, viewCard, type Action, type ActionStep, type GameDef, type Step, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -403,27 +403,28 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			// act 执行即裁决边界：一次性完成 mapping→narration 转移，此后世界只接受叙述
 			run.phase = "narration";
 			run.acted = true;
-			run.proposals = (params.actions ?? []) as { verb: string; params: unknown }[];
-			const hasActions = !!params.actions?.length;
+			const proposed = (params.actions ?? []) as Action[];
+			run.proposals = [...proposed];
 			const results: ActionStep[] = [];
 			const elapsed: TickStep[] = [];
-			if (hasActions) {
-				for (const raw of params.actions!) {
-					// 静态形态已在工具边界由 pi 校验（Convert + 严格 Check：错误回模型、可重试、门闩未耗）；
-					// 内核的同型检查是前置条件——此处若抛 ProtocolViolation 即 pi/sim 校验偏斜（引擎 bug），pi 的 execute catch 兑为 error result
-					const a = raw as { verb: string; params: Record<string, PropValue> };
+			if (proposed.length) {
+				// 静态形态已在工具边界由 pi 校验（Convert + 严格 Check：错误回模型、可重试、门闩未耗）；
+				// 内核的同型检查是前置条件——批次入口整体预校验（sim.validateBatch），静态违约在首个裁决前
+				// 原子抛出（pi/sim 校验偏斜即引擎 bug，pi 的 execute catch 兑为 error result）
+				sim.validateBatch(proposed);
+				for (const a of proposed) {
 					// 时间律的执行点在 core：apply 裁决 → 提交 → 按授予刻数逐刻落钟——
 					// 后续动作与 systems 都在后一世界态上裁决/运行（世界能在行为之间反应）。
-					const res = sim.apply({ verb: a.verb, params: a.params } satisfies Action);
+					const res = sim.apply(a);
 					results.push(res.step);
 					elapsed.push(...res.elapsed);
 				}
 			}
-			if (hasActions) channel.onAdjudication?.({ results, elapsed });
+			if (proposed.length) channel.onAdjudication?.({ results, elapsed });
 			// 以世界腔策展作为工具结果：散文的唯一事件源（叙述只能跟随这里的内容）
 			const revealed = [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
 			return {
-				content: [{ type: "text", text: buildResultView(sim, results, !hasActions, run.intent, revealed, elapsed) }],
+				content: [{ type: "text", text: buildResultView(sim, results, proposed.length === 0, run.intent, revealed, elapsed) }],
 				details: {},
 			};
 		},

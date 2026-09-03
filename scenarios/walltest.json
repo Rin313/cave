@@ -18,6 +18,13 @@
 				{ "name": "合法授予被领域不变式否决：整提交回滚，状态零漂移", "action": { "verb": "trip", "params": {} }, "expect": { "ok": false, "reason": "封印", "state": { "player.vault": null, "player.touched": 0 } } },
 				{ "name": "回滚后的干净提交照常（回滚冻结的探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.vault": null } } }
 			]
+		},
+		{
+			"name": "审查者同权隔离：不变式越权写在冻结读态上即抛，崩溃兑为墙否决——先回滚后拒绝",
+			"steps": [
+				{ "name": "审查者越权写账本：TypeError 在提交边界兑为 invariant.crash 否决（可说），整提交回滚", "action": { "verb": "sneakpoke", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.sneak": null, "player.hp": 10 } } },
+				{ "name": "审查者崩溃后账本仍健康：干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.hp": 10 } } }
+			]
 		}
 	]
 }

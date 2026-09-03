@@ -257,7 +257,8 @@ export interface InvariantCtx {
 
 /** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。
  *  两种形态共用本接口：状态不变式只读 world（守恒类，防总量漂移）；
- *  过渡不变式经 ctx.changes 读提交（provenance 类，防错误再分配）。 */
+ *  过渡不变式经 ctx.changes 读提交（provenance 类，防错误再分配）。
+ *  审查者与裁决侧同权隔离：world / ctx.genesis / ctx.changes 均为冻结读态或冻结记录 */
 export interface Invariant {
 	id: string;
 	check: (world: World, ctx: InvariantCtx) => string | null;
@@ -561,7 +562,7 @@ export class Simulation {
 		}
 		// 「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
 		// 否则 t=0 是必要性自由区，def 结构错误与损坏存档要到首次提交才以全量拒绝的形式显形。
-		const broken = this.checkInvariants(this.world, []);
+		const broken = this.checkInvariants(this.readState(), []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
 	}
 
@@ -585,15 +586,29 @@ export class Simulation {
 		return deepFreeze(this.snapshot());
 	}
 
-	/** 前态参照域与冻结读态由调用方（apply）逐动作计算传入：同一提案内的多动作不沿用旧读态。 */
-	private adjudicateRaw(action: Action, curVis: Set<string>, world: World): RawResult {
-		const msgs = messagesFor(this.def);
+	/** 静态形态检查：verb 存在 + 参数严格校验（裁决外的前置条件，违约即抛 ProtocolViolation）。
+	 *  批次入口（validateBatch）与单动作裁决（adjudicateRaw）共用同一检查与同一严格度。 */
+	private staticForm(action: Action): VerbDef {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) throw new ProtocolViolation("action.unknown", `verb:${action.verb}`);
-		const cost = attemptCost(verb);
 		if (!this.validators.get(action.verb)!.Check(action.params)) {
 			throw new ProtocolViolation("action.schema", this.schemaErrors(action.verb, action.params));
 		}
+		return verb;
+	}
+
+	/** 批次预校验：整批动作在首个裁决前过静态形态检查，违约即整批原子拒绝。
+	 *  批次执行方（act 工具）必须在裁决循环前调用——否则第 n 个动作的静态违约会把
+	 *  前 n-1 个已裁决动作变成不可说后果 */
+	validateBatch(actions: readonly Action[]): void {
+		for (const a of actions) this.staticForm(a);
+	}
+
+	/** 前态参照域与冻结读态由调用方（apply）逐动作计算传入：同一提案内的多动作不沿用旧读态。 */
+	private adjudicateRaw(action: Action, curVis: Set<string>, world: World): RawResult {
+		const msgs = messagesFor(this.def);
+		const verb = this.staticForm(action);
+		const cost = attemptCost(verb);
 		const invalid = (verb.entityParams ?? [])
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
@@ -661,31 +676,41 @@ export class Simulation {
 
 	/** 提交 + 硬墙：以裁决时读态 s0 为回滚基线（提交成功就地生效，任一翼违反即恢复 s0 并拒绝）。
 	 *  提交内做执行校验（fidelity——每条 delta 在其应用时刻必须可执行），提交后做不变式校验；
-	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 直接作玩家文案。 */
+	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 直接作玩家文案。
+	 *  提交过程的意外异常（规则铸出的坏 delta、审查者自身的 bug——含冻结读态上的越权写）同通道兑为墙否决。 */
 	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
-		const out = this.commit(deltas, src);
-		if ("refusal" in out) {
+		try {
+			const out = this.commit(deltas, src);
+			if ("refusal" in out) {
+				this.restore(s0);
+				return { ok: false, changes: [], denial: out.refusal, reason: messagesFor(this.def).noResponse };
+			}
+			const inv = this.checkInvariants(genesis, out.changes);
+			if (inv) {
+				this.restore(s0);
+				const denial: Denial = inv.authored
+					? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
+					: { law: `invariant.${inv.id}`, debug: inv.message };
+				return { ok: false, changes: [], denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
+			}
+			return { ok: true, changes: out.changes };
+		} catch (e) {
 			this.restore(s0);
-			return { ok: false, changes: [], denial: out.refusal, reason: messagesFor(this.def).noResponse };
+			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
+			return { ok: false, changes: [], denial: { law: "invariant.crash", debug }, reason: messagesFor(this.def).noResponse };
 		}
-		const inv = this.checkInvariants(genesis, out.changes);
-		if (inv) {
-			this.restore(s0);
-			const denial: Denial = inv.authored
-				? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
-				: { law: `invariant.${inv.id}`, debug: inv.message };
-			return { ok: false, changes: [], denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
-		}
-		return { ok: true, changes: out.changes };
 	}
 
-	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者 */
+	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者。
+	 *  审查者收冻结读态（world 取快照、changes 深冻结——与裁决侧同权隔离）。 */
 	private checkInvariants(genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
-		const integrity = integrityInvariant().check(this.world, { def: this.def, genesis, changes });
+		const world = this.readState();
+		const frozen = deepFreeze(changes);
+		const integrity = integrityInvariant().check(world, { def: this.def, genesis, changes: frozen });
 		if (integrity) return { id: "integrity", message: integrity, authored: false };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(this.world, { def: this.def, genesis, changes });
+			const msg = inv.check(world, { def: this.def, genesis, changes: frozen });
 			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
