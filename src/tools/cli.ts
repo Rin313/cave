@@ -35,7 +35,6 @@ export function flagStr(a: ParsedArgs, name: string): string | undefined {
 	return typeof v === "string" ? v : undefined;
 }
 
-/** 必填参数：缺失即报错（tool 层不提供隐藏默认值）。 */
 export function requireFlag(a: ParsedArgs, name: string, usage: string): string {
 	const v = flagStr(a, name);
 	if (!v) throw new Error(`缺少必填参数 --${name}；${usage}`);
@@ -46,12 +45,10 @@ export function flagBool(a: ParsedArgs, name: string): boolean {
 	return a.flags.get(name) !== undefined;
 }
 
-/** JSON 输出 */
 export function out(obj: unknown): void {
 	process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
 }
 
-/** CLI 统一入口：未捕获错误打印到 stderr 并以非零码退出。 */
 export function runMain(main: () => Promise<void>): void {
 	main().catch((err) => {
 		console.error(err);
