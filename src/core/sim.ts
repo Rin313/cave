@@ -345,6 +345,13 @@ export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
+/** 参照域跨度：裁决边界两侧的感知投影快照——事件投影的判定输入
+ *  与 Change.prev/next 同一本体：提交后不可重算的历史，只存在于记录，不是账本状态。 */
+export interface FieldSpan {
+	before: string[];
+	after: string[];
+}
+
 /** 事件流条目（审计与表达输入的基本形态）：动作裁决与世界刻步是两种本体——
  *  刻是世界的因（驱动 systems 的因果步，提交失败不回退时间），不是意志的果 */
 export type Step = ActionStep | TickStep;
@@ -355,6 +362,8 @@ export interface ActionStep {
 	ok: boolean;
 	reason: string;
 	changes: Change[];
+	/** 参照域跨度：提交边界两侧的感知投影快照（落钟前闭合——刻步自带跨度）。 */
+	field: FieldSpan;
 	action: Action;
 	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价（凡入裁决即尝试）。
 	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；apply 据此在裁决边界内逐刻推进 systems。 */
@@ -383,6 +392,8 @@ export interface TickStep {
 	ok: boolean;
 	reason: string;
 	changes: Change[];
+	/** 参照域跨度：本系统提交边界两侧的感知投影快照。 */
+	field: FieldSpan;
 	/** 刻步只会被不变式硬墙拦截（系统产出没有其他否决路径）。 */
 	deniedBy?: "invariant";
 	denial?: Denial;
@@ -441,40 +452,70 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
+/** 变更行的指称集：与渲染器的解析行为对齐（fmtValue 会说出名字之处，投影即数指称）——
+ *  主语、关系端点、一切解析为实体（在世或窗口内离场）的字符串取值。 */
+function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, string>): string[] {
+	const refs: string[] = [];
+	const val = (v: PropValue): void => {
+		if (typeof v === "string" && (entity(sim.world, v) !== undefined || departed.has(v))) refs.push(v);
+	};
+	if (c.kind === "rel") refs.push(c.from, c.to);
+	else refs.push(c.entity);
+	if (c.kind === "rel" || c.kind === "prop") {
+		val(c.prev);
+		val(c.next);
+	}
+	return refs;
+}
+
 /** 回合骨架：事件流的规范单行渲染（线级可说单元的唯一机械）。
  *  符号承担结构（✓/✗/⏱/×n），语言词全部来自 messages/label/规则文案。
  *  刻步按时刻归并：刻是世界的因果步，同刻多系统的产出共享一条 ⏱ 行。
  *  compact 省略变更行（近况投影：变更由状态视图承载，裁决行保留 verdict/理由/事实）；
  *  internal 属性变更恒滤（模型面纪律的机械保证，覆写者仍可从 steps 原样读取）。
- *  无可说内容的刻（零产出/纯内部变更/被硬墙拦截）并入尾部的静默流逝聚合 ×n（时间律：授予的刻数必须可说）。
+ *  事件投影（受话人是体验者——与状态视图同一 grounding）：变更行按步的参照域跨度投影，
+ *  全部指称在场才可说，任一缺席即整行沉默；理由与 Fact 是规则铸造的世界语，不过投影。
+ *  无可说内容的刻并入尾部的静默流逝聚合 ×n。
  *  消费者：act 结果视图（模型）、近况（compact）、控制台、缺省回退摘要（玩家）。 */
 export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean }): string[] {
-	const departed = departedNames(steps);
+	// 先裁生灭行（指称只有主语，与离场名互不依赖）定「已公开离场者」：被投影的 despawn 不铸造合法名字，
+	// 引用隐藏离场者的行在指称判定中随之沉默；指称匹配宇宙 = 在世实体 ∪ 窗口内全部离场者。
+	const departedAll = departedNames(steps);
+	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
+	const shownDeparted = new Map<string, string>();
+	for (const s of steps) {
+		const field = spanOf(s);
+		for (const c of s.changes) if (c.kind === "despawn" && field.has(c.entity)) shownDeparted.set(c.entity, c.name);
+	}
+	const perceivableOf = (s: Step): ((c: Change) => boolean) => {
+		const field = spanOf(s);
+		return (c) => referentsOf(sim, c, departedAll).every((r) => (departedAll.has(r) ? shownDeparted.has(r) : field.has(r)));
+	};
 	const msgs = messagesFor(sim.def);
 	const compact = opts?.compact === true;
 	const lines: string[] = [];
 	const said = new Map<number, { changes: Change[]; facts: Fact[] }>();
 	for (const s of steps) {
 		if (s.kind === "action") {
-			const changes = compact ? [] : narratableChanges(sim.def, s.changes);
+			const changes = compact ? [] : narratableChanges(sim.def, s.changes).filter(perceivableOf(s));
 			const tail = [
-				changes.length ? `（${changes.map((c) => fmtChange(sim, c, departed)).join("；")}）` : "",
+				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
 				s.facts?.length ? `〔${s.facts.map((f) => f.text).join("；")}〕` : "",
 			].join("");
-			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, departed)}：${s.reason}${tail}`);
+			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}：${s.reason}${tail}`);
 		} else if (!s.ok) {
 			// 被硬墙拦截的刻步：bug 信号，独立成行（不与同刻产出混写；其时刻计入静默聚合）
 			lines.push(`⏱ ✗ ${s.reason || msgs.defaultReason}`);
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [] };
-			if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes));
+			if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).filter(perceivableOf(s)));
 			if (s.facts?.length) held.facts.push(...s.facts);
 			if (held.changes.length || held.facts.length) said.set(s.at, held);
 		}
 	}
 	for (const { changes, facts } of said.values()) {
 		lines.push(`⏱ ${[
-			changes.length ? `（${changes.map((c) => fmtChange(sim, c, departed)).join("；")}）` : "",
+			changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
 			facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
 		].join("")}`);
 	}
@@ -498,8 +539,8 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
 
-/** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）。 */
-interface RawResult extends Omit<ActionStep, "kind"> {
+/** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。 */
+interface RawResult extends Omit<ActionStep, "kind" | "field"> {
 	deltas: Delta[];
 }
 
@@ -534,7 +575,8 @@ export class Simulation {
 		return new Set(this.world.entities.map((e) => e.id));
 	}
 
-	private adjudicateRaw(action: Action): RawResult {
+	/** 前态参照域由调用方（apply）逐动作计算传入：同一提案内的多动作不沿用旧快照。 */
+	private adjudicateRaw(action: Action, curVis: Set<string>): RawResult {
 		const msgs = messagesFor(this.def);
 		const verb = this.def.verbs[action.verb];
 		if (!verb) throw new ProtocolViolation("action.unknown", `verb:${action.verb}`);
@@ -542,8 +584,6 @@ export class Simulation {
 		if (!this.validators.get(action.verb)!.Check(action.params)) {
 			throw new ProtocolViolation("action.schema", this.schemaErrors(action.verb, action.params));
 		}
-		// 可见性按当前状态逐动作计算：同一提案内的多动作不沿用旧快照。
-		const curVis = this.visible();
 		const invalid = (verb.entityParams ?? [])
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
@@ -642,8 +682,9 @@ export class Simulation {
 	}
 
 	apply(action: Action): Resolution {
-		const r = this.adjudicateRaw(action);
-		let step: ActionStep;
+		const before = this.visible();
+		const r = this.adjudicateRaw(action, before);
+		let step: Omit<ActionStep, "field">;
 		if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(r.deltas, src);
@@ -656,22 +697,27 @@ export class Simulation {
 		} else {
 			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
+		// 跨度在落钟前闭合：提交边界是感知的离散单位，刻步自带跨度；
+		// 无提交（法则拒绝或硬墙回滚）则边界未跨越——世界仍是前态，after 即 before
+		const field: FieldSpan = { before: [...before], after: [...(step.ok ? this.visible() : before)] };
 		const elapsed = step.ticks > 0 ? this.tick(step.ticks) : [];
-		return { step, elapsed };
+		return { step: { ...step, field }, elapsed };
 	}
 
 	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。
 	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。
-	 *  指称解析是公开状态（在世可见 ∪ 窗口内离场）的函数：可见性拒绝（law action.invisible）的尝试不解析活世界——
-	 *  未入参照域的 id 不得获得名字（否则门构成存在性 oracle）；已离场者名字已经变更行公开，仍由 departed 兜底。 */
+	 *  机械指称解析受步的参照域管辖（事件投影的动作侧形态）：在世实体的名字只在跨度内铸造，
+	 *  可见性拒绝（law action.invisible）的尝试不解析活世界，域外 id 原样回显——模型自己的词不是新信息；
+	 *  已公开离场者由 departed 兜底（其名字已经变更行公开）。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
 		const action = step.action;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
 		const raw = step.denial?.law === "action.invisible";
+		const field = new Set([...step.field.before, ...step.field.after]);
 		const name = (v: PropValue): string => {
 			if (typeof v === "string") {
-				if (!raw) {
+				if (!raw && field.has(v)) {
 					const hit = entity(this.world, v);
 					if (hit) return hit.name;
 				}
@@ -710,10 +756,13 @@ export class Simulation {
 			const res = sys.run(this.query({}));
 			// 纯氛围输出（fact-only，无状态变更）同样成立——氛围系统的合法通道
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
+			// 每系统的提交是独立过墙边界；回滚即未跨越——世界仍是前态，after 即 before
+			const before = this.visible();
 			const cc = this.commitChecked(res.deltas, src);
+			const field: FieldSpan = { before: [...before], after: [...(cc.ok ? this.visible() : before)] };
 			const at = this.world.time;
 			if (!cc.ok) {
-				emit({ kind: "tick", at, ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: cc.denial, src });
+				emit({ kind: "tick", at, ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
 				continue;
 			}
 			emit({
@@ -724,6 +773,7 @@ export class Simulation {
 				changes: cc.changes,
 				facts: res.facts,
 				src,
+				field,
 			});
 		}
 		return out;
