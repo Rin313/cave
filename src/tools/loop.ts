@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage, type TurnWarning } from "../core/engine.ts";
-import { Simulation, departedNames, fmtChange } from "../core/sim.ts";
+import { Simulation, spineLines } from "../core/sim.ts";
 import type { GameDef, TickStep, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
@@ -105,12 +105,7 @@ function printAct(sim: Simulation, o: {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
 	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
 	for (const a of o.outcome.proposals) console.log(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
-	const departed = departedNames([...o.outcome.results, ...o.outcome.elapsed]);
-	for (const r of o.outcome.results) console.log(`  ${r.ok ? "✓" : "✗"} ${sim.describeAction(r, departed)}：${r.reason}`);
-	for (const r of o.outcome.elapsed) {
-		const bits = [r.changes.map((c) => fmtChange(sim, c, departed)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
-		console.log(`  ⏱ ${bits.join("；") || r.reason}`);
-	}
+	for (const line of spineLines(sim, [...o.outcome.results, ...o.outcome.elapsed])) console.log(`  ${line}`);
 	warnWarnings(o.outcome.warnings);
 	const u = usageLine(o.outcome.usage);
 	if (u) console.log(u);

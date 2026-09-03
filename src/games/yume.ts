@@ -245,7 +245,7 @@ const interactVerb = defineVerb({
 
 export const yume: GameDef = {
 	id: "yume",
-	title: "梦日记（梦核极：极少法则，极高自由）",
+	title: "梦日记（极少法则，极高自由）",
 	playerId: "player",
 	memoryLimit: 6,
 	messages: {

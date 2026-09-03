@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
-import { Simulation, departedNames, entity, fmtChange, internalPropsOf, messagesFor, viewCard, type Action, type ActionStep, type Change, type Entity, type GameDef, type PropValue, type Step, type TickStep } from "./sim.ts";
+import { Simulation, entity, messagesFor, spineLines, viewCard, type Action, type ActionStep, type GameDef, type PropValue, type Step, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -179,7 +179,6 @@ export class Engine {
 		});
 		const memoryLimit = def.memoryLimit ?? 0;
 		if (!Number.isInteger(memoryLimit) || memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(def.memoryLimit)}`);
-		if (typeof def.summarize !== "function") throw new Error("GameDef.summarize 必填：叙述通道的确定性兜底须由游戏注入世界腔");
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const memory = loadMemory(sessionManager.getEntries(), memoryLimit);
 		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
@@ -261,20 +260,13 @@ export class Engine {
 		};
 	}
 
-	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。 */
+	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。
+	 *  近况 = 回合骨架的 compact 投影（裁决行保留 verdict/理由/事实；变更由状态视图承载）。 */
 	private recordTurn(intent: string, elapsed: TickStep[]): void {
-		const o = this.outcome;
-		const passed = messagesFor(this.def).timePassed;
-		const elapsedMoves = elapsed.map((r) => `⏱ ${(r.facts ?? []).map((f) => f.text).join("；") || passed}`);
-		const granted = o.results.reduce((n, r) => n + r.ticks, 0);
-		const departed = departedNames([...o.results, ...o.elapsed]);
-		const moves = [...o.results.map((r) => `${r.ok ? "✓" : "✗"} ${this.sim.describeAction(r, departed)}：${r.reason}`), ...elapsedMoves];
-		// 静默流逝（零产出刻）也入近况：授予的刻数必须可说
-		if (granted > 0 && elapsed.length === 0) moves.push(`⏱ ${passed}（${granted} 刻）`);
 		const turn: MemoryTurn = {
 			time: this.sim.world.time,
 			intent,
-			moves,
+			moves: spineLines(this.sim, [...this.outcome.results, ...this.outcome.elapsed], { compact: true }),
 		};
 		this.memory.push(turn);
 		const limit = this.def.memoryLimit ?? 0;
@@ -305,8 +297,11 @@ export class Engine {
 		return text;
 	}
 
+	/** 回退摘要：游戏覆写优先（自有声音），缺省 = 回合骨架投影（空步回落 noResponse）。 */
 	private summarize(steps: Step[]): string {
-		return this.def.summarize({ world: this.sim.world, player: this.sim.player, steps });
+		if (this.def.summarize) return this.def.summarize({ world: this.sim.world, player: this.sim.player, steps });
+		const lines = spineLines(this.sim, steps);
+		return lines.length ? lines.join("\n") : messagesFor(this.def).noResponse;
 	}
 
 	dispose(): void {
@@ -350,55 +345,18 @@ ${verbs}
 - 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则；被拒绝的尝试只写尝试本身，不写其后果。`;
 }
 
-/** 表达可见变更：internal 属性不进表达输入（公理一逃生舱）。只有 prop 变更携带 prop，rel/生灭恒可见。 */
-function narratableChanges(def: GameDef, changes: Change[]): Change[] {
-	const internal = internalPropsOf(def);
-	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
-}
-
-/** 回合事件的世界腔策展（act 工具结果与呈现服务共用）：
- *  尝试行、时间流逝、新见。core 只做符号连接。
- *  时间流逝（动作授予刻数的 systems 产出）不是玩家的尝试，是世界自己的因果；
- *  段头用游戏的时间语（messages.timePassed），fact-only 氛围事实与不变式拦截同样进段。
+/** 回合事件的世界腔策展（act 工具结果与呈现服务共用）：骨架行 + 协议锚。
+ *  骨架行由 spineLines 承担（符号结构 ✓/✗/⏱ + 世界腔原子，internal 恒滤）。
  *  新见段是状态视图装配线的回合内增量：本回合新进入参照域的实体（规则/系统生灭、移动揭晓）
  *  以状态视图同形的实体卡承载——纹理与 id 在裁决当回合即可说、可指名，不欠下一回合的 digest。 */
 function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
-	const lines: string[] = [];
-	// 渲染窗口内的 despawn 实体以其变更记录兜底解析：先引用后生灭是合法书写，裸 id 不得进世界腔
-	const departed = departedNames([...results, ...elapsed]);
-	const elapsedEvents = elapsed.filter((r) => !r.ok || narratableChanges(sim.def, r.changes).length || r.facts?.length);
-	const granted = results.reduce((n, r) => n + r.ticks, 0);
-	if (refused) {
-		lines.push(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
-	}
-	if (results.length) {
-		lines.push("本回合尝试：");
-		for (const r of results) {
-			const visible = narratableChanges(sim.def, r.changes);
-			const changes = visible.length ? `  ${visible.map((c) => fmtChange(sim, c, departed)).join("；")}` : "";
-			const verdict = r.ok ? r.reason : `${r.reason}（被拒绝）`;
-			const facts = r.facts?.length ? `  法则事实：${r.facts.map((f) => f.text).join("；")}` : "";
-			lines.push(`- 尝试「${sim.describeAction(r, departed)}」→ ${verdict}${changes}${facts}`);
-		}
-	} else if (!refused && !elapsedEvents.length && granted === 0) {
-		lines.push("没有任何改变。");
-	}
-	if (elapsedEvents.length) {
-		lines.push(`${messagesFor(sim.def).timePassed}：`);
-		for (const r of elapsedEvents) {
-			const bits = [narratableChanges(sim.def, r.changes).map((c) => fmtChange(sim, c, departed)).join("；"), ...(r.facts ?? []).map((f) => f.text)].filter(Boolean);
-			const body = bits.length ? bits.join("。") : (r.reason || messagesFor(sim.def).defaultReason);
-			lines.push(`- ${r.ok ? body : `${body}（被拒绝）`}`);
-		}
-	} else if (granted > 0) {
-		// 静默流逝（零产出刻）也是裁决授予的时间后果，必须可说（时间律：授予的刻数必须可说）
-		lines.push(`${messagesFor(sim.def).timePassed}（${granted} 刻）：没有任何改变。`);
-	}
-	const revealedVisible = revealed.map((id) => entity(sim.world, id)).filter((e): e is Entity => e !== undefined);
-	if (revealedVisible.length) {
+	const lines = spineLines(sim, [...results, ...elapsed]);
+	if (refused) lines.unshift(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
+	if (revealed.length) {
 		lines.push("本回合新见：");
-		for (const e of revealedVisible) {
-			lines.push(`  ${JSON.stringify(viewCard(sim.def, e))}`);
+		for (const id of revealed) {
+			const e = entity(sim.world, id);
+			if (e) lines.push(`  ${JSON.stringify(viewCard(sim.def, e))}`);
 		}
 	}
 	return lines;

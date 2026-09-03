@@ -27,7 +27,7 @@ export interface World {
 
 /** 结构化变更原语：规则产出 deltas，模拟层裁定提交（快照线以下的数据协议）。
  *  提交产出按基底类别同构分形的 Change（kind: prop/rename/rel/spawn/despawn）
- *  spawn/despawn：实体生灭（梦核/authored 世界的动态拓扑原语；relSet 建边/删边（值 null），配合生灭原语让拓扑生长与收缩对称）。
+ *  spawn/despawn：实体生灭（authored 世界的动态拓扑原语；relSet 建边/删边（值 null），配合生灭原语让拓扑生长与收缩对称）。
  *  despawn 只级联清理核心结构（关系边）；id 型属性引用不清扫——悬空引用由完整性硬墙回滚。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
@@ -226,10 +226,10 @@ export interface GameDef {
 	systems?: SystemRule[];
 	/** 属性注册表：属性类型/世界化标签/内部标记/值域。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
 	props?: Record<string, PropDef>;
-	/** 确定性回退摘要：叙述通道的世界腔兜底——散文为空/未裁决时玩家所见（回退摘要属世界语言，由游戏注入）。
-	 *  steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
+	/** 回退摘要的声音覆写（可选）：缺省由引擎装配回合骨架投影（spineLines 单行连接，空步回落 noResponse）。
+	 *  覆写用于文学化兜底：steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
 	 *  （internal 隔离是模型面纪律，不约束世界侧文案），玩家文案的忠实自负。 */
-	summarize: (input: { world: World; player: string; steps: Step[] }) => string;
+	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
 	/** 近况窗口的回合数（映射层的指代视野）。缺省 0。*/
 	memoryLimit?: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */
@@ -425,6 +425,54 @@ export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<str
 	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
 	return `${name}.${label}: ${fmtValue(sim, c.prev, departed)} → ${fmtValue(sim, c.next, departed)}`;
+}
+
+/** internal 属性变更过滤（internal 隔离的机械缺省）：internal 不进表达输入的变更线性化。 */
+export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
+	const internal = internalPropsOf(def);
+	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
+}
+
+/** 回合骨架：事件流的规范单行渲染（线级可说单元的唯一机械）。
+ *  符号承担结构（✓/✗/⏱/×n），语言词全部来自 messages/label/规则文案。
+ *  刻步按时刻归并：刻是世界的因果步，同刻多系统的产出共享一条 ⏱ 行。
+ *  compact 省略变更行（近况投影：变更由状态视图承载，裁决行保留 verdict/理由/事实）；
+ *  internal 属性变更恒滤（模型面纪律的机械保证，覆写者仍可从 steps 原样读取）。
+ *  无可说内容的刻（零产出/纯内部变更/被硬墙拦截）并入尾部的静默流逝聚合 ×n（时间律：授予的刻数必须可说）。
+ *  消费者：act 结果视图（模型）、近况（compact）、控制台、缺省回退摘要（玩家）。 */
+export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean }): string[] {
+	const departed = departedNames(steps);
+	const msgs = messagesFor(sim.def);
+	const compact = opts?.compact === true;
+	const lines: string[] = [];
+	const said = new Map<number, { changes: Change[]; facts: Fact[] }>();
+	for (const s of steps) {
+		if (s.kind === "action") {
+			const changes = compact ? [] : narratableChanges(sim.def, s.changes);
+			const tail = [
+				changes.length ? `（${changes.map((c) => fmtChange(sim, c, departed)).join("；")}）` : "",
+				s.facts?.length ? `〔${s.facts.map((f) => f.text).join("；")}〕` : "",
+			].join("");
+			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, departed)}：${s.reason}${tail}`);
+		} else if (!s.ok) {
+			// 被硬墙拦截的刻步：bug 信号，独立成行（不与同刻产出混写；其时刻计入静默聚合）
+			lines.push(`⏱ ✗ ${s.reason || msgs.defaultReason}`);
+		} else {
+			const held = said.get(s.at) ?? { changes: [], facts: [] };
+			if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes));
+			if (s.facts?.length) held.facts.push(...s.facts);
+			if (held.changes.length || held.facts.length) said.set(s.at, held);
+		}
+	}
+	for (const { changes, facts } of said.values()) {
+		lines.push(`⏱ ${[
+			changes.length ? `（${changes.map((c) => fmtChange(sim, c, departed)).join("；")}）` : "",
+			facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
+		].join("")}`);
+	}
+	const granted = steps.reduce((n, s) => n + (s.kind === "action" ? s.ticks : 0), 0);
+	if (granted > said.size) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size}`);
+	return lines;
 }
 
 /** 属性读取 */

@@ -1,4 +1,4 @@
-import type { Change, Entity, GameDef, PropDef, Q, Step, SystemRule, World } from "../core/sim.ts";
+import type { Entity, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { sumProp } from "../core/util.ts";
 import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
@@ -48,10 +48,6 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	aggressive: { type: "boolean", label: "攻击性" },
 };
 
-const PROP_LABELS: Record<string, string> = Object.fromEntries(
-	Object.entries(VILLAGE_PROPS).filter(([, p]) => p.label).map(([k, p]) => [k, p.label!]),
-);
-
 function name(w: World, id: string): string {
 	return entity(w, id)?.name ?? id;
 }
@@ -74,34 +70,6 @@ const tagsOf = (e: Entity | undefined): string[] => {
 	const t = e?.props.tags;
 	return Array.isArray(t) ? (t as string[]) : [];
 };
-
-function summarizeChange(world: World, c: Change): string {
-	if (c.kind === "spawn") return `出现了：${c.name}。`;
-	if (c.kind === "despawn") return `消失了：${c.name}。`;
-	if (c.kind === "rename") return `改名：${c.prev} → ${c.next}。`;
-	if (c.kind === "rel") return `${name(world, c.from)}对${name(world, c.to)}的${c.type}：${String(c.prev)} → ${String(c.next)}。`;
-	const label = PROP_LABELS[c.prop] ?? c.prop;
-	return `变更：${name(world, c.entity)}的${label} ${String(c.prev)} → ${String(c.next)}。`;
-}
-
-function summarizeVillage(input: { world: World; player: string; steps: Step[] }): string {
-	const { world, player, steps } = input;
-	const me = entity(world, player);
-	const bits: string[] = [];
-	if (me) {
-		bits.push(`体力 ${me.props.hp ?? 0}，疲劳 ${me.props.fatigue ?? 0}，饱腹 ${me.props.satiety ?? 0}，铜币 ${me.props.coins ?? 0}，浆果 ${me.props.berries ?? 0}`);
-		if (Number(me.props.grain ?? 0) > 0) bits.push(`谷物 ${me.props.grain}`);
-		if (Number(me.props.water ?? 0) > 0) bits.push(`清水 ${me.props.water}`);
-		if (me.props.down === true) bits.push("你昏迷着。");
-	}
-	const lines = ["你站在河畔村。"].concat(bits, steps.flatMap((s) => s.changes).map((c) => summarizeChange(world, c)));
-	// 被拒尝试的理由与法则事实同样是世界的回应：回退摘要忠实于整个回合
-	for (const s of steps) {
-		if (s.kind === "action" && !s.ok) lines.push(s.reason);
-		if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
-	}
-	return lines.join("\n");
-}
 
 export const village: GameDef = {
 	id: "village",
@@ -487,5 +455,4 @@ export const village: GameDef = {
 		},
 	],
 	grounding: (world, player) => [...inTreeVisible(world, player)],
-	summarize: summarizeVillage,
 };
