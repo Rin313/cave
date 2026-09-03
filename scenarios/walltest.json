@@ -1,15 +1,15 @@
 {
 	"game": "walltest",
-	"name": "可说性墙（残差拦截）",
+	"name": "结构墙（冻结读态）",
 	"scenarios": [
 		{
-			"name": "经 Q 活引用直改账本的裁决被整体作废并回滚；干净裁决不受影响",
+			"name": "越权写在写入点即抛，活世界零污染；干净裁决与干净读不受影响",
 			"steps": [
-				{ "name": "干净动作：墙不误伤", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "reason": "触到", "state": { "player.touched": 1, "player.hp": 10 } } },
-				{ "name": "授予路径残差：规则活改 hp 后授予——授予整体作废（deltas 不生效），活改回滚", "action": { "verb": "poke", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.touched": 1, "player.hp": 10 } } },
-				{ "name": "拒绝路径残差：规则活改 hp 后拒绝——拒绝被掩为 bug 信号，活改回滚", "action": { "verb": "hex", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.hp": 10 } } },
-				{ "name": "系统残差：活改 hp 后空产出（deltas 为空而世界已变）——刻步被墙拦截，世界回滚", "tick": 1, "expect": { "tickDenied": true, "state": { "player.hp": 10, "player.touched": 1 } } },
-				{ "name": "墙开火后世界仍健康：干净动作照常，数值无漂移", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.hp": 10 } } }
+				{ "name": "干净动作：冻结不误伤", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "reason": "触到", "state": { "player.touched": 1, "player.hp": 10 } } },
+				{ "name": "规则越权写属性：冻结读态上写入即抛（严格模式 TypeError），授予不存在", "action": { "verb": "poke", "params": {} }, "expect": { "throws": "read only" } },
+				{ "name": "规则越权写钟：q.world.time 同被冻结拦下——钟的唯一写者是落钟循环，按构造成立", "action": { "verb": "clockpoke", "params": {} }, "expect": { "throws": "read only" } },
+				{ "name": "越权未遂后世界仍健康：时间未走、数值无漂移，干净动作照常", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.hp": 10 } } },
+				{ "name": "系统越权写属性：刻步在系统写入点即抛", "tick": 1, "expect": { "throws": "read only" } }
 			]
 		}
 	]

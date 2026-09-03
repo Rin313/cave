@@ -244,7 +244,7 @@ export class Engine {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
 			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
 			this.run.warnings.push({ round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
-			narration = this.summarize([]);
+			narration = this.sim.summarize([]);
 		} else {
 			// 摘要兜底原料 = 本回合全部事件（玩家动作 + 时间流逝）
 			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed]);
@@ -292,16 +292,9 @@ export class Engine {
 		const text = this.run.settled + this.run.current;
 		if (text.trim() === "") {
 			this.run.warnings.push({ round: 1, error: "散文为空。", attempt: text });
-			return this.summarize(steps);
+			return this.sim.summarize(steps);
 		}
 		return text;
-	}
-
-	/** 回退摘要：游戏覆写优先（自有声音），缺省 = 回合骨架投影（空步回落 noResponse）。 */
-	private summarize(steps: Step[]): string {
-		if (this.def.summarize) return this.def.summarize({ world: this.sim.world, player: this.sim.player, steps });
-		const lines = spineLines(this.sim, steps);
-		return lines.length ? lines.join("\n") : messagesFor(this.def).noResponse;
 	}
 
 	dispose(): void {

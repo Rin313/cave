@@ -1,17 +1,22 @@
 import type { GameDef, PropDef, Q } from "../core/sim.ts";
-import { D, defineVerb, deny, grant } from "../core/sim.ts";
+import { D, defineVerb, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
-/** 可说性墙测试夹具（tools 层自有，不进 games 注册表；scenarios/walltest.json 引用）：
- *  规则/系统经 Q 活引用直改账本（蓄意 bug），墙必须在裁决出口拦截——裁决整体作废、世界回滚到 S0；
- *  干净动词与干净刻步证明墙无误伤。 */
+/** 结构墙夹具（tools 层自有，不进 games 注册表；scenarios/walltest.json 引用）：
+ *  裁决侧代码（规则/系统）收到的 Q.world 是裁决时读态的深冻结副本——越权写在写入点即抛
+ *  TypeError（严格模式），活世界无从触及（规则从未持有可变引用，异步路径同样无门）；
+ *  越权写钟（q.world.time）同样被拦——「钟的唯一写者是落钟循环」按构造成立。
+ *  良序游戏（village/yume）永不过墙边界，探测不到回归——本夹具是唯一断言墙契约的仪器。
+ *  干净对照步的职责不止「无误伤」：若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），
+ *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」。
+ *  异步路径不可测也无需测：无句柄可断言，由构造保证。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
 	touched: { type: "number", label: "触及" },
 };
 
-/** 蓄意 bug：经 Q 活引用直改账本（墙的靶子）。 */
+/** 蓄意越权：经 Q 读态直改属性（冻结视图上写入即抛）。 */
 function leakHp(q: Q): void {
 	const me = q.entity(q.player);
 	if (me) me.props.hp = (typeof me.props.hp === "number" ? me.props.hp : 0) - 1;
@@ -19,7 +24,7 @@ function leakHp(q: Q): void {
 
 export const walltest: GameDef = {
 	id: "walltest",
-	title: "可说性墙夹具",
+	title: "结构墙夹具",
 	playerId: "player",
 	messages: {
 		noResponse: "世界没有回应。",
@@ -30,13 +35,13 @@ export const walltest: GameDef = {
 	verbs: {
 		touch: defineVerb({
 			label: "触及",
-			description: "干净动作：touched +1（对照：墙不得误伤）。",
+			description: "干净动作：touched +1（对照：冻结不得误伤）。",
 			schema: Type.Object({}),
 			rules: [{ id: "touch.ok", judge: (q) => grant([D.inc(q.player, "touched", 1)], "你触到了世界。") }],
 		}),
 		poke: defineVerb({
 			label: "戳",
-			description: "残差动词：规则活改 hp 后授予（授予整体作废）。",
+			description: "越权动词：规则直改 hp 后授予（冻结读态上写入即抛，授予不存在）。",
 			schema: Type.Object({}),
 			rules: [{
 				id: "poke.leak",
@@ -46,15 +51,15 @@ export const walltest: GameDef = {
 				},
 			}],
 		}),
-		hex: defineVerb({
-			label: "诅咒",
-			description: "残差动词：规则活改 hp 后拒绝（拒绝被掩为 bug 信号，活改回滚）。",
+		clockpoke: defineVerb({
+			label: "拨钟",
+			description: "越权动词：规则直改 q.world.time（冻结读态上写入即抛——钟的唯一写者是落钟循环）。",
 			schema: Type.Object({}),
 			rules: [{
-				id: "hex.leak",
+				id: "clockpoke.leak",
 				judge: (q) => {
-					leakHp(q);
-					return deny("hex.miss", { reason: "诅咒落空了。" });
+					q.world.time += 1;
+					return grant([], "钟被拨了。");
 				},
 			}],
 		}),
@@ -65,7 +70,7 @@ export const walltest: GameDef = {
 	},
 	systems: [
 		{
-			// 残差系统：活改 hp 后空产出——deltas 为空而世界已变，同为残差
+			// 蓄意越权：系统直改 hp 后空产出——冻结读态上写入即抛，产出不存在
 			id: "leak.tick",
 			run: (q) => {
 				leakHp(q);

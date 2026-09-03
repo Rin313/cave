@@ -18,8 +18,10 @@ interface StepExpect {
 	state?: Record<string, unknown>;
 	/** 内核契约断言（结构性墙）：期望本步骤触发前置条件违约（未知动词/schema 不符）*/
 	protocol?: "action.unknown" | "action.schema";
-	/** 期望本步骤的刻步被硬墙拦截（残差/不变式——系统产出的必要拦截），拦截即通过 */
+	/** 期望本步骤的刻步被硬墙拦截（不变式——系统产出的必要拦截），拦截即通过 */
 	tickDenied?: boolean;
+	/** 期望本步骤在裁决中抛错（结构墙拦截：越权写在冻结读态上即抛）；值为错误信息子串 */
+	throws?: string;
 }
 
 interface ScenarioStep {
@@ -80,24 +82,37 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	for (const [i, step] of scenario.steps.entries()) {
 		let ok: boolean;
 		let reason: string;
+		let threw: string | null = null; // 本步骤在裁决中抛出的错误信息（结构墙拦截路径）
 		const problems: string[] = [];
 		if (step.tick != null) {
-			const res = sim.apply(devWait(step.tick));
-			const results = res.elapsed;
-			if (results.length === 0) {
-				ok = false;
-				reason = "时间流逝，什么也没有发生。";
-			} else {
-				const denied = results.filter((t) => !t.ok);
-				if (step.expect.tickDenied) {
-					// 期望刻步被硬墙拦截（残差/不变式）：拦截即通过
-					ok = denied.length > 0;
-					reason = denied.map((t) => t.denial?.debug ?? t.reason).join(" ") || "（无拦截）";
-					if (!ok) problems.push("期望刻步被硬墙拦截，未发生");
+			try {
+				const res = sim.apply(devWait(step.tick));
+				const results = res.elapsed;
+				if (results.length === 0) {
+					ok = false;
+					reason = "时间流逝，什么也没有发生。";
 				} else {
-					ok = true;
-					reason = results.map((r) => r.reason).join(" ");
-					for (const t of denied) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+					const denied = results.filter((t) => !t.ok);
+					if (step.expect.tickDenied) {
+						// 期望刻步被硬墙拦截（不变式）：拦截即通过
+						ok = denied.length > 0;
+						reason = denied.map((t) => t.denial?.debug ?? t.reason).join(" ") || "（无拦截）";
+						if (!ok) problems.push("期望刻步被硬墙拦截，未发生");
+					} else {
+						ok = true;
+						reason = results.map((r) => r.reason).join(" ");
+						for (const t of denied) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+					}
+				}
+			} catch (e) {
+				ok = false;
+				reason = e instanceof Error ? e.message : String(e);
+				threw = reason;
+				if (step.expect.throws !== undefined) {
+					ok = reason.includes(step.expect.throws);
+					if (!ok) problems.push(`抛出内容不符: 期望包含「${step.expect.throws}」，实际「${reason}」`);
+				} else {
+					problems.push(`刻步异常中断: ${reason}`);
 				}
 			}
 		} else if (step.action) {
@@ -108,10 +123,14 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				for (const t of res.elapsed) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
 			} catch (e) {
 				// 前置条件违约在裁决之外：场景文件的动词/参数笔误，不得洗白为「世界拒绝」类的合法失败；
-				// 显式声明 expect.protocol 的步骤例外——作者在此断言内核契约（结构性墙）
+				// 显式声明 expect.protocol / expect.throws 的步骤例外——作者在此断言内核契约（结构性墙）
 				ok = false;
 				reason = e instanceof Error ? e.message : String(e);
-				if (step.expect.protocol && e instanceof ProtocolViolation) {
+				threw = reason;
+				if (step.expect.throws !== undefined) {
+					ok = reason.includes(step.expect.throws);
+					if (!ok) problems.push(`抛出内容不符: 期望包含「${step.expect.throws}」，实际「${reason}」`);
+				} else if (step.expect.protocol && e instanceof ProtocolViolation) {
 					ok = e.law === step.expect.protocol;
 					reason = e.debug;
 					if (!ok) problems.push(`协议违约类不符: expected ${step.expect.protocol} got ${e.law}`);
@@ -137,8 +156,8 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
-			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
-			actual: `ok=${ok} reason="${reason}"`,
+			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.throws ? ` throws≈${step.expect.throws}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
+			actual: threw !== null ? `throws（${ok ? "命中" : "未命中"}）: "${threw}"` : `ok=${ok} reason="${reason}"`,
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
 	}

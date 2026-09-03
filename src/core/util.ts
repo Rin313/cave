@@ -1,5 +1,14 @@
 import type { GameDef, World } from "./sim.ts";
 
+/** 深冻结：裁决侧代码（规则/系统/投影钩子）收到的一切世界读态。*/
+export function deepFreeze<T>(value: T): T {
+	if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+		Object.freeze(value);
+		for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v as T);
+	}
+	return value;
+}
+
 /** 确定性字符串哈希：任意字符串 → [0,1) 均匀分布值。纯函数、无状态。
  *  games 层用它从世界状态派生自有随机语义 */
 export function hashStr(s: string): number {

@@ -1,6 +1,6 @@
 import { Compile } from "typebox/compile";
 import { Type, type Static, type TObject } from "typebox";
-import { roll as rollDice } from "./util.ts";
+import { deepFreeze, roll as rollDice } from "./util.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
 
@@ -112,8 +112,8 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** 规则判定上下文：只读世界视图 + 引擎自有语义的唯一入口（关系/骰子/时间/可见性）。
- *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
+/** 规则判定上下文：冻结读态 + 引擎自有语义的唯一入口（关系/骰子/时间/可见性）。
+ *  只读由结构保证：world 是裁决时读态的深冻结副本；一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
 export interface Q {
 	readonly world: World;
 	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值——体验者推导的根与兜底。
@@ -538,21 +538,6 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
 
-/** 账本内容的结构同值（可说性墙的残差判据）：对象按键集、数组按序、原值按 ===。
- *  不可账本化的值（NaN、函数、undefined 键）与任何快照读数不同值。 */
-function sameContent(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return false;
-	if (Array.isArray(a) || Array.isArray(b)) {
-		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-		return a.every((v, i) => sameContent(v, b[i]));
-	}
-	const ka = Object.keys(a as Record<string, unknown>);
-	const kb = Object.keys(b as Record<string, unknown>);
-	if (ka.length !== kb.length) return false;
-	return ka.every((k) => k in (b as Record<string, unknown>) && sameContent((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
-}
-
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。 */
 interface RawResult extends Omit<ActionStep, "kind" | "field"> {
 	deltas: Delta[];
@@ -561,7 +546,7 @@ interface RawResult extends Omit<ActionStep, "kind" | "field"> {
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
+	/** 不变式种子：实际起点读态的深冻结副本（冻结保护种子不被墙侧代码改写），首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
 	/** 动词参数严格校验器（additionalProperties:false） */
 	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
@@ -585,12 +570,23 @@ export class Simulation {
 	}
 
 	visible(): Set<string> {
-		if (this.def.grounding) return new Set(this.def.grounding(this.world, this.player));
-		return new Set(this.world.entities.map((e) => e.id));
+		return this.visibleIn(this.readState());
 	}
 
-	/** 前态参照域由调用方（apply）逐动作计算传入：同一提案内的多动作不沿用旧快照。 */
-	private adjudicateRaw(action: Action, curVis: Set<string>): RawResult {
+	/** 参照域计算：grounding 收冻结读态（投影是状态的函数——纯度按构造成立）。 */
+	private visibleIn(world: World): Set<string> {
+		if (this.def.grounding) return new Set(this.def.grounding(world, this.player));
+		return new Set(world.entities.map((e) => e.id));
+	}
+
+	/** 裁决时读态：快照 + 深冻结。裁决侧代码（Q.world / grounding / digestExtra / summarize）一律收此读态——
+	 *  活世界不出 core，任何时机（含异步）无从触账本；它同时是提交的回滚基线 S0。 */
+	private readState(): World {
+		return deepFreeze(this.snapshot());
+	}
+
+	/** 前态参照域与冻结读态由调用方（apply）逐动作计算传入：同一提案内的多动作不沿用旧读态。 */
+	private adjudicateRaw(action: Action, curVis: Set<string>, world: World): RawResult {
 		const msgs = messagesFor(this.def);
 		const verb = this.def.verbs[action.verb];
 		if (!verb) throw new ProtocolViolation("action.unknown", `verb:${action.verb}`);
@@ -607,7 +603,7 @@ export class Simulation {
 			const reason = msgs.invisibleEntity ?? msgs.noResponse;
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
 		}
-		const q = this.query(action.params);
+		const q = this.query(world, action.params);
 		for (const r of verb.rules) {
 			const v = r.judge(q);
 			if (!v) continue;
@@ -623,8 +619,7 @@ export class Simulation {
 		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
-	private query(params: Record<string, PropValue>): Q {
-		const world = this.world;
+	private query(world: World, params: Record<string, PropValue>): Q {
 		const player = this.player;
 		return {
 			world,
@@ -641,13 +636,13 @@ export class Simulation {
 				return Number.isFinite(n) ? n : dflt;
 			},
 			roll: (key, sides) => rollDice(world, key, sides),
-			visible: () => this.visible(),
+			visible: () => this.visibleIn(world),
 		};
 	}
 
-	/** 实际起点世界：首个提交前的冻结快照（一切变异都经 commitChecked，此刻必为未变异状态）。 */
+	/** 实际起点读态：首个提交前的深冻结快照（一切变异都经 commitChecked，此刻必为未变异状态）。 */
 	private genesis(): World {
-		return (this.genesisCache ??= this.snapshot());
+		return (this.genesisCache ??= this.readState());
 	}
 
 	/** 静态形态违约的机器诊断 */
@@ -662,9 +657,8 @@ export class Simulation {
 		Object.assign(this.world, s0);
 	}
 
-	/** 提交 + 硬墙：以裁决入口快照 s0 为回滚基线（提交成功就地生效，任一翼违反即恢复 s0 并拒绝）。
+	/** 提交 + 硬墙：以裁决时读态 s0 为回滚基线（提交成功就地生效，任一翼违反即恢复 s0 并拒绝）。
 	 *  提交内做执行校验（fidelity——每条 delta 在其应用时刻必须可执行），提交后做不变式校验；
-	 *  残差翼（world ≡ S0）已在 apply/runSystems 的裁决出口审毕。
 	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 直接作玩家文案。 */
 	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
@@ -696,17 +690,13 @@ export class Simulation {
 	}
 
 	apply(action: Action): Resolution {
-		const before = this.visible();
-		// 可说性墙：裁决入口快照 S0。裁决出口断言 world ≡ S0；
-		// 提交以 S0 为回滚基线，出口世界恒为 S0 ⊕ 已提交 deltas。
-		const s0 = this.snapshot();
-		const r = this.adjudicateRaw(action, before);
+		// 结构墙：S0 = 裁决时读态（深冻结）；
+		// 出口世界 ≡ S0 ⊕ 已提交 deltas 按构造成立。
+		const s0 = this.readState();
+		const before = this.visibleIn(s0);
+		const r = this.adjudicateRaw(action, before, s0);
 		let step: Omit<ActionStep, "field">;
-		if (!sameContent(this.world, s0)) {
-			this.restore(s0);
-			const who = r.ok ? (r.src ?? `action:${action.verb}`) : (r.denial?.law ?? action.verb);
-			step = { kind: "action", ok: false, reason: messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: { law: "invariant.residual", debug: `residual: ${who} 在裁决中经活引用直改账本，本次裁决整体作废` }, ticks: attemptCost(this.def.verbs[action.verb]) };
-		} else if (r.ok) {
+		if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;
 			const cc = this.commitChecked(s0, r.deltas, src);
 			if (!cc.ok) {
@@ -774,17 +764,11 @@ export class Simulation {
 		};
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
-			const s0 = this.snapshot();
-			const res = sys.run(this.query({}));
-			if (!sameContent(this.world, s0)) {
-				this.restore(s0);
-				const before = [...this.visible()]; // 已回滚：读数即系统运行前的参照域
-				emit({ kind: "tick", at: this.world.time, ok: false, reason: messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: { law: "invariant.residual", debug: `residual: system ${sys.id} 在运行中经活引用直改账本，本次产出整体作废` }, src, field: { before, after: [...before] } });
-				continue;
-			}
+			const s0 = this.readState();
+			const res = sys.run(this.query(s0, {}));
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			// 每系统的提交是独立过墙边界；回滚即未跨越——世界仍是前态，after 即 before
-			const before = this.visible();
+			const before = this.visibleIn(s0);
 			const cc = this.commitChecked(s0, res.deltas, src);
 			const field: FieldSpan = { before: [...before], after: [...(cc.ok ? this.visible() : before)] };
 			const at = this.world.time;
@@ -814,13 +798,21 @@ export class Simulation {
 	 *  × 关系端点可见过滤；def.digestExtra 派生纹理入独立 extra 键
 	 *  参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名，可指名的必看得见。 */
 	digest(): string {
-		const vis = this.visible();
-		const entities = this.world.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
-		const relations = (this.world.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
-		const view: Record<string, unknown> = { time: this.world.time, relations, entities };
-		const extra = this.def.digestExtra?.(this.world, this.player) ?? {};
+		const w = this.readState();
+		const vis = this.visibleIn(w);
+		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
+		const relations = (w.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to));
+		const view: Record<string, unknown> = { time: w.time, relations, entities };
+		const extra = this.def.digestExtra?.(w, this.player) ?? {};
 		if (Object.keys(extra).length) view.extra = extra;
 		return JSON.stringify(view);
+	}
+
+	/** 回退摘要，缺省 = 回合骨架投影（空步回落 noResponse）。 */
+	summarize(steps: Step[]): string {
+		if (this.def.summarize) return this.def.summarize({ world: this.readState(), player: this.player, steps: deepFreeze(steps) });
+		const lines = spineLines(this, steps);
+		return lines.length ? lines.join("\n") : messagesFor(this.def).noResponse;
 	}
 
 	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行
