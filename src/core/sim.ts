@@ -280,6 +280,7 @@ export function integrityInvariant(): Invariant {
 		check: (world, ctx) => {
 			const ids = new Set(world.entities.map((e) => e.id));
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
+			if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
 			// playerId 是 def 指向世界的唯一数据引用（体验者推导与感知钩子的解引用原点），每次裁决都被解引用，
 			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
@@ -734,7 +735,7 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
-	/** 落钟执行器（apply 的内部机构）：推进一刻并运行 systems。 */
+	/** 落钟执行器 */
 	private tick(n = 1): TickStep[] {
 		const out: TickStep[] = [];
 		for (let i = 0; i < n; i++) {
