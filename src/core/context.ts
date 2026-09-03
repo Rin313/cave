@@ -1,4 +1,4 @@
-// 上下文裁剪策略（core 单一来源）：LLM 每次调用只见「近况记录 + 当前运行后缀」，会话文件仍保存全量审计。
+// 上下文裁剪策略：LLM 每次调用只见「近况记录 + 当前运行后缀」，会话文件仍保存全量审计。
 // 近况经 custom 条目持久化在会话文件内（custom 不参与 LLM 上下文），进程重启后由此重建窗口。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 
@@ -35,7 +35,7 @@ export function loadMemory(entries: readonly EntryLike[], limit: number): Memory
 	return limit > 0 ? out.slice(-limit) : [];
 }
 
-/** 近况渲染：符号连接 + 游戏自产的世界腔理由，core 不新增自然语句。 */
+/** 近况渲染：符号连接 + 游戏自产的世界腔理由 */
 export function renderMemory(memory: readonly MemoryTurn[]): string {
 	if (!memory.length) return "";
 	const lines = memory.map((m) => {
@@ -46,7 +46,7 @@ export function renderMemory(memory: readonly MemoryTurn[]): string {
 }
 
 /** 裁剪：只保留最后一条 user 消息起的当前运行后缀（toolCall/toolResult 配对完整），近况并入该消息头部。
- *  引擎 prompt 均为字符串内容；块内容消息回落纯后缀保留。每次调用独立生效，不改会话持久化。 */
+ *  块内容消息回落纯后缀保留。每次调用独立生效，不改会话持久化。 */
 export function pruneContext(messages: CtxMessages, memory: readonly MemoryTurn[]): CtxMessages {
 	let last = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {
