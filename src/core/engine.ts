@@ -232,7 +232,7 @@ export class Engine {
 		r.usage = [];
 	}
 
-	/** 回合编排：同一次会话运行内 act（一次性提交，门闩封闭变异窗口）→ 工具结果承载世界回应 → 散文。 */
+	/** 回合编排：act 一次性提交（门闩封闭变异窗口）→ 工具结果承载世界回应 → 散文；三段现置于同一次 session.prompt 是部署形态，协议钉通道纪律、不钉调用拓扑。 */
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
 		this.outcome = { results: [], elapsed: [] };
 		this.beginRun("mapping", action.intent);

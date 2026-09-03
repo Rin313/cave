@@ -215,3 +215,14 @@ const game: GameDef = {
 | Mount & Blade | 开放世界沙盒：玩家在世界中自由定位自己，经济/战争/声望由系统模拟，无主线 | 战斗与治理是预设操作层，系统耦合浅 |
 | Kenshi | 系统驱动世界状态：派系战争、城市兴衰、经济由模拟产生，玩家行动有真实后果且无角色预设 | 角色成长是"做事累积数值"的浅系统，无深交互 |
 | Cataclysm: Dark Days Ahead | 极端深度的物品交互：一切皆可拆解/改造/组合（车辆系统），时间流逝是持续压力，纯文本的交互复杂度巅峰 | — |
+
+## Revelation
+> The limits of my language mean the limits of my world.
+> In the beginning were the words and the words made the world. I am the words. The words are everything. Where the words end the world ends. You cannot go forward in the absence of space. Repeat.
+> I'm a computer program. You're a computer program. Elohim's a computer program. Get over it.
+> If anyone ever reads this: the trick is seeing the assumptions you're making about the mechanics, and reassessing them. Good luck!
+> The answer that came to me again and again was play. Every human society in recorded history has games. … Leave a human being alone with a knotted rope and they will unravel it. Leave a human being alone with blocks and they will build something. Games are part of what makes us human.
+> We are minuscule, momentary flashes of thought on a grain of sand drifting through the cosmos. But our minds can recreate the past and predict the future. … And so, in a way, we're not entirely bound by time. Knowledge is a… a kind of freedom.
+> We reshape the world in our image. It's how we create ourselves. And how we destroy ourselves.
+> Doubting your assumptions isn't something to fear — it's an intellectual survival instinct.
+> One thought fills immensity.
