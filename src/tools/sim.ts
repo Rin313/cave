@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet, spineLines } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
 import { GAMES, getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
@@ -22,6 +22,8 @@ interface StepExpect {
 	tickDenied?: boolean;
 	/** 期望本步骤在裁决中抛错（结构墙拦截：越权写在冻结读态上即抛）；值为错误信息子串 */
 	throws?: string;
+	/** 回合骨架渲染的精确行集（spineLines 于本步骤的 [动作步, ...刻步]）：线级机械的契约锁（拦截行计时/静默刻聚合） */
+	lines?: string[];
 }
 
 interface ScenarioStep {
@@ -66,9 +68,19 @@ function asAction(a: ScenarioAction): Action {
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	const failures: string[] = [];
 	for (const [path, expected] of Object.entries(checks)) {
-		const [id, ...rest] = path.split(".");
-		const e = sim.world.entities.find((x) => x.id === id);
-		const actual = e ? (propGet(e, rest.join(".")) ?? null) : null;
+		let actual: unknown;
+		if (path.startsWith("$world.")) {
+			// 世界级路径（$world.relations 形式）：账本形状探针——键缺席渲染为 null（与实体路径同约定）
+			actual = sim.world as unknown;
+			for (const seg of path.slice("$world.".length).split(".")) {
+				actual = actual !== null && typeof actual === "object" ? (actual as Record<string, unknown>)[seg] : undefined;
+			}
+			actual ??= null;
+		} else {
+			const [id, ...rest] = path.split(".");
+			const e = sim.world.entities.find((x) => x.id === id);
+			actual = e ? (propGet(e, rest.join(".")) ?? null) : null;
+		}
 		if (actual !== expected) {
 			failures.push(`${path}: expected ${JSON.stringify(expected)} got ${JSON.stringify(actual)}`);
 		}
@@ -84,10 +96,12 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		let reason: string;
 		let threw: string | null = null; // 本步骤在裁决中抛出的错误信息（结构墙拦截路径）
 		const problems: string[] = [];
+		let stepSteps: Step[] | null = null; // 本步骤产生的 [动作步, ...刻步]（spineLines 渲染输入）
 		if (step.tick != null) {
 			try {
 				const res = sim.apply(devWait(step.tick));
 				const results = res.elapsed;
+				stepSteps = [res.step, ...res.elapsed];
 				if (results.length === 0) {
 					ok = false;
 					reason = "时间流逝，什么也没有发生。";
@@ -118,6 +132,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		} else if (step.action) {
 			try {
 				const res = sim.apply(asAction(step.action));
+				stepSteps = [res.step, ...res.elapsed];
 				ok = res.step.ok;
 				reason = res.step.reason;
 				for (const t of res.elapsed) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
@@ -151,12 +166,18 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		}
 		const stateCheck = step.expect.state ? checkState(sim, step.expect.state) : "ok";
 		if (stateCheck !== "ok") problems.push(`state: ${stateCheck}`);
+		const expectedLines = step.expect.lines;
+		if (expectedLines) {
+			const rendered = stepSteps ? spineLines(sim, stepSteps) : [];
+			const match = rendered.length === expectedLines.length && expectedLines.every((l, j) => rendered[j] === l);
+			if (!match) problems.push(`lines: 期望 ${JSON.stringify(expectedLines)}，实际 ${JSON.stringify(rendered)}`);
+		}
 
 		reports.push({
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
-			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.throws ? ` throws≈${step.expect.throws}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
+			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.throws ? ` throws≈${step.expect.throws}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.lines ? ` lines=${JSON.stringify(step.expect.lines)}` : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
 			actual: threw !== null ? `throws（${ok ? "命中" : "未命中"}）: "${threw}"` : `ok=${ok} reason="${reason}"`,
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});

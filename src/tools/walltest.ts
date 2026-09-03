@@ -18,6 +18,7 @@ const PROPS: Record<string, PropDef> = {
 	touched: { type: "number", label: "触及" },
 	vault: { type: "boolean", label: "封印" },
 	sneak: { type: "number", label: "潜标" },
+	armed: { type: "boolean", internal: true },
 };
 
 /** 蓄意越权：经 Q 读态直改属性（冻结视图上写入即抛）。 */
@@ -79,6 +80,12 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "sneakpoke.grant", judge: (q) => grant([D.inc(q.player, "sneak", 1)], "你碰了潜标。") }],
 		}),
+		arm: defineVerb({
+			label: "武装",
+			description: "研究动词：武装 leak.tick 的刻步越权（未武装时该系统沉默，让被拦刻步有干净的刻可测）。",
+			schema: Type.Object({}),
+			rules: [{ id: "arm.ok", judge: (q) => grant([D.set(q.player, "armed", true)], "系统越权已武装。") }],
+		}),
 	},
 	world: {
 		time: 0,
@@ -86,12 +93,20 @@ export const walltest: GameDef = {
 	},
 	systems: [
 		{
-			// 蓄意越权：系统直改 hp 后空产出——冻结读态上写入即抛，产出不存在
+			// 蓄意越权：武装（arm）后系统直改 hp——冻结读态上写入即抛，产出不存在；
+			// 未武装时沉默放行，同注册表的被拦刻步（vault.tick）才有干净的刻可测
 			id: "leak.tick",
 			run: (q) => {
+				if (q.entity(q.player)?.props.armed !== true) return null;
 				leakHp(q);
 				return null;
 			},
+		},
+		{
+			// 蓄意被拦：系统产出设置封印 → vault.sealed 否决——被拦刻步（TickStep ok:false）的唯一合法来源，
+			// walltest.json 的拦截行计时/静默刻聚合契约场景在此产生
+			id: "vault.tick",
+			run: (q) => ({ deltas: [D.set(q.player, "vault", true)] }),
 		},
 	],
 	props: PROPS,

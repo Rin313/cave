@@ -136,7 +136,7 @@ GameDef 的字段按四个声明面组织（概念分类）。**钩子准入原�
 
 ```ts
 const game: GameDef = {
-  // —— 规范面：何为可能、何为必然
+  // —— 规范面
   id, title,                 // 实例元数据
   verbs: { ... },            // 动词表：label/description/schema/cost/entityParams/rules
   invariants: [...],         // 提交后硬墙（core 默认恒挂引用完整性）
@@ -151,7 +151,7 @@ const game: GameDef = {
   edgePerception,            // 边感知：体验者知觉哪些关系边（端点结构过滤之上的语义谓词；缺省恒真）
   digestExtra,               // 状态视图派生纹理（无 id 承诺）
 
-  // —— 词汇面：世界的语言
+  // —— 词汇面
   messages,                  // 必填：core 产出的用户可见文案
   voice,                     // 表达契约：叙述者人格/世界读法/写作纪律（世界语言，core 原样注入 system prompt，缺省裸契约）
   props: {...},              // 属性注册表：type/label/internal

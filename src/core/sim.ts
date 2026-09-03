@@ -519,7 +519,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}：${s.reason}${tail}`);
 		} else if (!s.ok) {
-			// 被硬墙拦截的刻步：bug 信号，独立成行（不与同刻产出混写；其时刻计入静默聚合）
+			// 被硬墙拦截的刻步：bug 信号，独立成行（不与同刻产出混写）
 			lines.push(`⏱ ✗ ${s.reason || msgs.defaultReason}`);
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [] };
@@ -534,8 +534,10 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 			facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
 		].join("")}`);
 	}
+	// 静默刻聚合：每个被授予的刻恰有一个时间标记——同刻产出行、拦截行（独立 ⏱ ✗）、或 ×n 的一份
 	const granted = steps.reduce((n, s) => n + (s.kind === "action" ? s.ticks : 0), 0);
-	if (granted > said.size) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size}`);
+	const deniedTicks = steps.reduce((n, s) => n + (s.kind === "tick" && !s.ok ? 1 : 0), 0);
+	if (granted - said.size - deniedTicks > 0) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size - deniedTicks}`);
 	return lines;
 }
 
@@ -882,11 +884,14 @@ export class Simulation {
  *  set 同值与零效果增量以目标存在为前提——主语不存在的「已成立」不可判定，存在性拒绝在前，永不回落为跳过。 */
 	private commit(deltas: Delta[], src: string): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
-		const rels = (this.world.relations = this.world.relations ?? []);
+		// 边表只在首个需要写入的边 delta 到来时入账
+		// 一经入账，本提交内保持同一数组引用
+		const rels = (): Rel[] => (this.world.relations ??= []);
 		const upsertRel = (from: string, to: string, type: string, value: number | string | boolean) => {
-			const hit = rels.find((r) => r.from === from && r.to === to && r.type === type);
+			const rs = rels();
+			const hit = rs.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
-			else rels.push({ from, to, type, value });
+			else rs.push({ from, to, type, value });
 		};
 		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", debug: `commit: ${debug}` } });
 		const sayable = (v: PropValue): boolean => {
@@ -909,10 +914,13 @@ export class Simulation {
 				if (i < 0) return refuse(`despawn "${d.entity}": entity missing`);
 				const gone = this.world.entities[i]!;
 				this.world.entities.splice(i, 1);
-				// 原地级联删边：rels 是本次提交共享的数组，必须保持引用有效（重赋值会让同提交内后续 relSet/relInc 写入失联数组）
-				for (let j = rels.length - 1; j >= 0; j--) {
-					const r = rels[j]!;
-					if (r.from === d.entity || r.to === d.entity) rels.splice(j, 1);
+				// 原地级联删边：只清已存在的边表，不为级联建表；同提交内后续边写入仍共享同一数组
+				const existing = this.world.relations;
+				if (existing) {
+					for (let j = existing.length - 1; j >= 0; j--) {
+						const r = existing[j]!;
+						if (r.from === d.entity || r.to === d.entity) existing.splice(j, 1);
+					}
 				}
 				changes.push({ kind: "despawn", entity: d.entity, name: gone.name, src });
 				continue;
@@ -923,9 +931,11 @@ export class Simulation {
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
 				if (!sayable(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): non-finite number`);
 				if (d.value === null) {
-					// 值 null 即删边（拓扑收缩与生长对称）；原地删——rels 是本次提交共享的数组，不可整体替换
-					const i = rels.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
-					if (i >= 0) rels.splice(i, 1);
+					// 值 null 即删边（拓扑收缩与生长对称）；能走到此处则边必已存在（prev !== null），rels() 只取已入账的数组；
+					// 原地删——边表是本次提交共享的数组，不可整体替换
+					const rs = rels();
+					const i = rs.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
+					if (i >= 0) rs.splice(i, 1);
 				} else {
 					upsertRel(d.from, d.to, d.type, d.value);
 				}

@@ -9,6 +9,7 @@
 				{ "name": "规则越权写属性：冻结读态上写入即抛（严格模式 TypeError），授予不存在", "action": { "verb": "poke", "params": {} }, "expect": { "throws": "read only" } },
 				{ "name": "规则越权写钟：q.world.time 同被冻结拦下——钟的唯一写者是落钟循环，按构造成立", "action": { "verb": "clockpoke", "params": {} }, "expect": { "throws": "read only" } },
 				{ "name": "越权未遂后世界仍健康：时间未走、数值无漂移，干净动作照常", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.hp": 10 } } },
+				{ "name": "武装系统越权（leak.tick 平时沉默，武装后的刻步才测写入点即抛）", "action": { "verb": "arm", "params": {} }, "expect": { "ok": true } },
 				{ "name": "系统越权写属性：刻步在系统写入点即抛", "tick": 1, "expect": { "throws": "read only" } }
 			]
 		},
@@ -24,6 +25,18 @@
 			"steps": [
 				{ "name": "审查者越权写账本：TypeError 在提交边界兑为 invariant.crash 否决（可说），整提交回滚", "action": { "verb": "sneakpoke", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.sneak": null, "player.hp": 10 } } },
 				{ "name": "审查者崩溃后账本仍健康：干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.hp": 10 } } }
+			]
+		},
+		{
+			"name": "账本形状：零边授予不得在账本外添形（公理一：凡后果必可说）",
+			"steps": [
+				{ "name": "无关系世界的授予提交后，relations 键仍缺席", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": null, "player.touched": 1 } } }
+			]
+		},
+		{
+			"name": "静默刻聚合：被拦刻步独立成行，每刻恰有一个时间标记",
+			"steps": [
+				{ "name": "vault.tick 产出被守恒墙拦截：拦截行独立计时，不再并入 ×n", "tick": 1, "expect": { "tickDenied": true, "lines": ["✓ 流逝(1)：时间流逝。", "⏱ ✗ 封印纹丝不动。"] } }
 			]
 		}
 	]
