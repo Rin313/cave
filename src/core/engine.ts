@@ -72,11 +72,11 @@ interface TurnChannel {
 	onAdjudication: ((patch: { results?: ActionStep[]; elapsed?: TickStep[] }) => void) | null;
 }
 
-/** 单回合通道状态：变异窗口门闩 + 叙述账本（按生成代记账，镜像 pi 的重试语义）+ 回合收集器
- *  current 是在途生成的正文：message_end 正常终结即并入 settled；error 暂扣——
- *  pi 丢弃重生成（auto_retry_start）则作废并广播 narration_reset，保留（重试预算耗尽）则定稿时入账。 */
-interface TurnState {
-	gateOpen: boolean;
+/** 单次 session.prompt 的运行状态：相位机 + 收集器（按生成代记账，镜像 pi 的重试语义）。相位只有两态——
+ *  mapping：行动窗口开放、text 丢弃（映射期）；narration：裁决已过或呈现服务、text 入叙述账本。
+ *  current 是在途生成的正文：message_end 正常终结即并入 settled */
+interface RunState {
+	phase: "mapping" | "narration";
 	acted: boolean;
 	visibleBefore: Set<string>;
 	intent?: string;
@@ -93,7 +93,7 @@ export class Engine {
 	private session: SessionHandle;
 	private readonly sessionManager: SessionManager;
 	private readonly memory: MemoryTurn[];
-	private readonly turn: TurnState;
+	private readonly run: RunState;
 	private readonly channel: TurnChannel;
 	/** 本回合裁决累积（act 工具经 channel 直通回写）。 */
 	private outcome: { results: ActionStep[]; elapsed: TickStep[] } = { results: [], elapsed: [] };
@@ -105,7 +105,7 @@ export class Engine {
 		session: SessionHandle,
 		sessionManager: SessionManager,
 		memory: MemoryTurn[],
-		turn: TurnState,
+		run: RunState,
 		channel: TurnChannel,
 	) {
 		this.def = def;
@@ -113,7 +113,7 @@ export class Engine {
 		this.session = session;
 		this.sessionManager = sessionManager;
 		this.memory = memory;
-		this.turn = turn;
+		this.run = run;
 		this.channel = channel;
 		channel.onAdjudication = (patch) => {
 			if (patch.results) this.outcome.results.push(...patch.results);
@@ -122,32 +122,32 @@ export class Engine {
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
-					// 实时叙述只转译裁决后的正文
-					if (event.assistantMessageEvent.type === "text_delta" && !this.turn.gateOpen) {
+					// 实时叙述只转译叙述相位的正文（映射期与 thinking 不入通道）
+					if (event.assistantMessageEvent.type === "text_delta" && this.run.phase === "narration") {
 						const delta = event.assistantMessageEvent.delta;
-						this.turn.current += delta;
+						this.run.current += delta;
 						this.emit({ type: "narration_delta", delta });
 					}
 					break;
 				case "message_end":
 					// 生成代入账：正常终结（stop/length/toolUse/aborted）并入 settled；
 					// error 暂扣在 current——pi 将视重试与否移除（重生成）或保留（预算耗尽），分别由下方与定稿裁决
-					if (event.message.role === "assistant" && !this.turn.gateOpen && event.message.stopReason !== "error") {
-						this.turn.settled += this.turn.current;
-						this.turn.current = "";
+					if (event.message.role === "assistant" && this.run.phase === "narration" && event.message.stopReason !== "error") {
+						this.run.settled += this.run.current;
+						this.run.current = "";
 					}
 					break;
 				case "auto_retry_start":
 					// pi 移除失败消息并重生成：在途文本作废，叙述块清零（残段不得混入定稿叙述）
-					if (!this.turn.gateOpen) {
-						this.turn.current = "";
+					if (this.run.phase === "narration") {
+						this.run.current = "";
 						this.emit({ type: "narration_reset" });
 					}
 					break;
 				case "agent_end":
 					for (const m of event.messages ?? []) {
 						const u = (m as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } }).usage;
-						if (m.role === "assistant" && u) this.turn.usage.push({ input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
+						if (m.role === "assistant" && u) this.run.usage.push({ input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
 					}
 					break;
 			}
@@ -170,7 +170,8 @@ export class Engine {
 
 		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
-		const turn: TurnState = { gateOpen: false, acted: false, visibleBefore: new Set(), settled: "", current: "", proposals: [], warnings: [], usage: [] };
+		// 初值 mapping 是失效安全：首个运行前的杂散事件文本会被丢弃而非泄漏为叙述
+		const run: RunState = { phase: "mapping", acted: false, visibleBefore: new Set(), settled: "", current: "", proposals: [], warnings: [], usage: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
@@ -197,7 +198,7 @@ export class Engine {
 		await loader.reload();
 
 		const channel: TurnChannel = { onAdjudication: null };
-		const customTools = [buildActTool(def, sim, turn, channel)];
+		const customTools = [buildActTool(def, sim, run, channel)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
@@ -211,42 +212,39 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(def, sim, session, sessionManager, memory, turn, channel);
+		return new Engine(def, sim, session, sessionManager, memory, run, channel);
 	}
 
 	get sessionFile(): string | undefined {
 		return this.session.sessionFile;
 	}
 
-	/** 开启新回合通道（复位收进方法，避免调用点的属性收窄干扰后续类型分析）。 */
-	private openTurn(intent: string): void {
-		this.turn.gateOpen = true;
-		this.turn.acted = false;
-		this.turn.settled = "";
-		this.turn.current = "";
-		this.turn.visibleBefore = this.sim.visible();
-		this.turn.intent = intent;
-		this.turn.proposals = [];
-		this.turn.warnings = [];
-		this.turn.usage = [];
+	/** 运行起步（复位收进一处，避免调用点的属性收窄干扰后续类型分析） */
+	private beginRun(phase: "mapping" | "narration", intent?: string): void {
+		const r = this.run;
+		r.phase = phase;
+		r.acted = false;
+		r.visibleBefore = phase === "mapping" ? this.sim.visible() : new Set();
+		r.intent = intent;
+		r.settled = "";
+		r.current = "";
+		r.proposals = [];
+		r.warnings = [];
+		r.usage = [];
 	}
 
 	/** 回合编排：同一次会话运行内 act（一次性提交，门闩封闭变异窗口）→ 工具结果承载世界回应 → 散文。 */
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
 		this.outcome = { results: [], elapsed: [] };
-		this.openTurn(action.intent);
+		this.beginRun("mapping", action.intent);
 		const state = this.sim.digest();
-		try {
-			await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection));
-		} finally {
-			this.turn.gateOpen = false;
-		}
+		await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection));
 
 		let narration: string;
-		if (!this.turn.acted) {
+		if (!this.run.acted) {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
 			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
-			this.turn.warnings.push({ round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
+			this.run.warnings.push({ round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
 			narration = this.summarize([]);
 		} else {
 			// 摘要兜底原料 = 本回合全部事件（玩家动作 + 时间流逝）
@@ -257,9 +255,9 @@ export class Engine {
 			results: this.outcome.results,
 			elapsed: this.outcome.elapsed,
 			narration,
-			proposals: this.turn.proposals,
-			warnings: this.turn.warnings,
-			usage: this.turn.usage,
+			proposals: this.run.proposals,
+			warnings: this.run.warnings,
+			usage: this.run.usage,
 		};
 	}
 
@@ -289,24 +287,19 @@ export class Engine {
 	}
 
 	/** 场景呈现服务（表达层的场景模式；与 summarize/digest 同类的呈现设施）：
-	 *  无意志、无 act 通道、无时间流逝——不写近况、不触门闩。 */
+	 *  无意志、无 act 通道、无时间流逝——不写近况、不触门闩：运行直接进入 narration 相位，
+	 *  从不写 mapping，行动窗口结构性不存在；越权 act 调用被相位谓词机械拦截。 */
 	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<NarrationOutcome> {
-		this.turn.gateOpen = false;
-		this.turn.acted = false;
-		this.turn.settled = "";
-		this.turn.current = "";
-		this.turn.proposals = [];
-		this.turn.warnings = [];
-		this.turn.usage = [];
+		this.beginRun("narration");
 		await this.session.prompt(buildNarratePrompt(this.sim, elapsed, instruction));
-		return { narration: this.settleNarration(elapsed), warnings: this.turn.warnings, usage: this.turn.usage };
+		return { narration: this.settleNarration(elapsed), warnings: this.run.warnings, usage: this.run.usage };
 	}
 
 	/** 叙述收尾：正文为空 → 确定性摘要兜底（强接地）。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
 	private settleNarration(steps: Step[]): string {
-		const text = this.turn.settled + this.turn.current;
+		const text = this.run.settled + this.run.current;
 		if (text.trim() === "") {
-			this.turn.warnings.push({ round: 1, error: "散文为空。", attempt: text });
+			this.run.warnings.push({ round: 1, error: "散文为空。", attempt: text });
 			return this.summarize(steps);
 		}
 		return text;
@@ -425,7 +418,7 @@ function buildNarratePrompt(sim: Simulation, elapsed: TickStep[], instruction: s
 
 /** act 工具：本回合唯一的动作提交口（one-shot 门闩）。
  *  execute 内完成：逐动作 apply（裁决→提交→按授予逐刻落钟——时间律的执行在裁决边界内）→ 世界腔策展作为工具结果返回。 */
-function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: TurnChannel) {
+function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
 	const actionSchema = Type.Union(
 		Object.entries(def.verbs).map(([name, v]) =>
 			Type.Object(
@@ -447,16 +440,17 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			),
 		}),
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
-			if (!turn.gateOpen) {
+			// one-shot 门闩 = 相位谓词：act 仅在 mapping 相位受理（呈现运行与已裁决回合同样在此被拦）
+			if (run.phase !== "mapping") {
 				return {
 					content: [{ type: "text", text: JSON.stringify({ ok: false, error: messagesFor(def).notInActionPhase }) }],
 					details: {},
 				};
 			}
-			// one-shot：首个 act 执行即本回合唯一裁决，此后世界只接受叙述
-			turn.gateOpen = false;
-			turn.acted = true;
-			turn.proposals = (params.actions ?? []) as { verb: string; params: unknown }[];
+			// act 执行即裁决边界：一次性完成 mapping→narration 转移，此后世界只接受叙述
+			run.phase = "narration";
+			run.acted = true;
+			run.proposals = (params.actions ?? []) as { verb: string; params: unknown }[];
 			const hasActions = !!params.actions?.length;
 			const results: ActionStep[] = [];
 			const elapsed: TickStep[] = [];
@@ -474,9 +468,9 @@ function buildActTool(def: GameDef, sim: Simulation, turn: TurnState, channel: T
 			}
 			if (hasActions) channel.onAdjudication?.({ results, elapsed });
 			// 以世界腔策展作为工具结果：散文的唯一事件源（叙述只能跟随这里的内容）
-			const revealed = [...sim.visible()].filter((id) => !turn.visibleBefore.has(id));
+			const revealed = [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
 			return {
-				content: [{ type: "text", text: buildResultView(sim, results, !hasActions, turn.intent, revealed, elapsed) }],
+				content: [{ type: "text", text: buildResultView(sim, results, !hasActions, run.intent, revealed, elapsed) }],
 				details: {},
 			};
 		},
