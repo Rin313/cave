@@ -224,7 +224,7 @@ export interface GameDef {
 	world: World;
 	/** 时间系统：每 tick 按注册顺序运行的系统规则（world→deltas 的纯函数）。 */
 	systems?: SystemRule[];
-	/** 属性注册表：属性类型/世界化标签/内部标记/值域。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），describeAction 与拒绝渲染读 label。缺省空注册表（全部属性视为普通可见属性）。 */
+	/** 属性注册表：属性类型/世界化标签/内部标记。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），describeAction 与拒绝渲染读 label。词汇闭合：实体的属性键 ⊆ 注册表（integrity 墙钉住），缺省空注册表即不允许任何属性。 */
 	props?: Record<string, PropDef>;
 	/** 回退摘要的声音覆写（可选）：缺省由引擎装配回合骨架投影（spineLines 单行连接，空步回落 noResponse）。
 	 *  覆写用于文学化兜底：steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
@@ -265,8 +265,8 @@ export interface Invariant {
 	check: (world: World, ctx: InvariantCtx) => string | null;
 }
 
-/** core 默认硬墙：引用完整性与注册表类型契约。
- * 世界全域扫描：spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug（悬空引用、类型错写）。 */
+/** core 默认硬墙：引用完整性、注册表类型契约与词汇闭合（属性键 ⊆ 注册表）。
+ * 世界全域扫描：spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug（悬空引用、类型错写、未声明词汇）。 */
 export function integrityInvariant(): Invariant {
 	const got = (v: PropValue): string => {
 		if (v === null) return "null";
@@ -284,10 +284,15 @@ export function integrityInvariant(): Invariant {
 			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
 			const registry = Object.entries(ctx.def.props ?? {});
+			const vocabulary = new Set(registry.map(([k]) => k));
 			for (const e of world.entities) {
 				// 卡片契约：id 与名字是引擎自有词汇的在场保证（存档恢复路径无类型检查，腐蚀通道在此封死）
 				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
 				if (typeof e.name !== "string" || e.name === "") return `integrity: ${e.id}.name must be non-empty string`;
+				// 词汇闭合：type 层封闭、token 层开放（与动词表同构），未声明词汇不入账；动态键值对走关系边、自由值形状走 any/tags
+				for (const k of Object.keys(e.props)) {
+					if (!vocabulary.has(k)) return `integrity: ${e.id}.${k} is not declared in the prop registry`;
+				}
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
 					if (v === null || v === undefined || pd.type === "any") continue;
