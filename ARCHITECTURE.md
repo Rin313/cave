@@ -23,14 +23,7 @@
 6. **core 只提供通用工具，不耦合游戏**：games 代码允许任意写法与重复样板——这是创作者的自由，即便多个游戏收敛出相同形态，也不得「提升为 core 工具」。共享的游戏侧语义只走 games/ 内自愿接入的构件。
 7. 大部分审计都没有任何意义，编译成功、sim验证通过什么都说明不了，e2e映射准确、表达准确也并不说明设计准确。全部是伪信号，要验证效果，必须靠阅读e2e会话和分析源码，引擎只承担机械检查和暴露UI层预期使用的字段。
 
-## 3. GameDef 表面契约
-
-- **`Rule`（卫语句式规则，按动词分组）**：`{ id, judge(q, p) }`——普通函数接收只读判定上下文 `Q`（world/player/time/params + `rel/relNum/roll/visible/name` 等引擎自有语义唯一入口；施动前提是规则侧语义，由 games 层构件供给），返回授予（Delta 列表 + 世界腔理由 + facts）或结构化拒绝（Denial），null = 不表态交由后续规则；拒绝/授予优先序就是书写顺序（guard clauses）。数值与后果由规则产出的 Delta 表达（`set/inc/relSet/relInc/rename/spawn/despawn`——生灭原语让authored 世界可动态生长，relSet 值 null 即删边（拓扑收缩与生长对称），rename 改写名字，despawn 级联清理核心结构、悬空 id 引用由完整性硬墙回滚）。时间系统 `GameDef.systems` 同为纯函数规则（`SystemRule.run(q)` 聚合产出 deltas/facts）。跨提交/回滚/审计边界的产出（Delta/Denial/Fact）保持数据，产出的决策回归代码。
-- **`props`**：`{ prop: { type, label?, internal? } }`。`internal: true` 的属性不进 LLM 序列化 / 变更线性化；`label` 是属性世界化说法（拒绝/变更文本用），**并是表达 prompt 变更馈送的默认渲染源**——回合骨架 `spineLines`（core 单一渲染机械，服务结果视图/近况/控制台/回退摘要）用实体名 + `label` 做语言无关线性化（`fmtChange`，`name.label: from → to`，core 只做符号连接、不内嵌语言词）；动作侧同一纪律：`describeAction` 以 `verb.label(param,…)` 符号连接；tick 行的语言词只来自规则事实与 `messages.timePassed`。`internalPropsOf(def)` 派生内部属性集。integrity 墙反向钉住词汇闭合（世界属性键 ⊆ 注册表）：未声明词汇不入账，动态键值对走关系边、自由值形状走 any/tags。
-- **关系边表**：`world.relations` 为 `{ from, to, type, value }` 边表，表达社会/叙事状态（信任、记忆、派系）。规则以 `relSet/relInc` 变更，核心提供 `relVal/relAll` 查询。变更记录为 sum-typed `Change`（kind: prop/rename/rel/spawn/despawn，与 Delta 同构）。变更在表达层格式化为「from 对 to 的 type」的世界腔文本，快照/克隆/序列化完整保留。
-- **事件流两形态**：systems 产出为刻步 `TickStep`（`kind:"tick"`，携带时刻 `at`、变更/事实/src），动作裁决为 `ActionStep`（`kind:"action"`）——刻是世界的因（提交失败不回退时间），不是意志的果，二者不共用形状。
-
-## 4. 持久化边界
+## 3. 持久化边界
 
 模拟层状态是 JSON 可序列化的，SQLite 不存热状态，存存档与审计（**目标**；原型期由 `loop` 的 `runs/` 目录以 JSONL + `state.json` 落盘，SQLite 落地后迁移）：
 
