@@ -322,7 +322,7 @@ export function integrityInvariant(): Invariant {
 	};
 }
 
-/** 获取游戏声明的用户可见文案（core 不内嵌任何语言，由游戏必填注入）。 */
+/** 获取游戏声明的用户可见文案 */
 export function messagesFor(def: GameDef): Messages {
 	return def.messages;
 }
@@ -385,7 +385,7 @@ export interface Resolution {
 	elapsed: TickStep[];
 }
 
-/** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻）。零产出系统不产生条目。 */
+/** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻） */
 export interface TickStep {
 	kind: "tick";
 	at: number;
@@ -549,7 +549,7 @@ export class Simulation {
 	readonly world: World;
 	/** 不变式种子：实际起点世界的冻结副本，首次提交前惰性捕获（无不变式的路径零成本）。 */
 	private genesisCache?: World;
-	/** 动词参数严格校验器（additionalProperties:false），构造期从动词 schema 编译——所有入口（act 工具/场景/CLI/probe）共用同一裁决瓶颈。 */
+	/** 动词参数严格校验器（additionalProperties:false） */
 	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
 
 	/** 缺省克隆 def.world 作为初始世界；显式传入 world（存档恢复克隆源）则以其为完整真相。 */
@@ -609,7 +609,6 @@ export class Simulation {
 		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
-	/** 构造规则判定上下文：引擎隐式语义在此唯一收口。 */
 	private query(params: Record<string, PropValue>): Q {
 		const world = this.world;
 		const player = this.player;
@@ -637,7 +636,7 @@ export class Simulation {
 		return (this.genesisCache ??= this.snapshot());
 	}
 
-	/** 静态形态违约的机器诊断（进 ProtocolViolation.debug）。 */
+	/** 静态形态违约的机器诊断 */
 	private schemaErrors(verbName: string, params: Record<string, PropValue>): string {
 		const errs = this.validators.get(verbName)!.Errors(params);
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
@@ -670,7 +669,7 @@ export class Simulation {
 		return { ok: true, changes: out.changes };
 	}
 
-	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者（authored 标记产出方）。 */
+	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者 */
 	private checkInvariants(genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
 		const integrity = integrityInvariant().check(this.world, { def: this.def, genesis, changes });
 		if (integrity) return { id: "integrity", message: integrity, authored: false };
@@ -704,7 +703,7 @@ export class Simulation {
 		return { step: { ...step, field }, elapsed };
 	}
 
-	/** 动作线性化（fmtChange 同一纪律：label/name 为游戏世界语，core 只做符号连接）。
+	/** 动作线性化（label/name 为游戏世界语，core 只做符号连接）。
 	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。
 	 *  机械指称解析受步的参照域管辖（事件投影的动作侧形态）：在世实体的名字只在跨度内铸造，
 	 *  可见性拒绝（law action.invisible）的尝试不解析活世界，域外 id 原样回显——模型自己的词不是新信息；
@@ -754,7 +753,6 @@ export class Simulation {
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
 			const res = sys.run(this.query({}));
-			// 纯氛围输出（fact-only，无状态变更）同样成立——氛围系统的合法通道
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			// 每系统的提交是独立过墙边界；回滚即未跨越——世界仍是前态，after 即 before
 			const before = this.visible();
