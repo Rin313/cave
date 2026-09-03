@@ -113,7 +113,9 @@ export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}
 
 /** 可达性法则（卫语句工厂）：可达则弃权（交后续规则），不可达即拒绝（law "reach"，理由为构件世界腔）。
  *  法则是一等值：subject 显式绑定动词 schema 里的目标参数名——接线是一行可见调用，接线位置即优先级，
- *  例外法则插在其前；同一概念一个 law id，probe 的法则×动词矩阵以 id 为行，id 碎片化即矩阵失真。 */
+ *  例外法则插在其前；同一概念一个 law id，probe 的法则×动词矩阵以 id 为行，id 碎片化即矩阵失真。
+ *  接线判据（与可见性门的组合律）：前提的否定情形落在参照域内（可指名而不可及）才接线；感知域 ⊆ 可达域的触觉认识论下门已独任此前提，
+ *  接线即死法则。grounding 与前提法则是同一次认识论决策的两面：改感知域必重审全部接线。 */
 export const reachLaw = (subject: string, opts: SpaceOpts = {}): Rule => ({
 	id: "reach",
 	judge: (q) => {

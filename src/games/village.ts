@@ -1,6 +1,6 @@
 import type { Entity, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
-import { inTreeVisible, reachLaw } from "./space.ts";
+import { inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -98,7 +98,6 @@ export const village: GameDef = {
 			cost: 1,
 			entityParams: ["entity"],
 			rules: [
-				reachLaw("entity"),
 				{
 					id: "gather.take",
 					judge: (q, p) => {
@@ -171,7 +170,6 @@ export const village: GameDef = {
 			schema: Type.Object({ goods: Type.String({ description: "货品实体 id" }) }),
 			entityParams: ["goods"],
 			rules: [
-				reachLaw("goods"),
 				{
 					id: "buy.goods",
 					judge: (q, p) => {
@@ -237,7 +235,6 @@ export const village: GameDef = {
 			cost: 1,
 			entityParams: ["source"],
 			rules: [
-				reachLaw("source"),
 				{
 					id: "draw.water",
 					judge: (q, p) => {
@@ -268,7 +265,6 @@ export const village: GameDef = {
 			cost: 1,
 			entityParams: ["bush"],
 			rules: [
-				reachLaw("bush"),
 				{
 					id: "harvest.bush",
 					judge: (q, p) => {
@@ -318,7 +314,6 @@ export const village: GameDef = {
 			cost: 1,
 			entityParams: ["dog"],
 			rules: [
-				reachLaw("dog"),
 				{
 					id: "dog.chase",
 					// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
@@ -465,5 +460,7 @@ export const village: GameDef = {
 			},
 		},
 	],
+	// 触觉认识论：可指名即可及——容器不透明，闭合容器的内容物不在参照域。感知域 ≡ 可达域时
+	// 施动前提由可见性门独任
 	grounding: (world, player) => [...inTreeVisible(world, player)],
 };

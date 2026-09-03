@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet, spineLines } from "../core/sim.ts";
-import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
+import type { Action, GameDef, PropValue, Q, Step, VerbDef, Verdict } from "../core/sim.ts";
 import { GAMES, getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { walltest } from "./walltest.ts";
@@ -320,13 +320,54 @@ interface MapRow {
 	bug?: string;
 }
 
-/** 裁决地图：对每动词穷举 entityParams × 可见实体（每动作在初始世界的独立 Simulation 上裁决） */
-function probeDef(def: GameDef, maxCombos = 10000): { rows: MapRow[]; grants: Map<string, number>; skipped: { verb: string; params: string[] }[]; total: number; truncated: boolean } {
+/** 规则判定踪迹：instrumentDef 的包装规则在真实裁决链上逐条记录。 */
+interface RuleTrace {
+	verb: string;
+	rule: string;
+	/** undefined＝弃权（返回 null）；true/false＝表态（首表态即判决，后继规则的缺席即未达） */
+	ok?: boolean;
+}
+
+/** 给 def 组合上记录包装（不改原 def、不复制裁决逻辑）：规则仍在真实裁决链上运行，
+ *  踪迹即「谁表态、谁弃权、谁未达」的忠实记录。 */
+function instrumentDef(def: GameDef, trace: RuleTrace[]): GameDef {
+	const verbs: Record<string, VerbDef> = {};
+	for (const [name, v] of Object.entries(def.verbs)) {
+		verbs[name] = {
+			...v,
+			rules: v.rules.map((r) => ({
+				id: r.id,
+				judge: (q: Q): Verdict | null => {
+					const verdict = r.judge(q);
+					trace.push({ verb: name, rule: r.id, ok: verdict?.ok });
+					return verdict;
+				},
+			})),
+		};
+	}
+	return { ...def, verbs };
+}
+
+/** 裁决地图：对每动词穷举 entityParams × 可见实体（每动作在初始世界的独立 Simulation 上裁决）。
+ *  liveness＝法则×动词活性矩阵（法则 id 为行）：授予/拒绝/弃权/未达计数——
+ *  永远弃权的法则（死法则，或条件未在初始域成立）只有这里显影，拒绝行清单看不见弃权。 */
+function probeDef(def: GameDef, maxCombos = 10000): {
+	rows: MapRow[];
+	grants: Map<string, number>;
+	skipped: { verb: string; params: string[] }[];
+	total: number;
+	truncated: boolean;
+	liveness: Map<string, { verb: string; grant: number; deny: number; abstain: number; unreached: number }[]>;
+} {
 	const sim = new Simulation(def);
 	const scope = [...sim.visible()];
 	const rows: MapRow[] = [];
 	const grants = new Map<string, number>();
 	const skipped: { verb: string; params: string[] }[] = [];
+	const combos = new Map<string, number>();
+	const stats = new Map<string, { grant: number; deny: number; abstain: number }>();
+	const trace: RuleTrace[] = [];
+	const instrumented = instrumentDef(def, trace);
 	let total = 0;
 	let truncated = false;
 
@@ -336,7 +377,9 @@ function probeDef(def: GameDef, maxCombos = 10000): { rows: MapRow[]; grants: Ma
 			return;
 		}
 		total++;
-		const fresh = new Simulation(def);
+		combos.set(action.verb, (combos.get(action.verb) ?? 0) + 1);
+		trace.length = 0;
+		const fresh = new Simulation(instrumented);
 		const op = describeAction(action, def);
 		try {
 			const { step, elapsed } = fresh.apply(action);
@@ -355,6 +398,14 @@ function probeDef(def: GameDef, maxCombos = 10000): { rows: MapRow[]; grants: Ma
 		} catch (e) {
 			if (e instanceof ProtocolViolation) rows.push({ verb: action.verb, op, law: e.law, reason: "协议违约：探测组合越过动词 schema" });
 			else throw e;
+		}
+		for (const t of trace) {
+			const key = `${t.verb}|${t.rule}`;
+			const s = stats.get(key) ?? { grant: 0, deny: 0, abstain: 0 };
+			if (t.ok === true) s.grant++;
+			else if (t.ok === false) s.deny++;
+			else s.abstain++;
+			stats.set(key, s);
 		}
 	};
 
@@ -380,13 +431,34 @@ function probeDef(def: GameDef, maxCombos = 10000): { rows: MapRow[]; grants: Ma
 		};
 		generate(0, {});
 	}
-	return { rows, grants, skipped, total, truncated };
+	const liveness = new Map<string, { verb: string; grant: number; deny: number; abstain: number; unreached: number }[]>();
+	const skippedVerbs = new Set(skipped.map((s) => s.verb));
+	for (const [verbName, verb] of Object.entries(def.verbs)) {
+		if (skippedVerbs.has(verbName)) continue;
+		const n = combos.get(verbName) ?? 0;
+		if (n === 0) continue; // 截断未覆盖的动词：矩阵行留空，由截断注记说明
+		for (const r of verb.rules) {
+			const s = stats.get(`${verbName}|${r.id}`) ?? { grant: 0, deny: 0, abstain: 0 };
+			const cell = { verb: verbName, ...s, unreached: n - s.grant - s.deny - s.abstain };
+			const list = liveness.get(r.id);
+			if (list) list.push(cell);
+			else liveness.set(r.id, [cell]);
+		}
+	}
+	return { rows, grants, skipped, total, truncated, liveness };
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
-	const { rows, grants, skipped, total, truncated } = probeDef(def, maxCombos);
+	const { rows, grants, skipped, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
+	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
+	for (const [law, cells] of liveness) {
+		const stated = cells.reduce((a, c) => a + c.grant + c.deny, 0);
+		const body = cells.map((c) => `${c.verb} ✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}`).join("  ");
+		console.log(`  ${law.padEnd(18)}${body}${stated === 0 ? "  ⚠ 零表态" : ""}`);
+	}
+	console.log("");
 	const byVerb = new Map<string, MapRow[]>();
 	for (const r of rows) {
 		const list = byVerb.get(r.verb);
@@ -459,7 +531,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
     动作按裁决授予的刻数自动流逝（时间律：apply 即完整裁决边界）；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举 entityParams × 可见实体，按法则分组呈现每输入的落点（授予计数/拒绝行）；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举 entityParams × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态显影：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}
