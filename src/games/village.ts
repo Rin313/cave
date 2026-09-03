@@ -1,6 +1,5 @@
 import type { Entity, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
-import { sumProp } from "../core/util.ts";
 import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
@@ -55,6 +54,15 @@ function name(w: World, id: string): string {
 const num = (v: unknown): number => Number(v ?? 0);
 /** 可选数值属性的安全读取：仅认有限 number，缺省/非数返回 null（区别于 0——「属性不存在」不可冒充数值）。 */
 const fin = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+/** 守恒计账读数：全实体标量求和（缺失/非有限按 0）。游戏侧计账，锚定不变式 ctx.genesis 的种子。 */
+const sumProp = (world: World, prop: string): number => {
+	let total = 0;
+	for (const e of world.entities) {
+		const v = e.props[prop];
+		if (typeof v === "number" && Number.isFinite(v)) total += v;
+	}
+	return total;
+};
 const isNight = (q: Q): boolean => q.time % 4 === 3;
 /** NPC 对玩家的信任（缺边按 0 显式参与比较）。 */
 const trust = (q: Q, from: string): number => q.relNum(from, q.player, "信任", 0);

@@ -11,17 +11,6 @@ export function hashStr(s: string): number {
 	return (h >>> 0) / 4294967296;
 }
 
-/** 数值属性跨实体求和（缺失/非数字按 0）。era/DoL 类资源经济的守恒不变式用。
- *  聚合不感知游戏机制——守恒模式：游戏声明「聚合值 == 种子值」的不变式。 */
-export function sumProp(world: World, prop: string): number {
-	let total = 0;
-	for (const e of world.entities) {
-		const v = e.props[prop];
-		if (typeof v === "number" && Number.isFinite(v)) total += v;
-	}
-	return total;
-}
-
 /** 引用清点原语（生长与收缩对称）：按注册表 type:"id" 枚举指向该实体的 (entity, prop)，
  *  覆盖标量引用与引用数组（与 integrity 硬墙的管辖面一致——墙拦下的悬空，这里必须找得到）。
  *  语义无关的机械清点——despawn 前的悬空引用盘点（容器级 despawn 先迁散子女同理）；
