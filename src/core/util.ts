@@ -29,7 +29,7 @@ export function refsTo(def: GameDef, world: World, id: string): { entity: string
 }
 
 /** 确定性骰子：hashStr(`${world.time}#${key}`) 派生的 [1, sides] 整数。
- *  随机必须是 World 的纯函数（apply/存档恢复天然一致），
+ *  随机必须是 World 的纯函数（apply/存档恢复一致），
  *  key 需在同 tick 内唯一（含实体 id 或自持计数器）。 */
 export function roll(world: World, key: string, sides: number): number {
 	const h = hashStr(`${world.time}#${key}`);

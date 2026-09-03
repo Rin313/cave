@@ -93,7 +93,7 @@ export interface Denial {
 	law: string;
 	/** 世界腔拒绝文案（法则 text 内联渲染 / 可达性构件 prose / 不变式 message）；缺省回落到 messages.noResponse。 */
 	reason?: string;
-	/** 审计用诊断（不进玩家文案；如不变式拒绝详情）。 */
+	/** 审计用诊断 */
 	debug?: string;
 }
 
@@ -111,8 +111,6 @@ export class ProtocolViolation extends Error {
 		this.debug = debug;
 	}
 }
-
-// ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
 
 /** 规则判定上下文：只读世界视图 + 引擎自有语义的唯一入口（关系/骰子/时间/可见性）。
  *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
