@@ -40,7 +40,7 @@ export interface ActOutcome {
 	usage: TokenUsage[];
 }
 
-/** 场景呈现（narrate）的返回：无意志、无 act 通道，故无 results/proposals。 */
+/** 场景呈现（narrate）的返回：无意志、无 act 通道。 */
 export interface NarrationOutcome {
 	narration: string;
 	warnings: TurnWarning[];
@@ -327,22 +327,24 @@ function buildTurnPrompt(state: string, intent: string, selection: string | unde
 	return `[当前状态]（唯一真相源）：\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（构造不出合法提案则提交空提案）；世界裁决后基于返回的结果描写本回合。`;
 }
 
+/** 系统提示 = 表达契约（def.voice，世界语言，core 原样注入）+ 协议块（core 生成）。
+ *  协议块是引擎机械的说明书（门闩/拒绝契约/保真与指称纪律）；人格与 craft 属世界语言。 */
 function buildSystemPrompt(def: GameDef): string {
 	const verbs = Object.entries(def.verbs)
 		.map(([name, v]) => `- ${name}「${v.label}」：${v.description}${v.entityParams?.length ? `（实体参数：${v.entityParams.join("/")}，只能取可见实体 id）` : ""}`)
 		.join("\n");
-	return `你是文字游戏引擎。把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
+	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
 呈现调用（开场、时间流逝后的场景描写）没有行动窗口：prompt 顶部标注「呈现服务」，此时不要调用 act，直接输出散文正文。
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名。extra（存在时）是游戏派生的场景纹理。
 可用动词（模拟层强制执行）：
 ${verbs}
 
-描写硬约束：
+表达纪律：
 - 叙述只能跟随 act 返回的裁决结果（尝试、变更、法则事实、新见）与世界状态中的实体和属性。
 - 状态与裁决中不存在的物体、人物、现象、后果不得出现——后果由世界法则产生，不由你创造；对已有内容的转写与渲染（措辞、视角、氛围、文学手法）一律自由，只须不与状态矛盾。
-- 状态是世界的事实，不是待播报的读数：把事实织进场景，不要逐条罗列属性值。
 - 一律使用实体的名称（name），不得写出实体 id、属性名、工具调用或决策过程。
-- 被拒绝的操作，把世界给出的法则理由融入叙述，让玩家感受到世界的规则；被拒绝的尝试只写尝试本身，不写其后果。`;
+- 被拒绝的尝试只写尝试本身与世界的拒绝理由，不写未发生的后果。`;
+	return def.voice ? `${def.voice}\n\n${protocol}` : protocol;
 }
 
 /** 回合事件的世界腔策展（act 工具结果与呈现服务共用）：骨架行 + 协议锚。
