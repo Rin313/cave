@@ -33,7 +33,6 @@
 - **状态视图**：prompt 的状态视图由 core 组装——可见实体（grounding）× 注册表过滤（internal 不进 prompt，隔离机械保证）× 关系端点可见过滤，顶层并入 `digestExtra`（游戏派生纹理：出口、随身清单等无 id 承诺的呈现面）。参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名、可指名的必看得见。
 - **关系边表**：`world.relations` 为 `{ from, to, type, value }` 边表，表达社会/叙事状态（信任、记忆、派系）。规则以 `relSet/relInc` 变更，核心提供 `relVal/relAll` 查询。变更记录为 sum-typed `Change`（kind: prop/rename/rel/spawn/despawn，与 Delta 同构）。变更在表达层格式化为「from 对 to 的 type」的世界腔文本，快照/克隆/序列化完整保留。
 - **事件流两形态**：systems 产出为刻步 `TickStep`（`kind:"tick"`，携带时刻 `at`、变更/事实/src），动作裁决为 `ActionStep`（`kind:"action"`）——刻是世界的因（提交失败不回退时间），不是意志的果，二者不共用形状。
-- **`invariants`（GameDef 可选）**：提交后不变式硬墙——core 默认恒挂引用完整性与注册表类型契约（`integrityInvariant`：实体 id 唯一、卡片契约（id 与名字为非空字符串）、id 型属性——标量或引用数组——与关系端点指向存在的实体；注册属性值与声明类型一致，number 拒非有限值——NaN 经 JSON 序列化即静默变 null；null/缺席放行，any 豁免），游戏可追加领域不变式。**违反即回滚整个提交并原子拒绝**（`commitChecked` 快照→提交→校验→回滚），法则、系统 bug 都无法绕过。完整性审的是提交终点：同一提交内 despawn 后 spawn 同 id 合法（同 id 生灭——中途悬空在终点自愈），留下悬空引用的抹除才被回滚。**两种形态同一接口**：`InvariantCtx` 除 `genesis` 外携带 `changes`（本提交全部变更，含 spawn/despawn 与 src）——状态不变式只读 world（守恒类），过渡不变式读提交（provenance 类）；每条规则/系统的提交独立过墙。**era/DoL 守恒模式**：游戏以 `sumProp`（core 聚合助手）声明「聚合值 == 种子值」的不变式，凭空铸币/灭币一律被回滚。**种子锚点是 `InvariantCtx.genesis`**——本 Simulation 实际起点世界的冻结快照（首提交前情性捕获），存档恢复/变体开局时 ≠ def.world，守恒不错锚。**引用清点原语 `refsTo(def, world, id)`**：despawn 前的悬空引用盘点（按注册表 type:"id" 枚举指向实体的 (entity, prop)，标量与引用数组同覆盖——与硬墙管辖面一致，墙拦下的悬空这里必须找得到），清理策略留规则；关系边由 despawn 自动级联。
 
 ## 4. 持久化边界
 
