@@ -1,8 +1,7 @@
-import type { Entity, Verdict, World } from "../core/sim.ts";
+import type { Entity, Rule, World } from "../core/sim.ts";
 import { entity } from "../core/sim.ts";
 
-/** 容器包含树空间语义的游戏侧构件：core 不内嵌任何空间模型，需要空间语义的游戏自选接入。
- *  语义与理由文案内置于本构件（games 层可含语言），SpaceOpts.msgs 可逐项覆盖；
+/** 语义与理由文案内置于本构件，SpaceOpts.msgs 可逐项覆盖；
  *  关容器对实体的放行（楔住等）由游戏经 containerAccess 裁决。
  *  锚点拓扑：锚点（玩家/魂）可位于包含链任意深度——附身 = 地址的空间迁移（魂以 in 居于器皿），
  *  可达性 = 目标与锚点共享围合场景，或目标在锚点子树内（贴身必达）；关容器沿双链对称拦截。
@@ -112,9 +111,14 @@ export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}
 	return vis;
 }
 
-/** 不可达拒绝（卫语句用）：law "reach"，理由为空间构件的世界腔文案，缺省回落构件缺省语。 */
-export function denyUnreachable(world: World, player: string, id: string, opts: SpaceOpts = {}): Verdict {
-	const r = inTreeReach(world, player, id, opts);
-	return { ok: false, denial: { law: "reach", reason: r.reason || REACH_MSGS.reachNotHere } };
-}
+/** 可达性法则（卫语句工厂）：可达则弃权（交后续规则），不可达即拒绝（law "reach"，理由为构件世界腔）。
+ *  法则是一等值：subject 显式绑定动词 schema 里的目标参数名——接线是一行可见调用，接线位置即优先级，
+ *  例外法则插在其前；同一概念一个 law id，probe 的法则×动词矩阵以 id 为行，id 碎片化即矩阵失真。 */
+export const reachLaw = (subject: string, opts: SpaceOpts = {}): Rule => ({
+	id: "reach",
+	judge: (q) => {
+		const r = inTreeReach(q.world, q.player, String(q.params[subject]), opts);
+		return r.ok ? null : { ok: false, denial: { law: "reach", reason: r.reason || REACH_MSGS.reachNotHere } };
+	},
+});
 

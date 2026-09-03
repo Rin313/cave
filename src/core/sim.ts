@@ -368,7 +368,7 @@ export interface ActionStep {
 	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价（凡入裁决即尝试）。
 	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；apply 据此在裁决边界内逐刻推进 systems。 */
 	ticks: number;
-	/** 否决来源：rule——动词法则网络的否决（含全部规则未表态时的引擎闭合回落，law "action.unanswered"；
+	/** 否决来源：rule——动词卫语句链的否决（含全部规则未表态时的引擎闭合回落，law "action.unanswered"；
 	 *  可见性门同归此值——感知是世界真相）；invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。*/
 	deniedBy?: "rule" | "invariant";
 	/** 结构化拒绝，供表达层/审计使用。 */

@@ -1,6 +1,6 @@
 import type { Entity, GameDef, PropDef, Q, SystemRule, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
-import { denyUnreachable, inTreeReach, inTreeVisible } from "./space.ts";
+import { inTreeVisible, reachLaw } from "./space.ts";
 import { Type } from "typebox";
 
 /**
@@ -72,7 +72,6 @@ const loyalCut = (q: Q, vendorId: string): number => {
 	if (!v || v.props.dealTrust === undefined) return 0;
 	return trust(q, vendorId) >= num(v.props.dealTrust) ? num(v.props.dealCut) : 0;
 };
-const canReach = (q: Q, id: string): boolean => inTreeReach(q.world, q.player, id).ok;
 const holdable = (q: Q, id: string): boolean => entity(q.world, id)?.props.grabbable === true;
 const tagsOf = (e: Entity | undefined): string[] => {
 	const t = e?.props.tags;
@@ -99,10 +98,10 @@ export const village: GameDef = {
 			cost: 1,
 			entityParams: ["entity"],
 			rules: [
+				reachLaw("entity"),
 				{
 					id: "gather.take",
 					judge: (q, p) => {
-						if (!canReach(q, p.entity)) return denyUnreachable(q.world, q.player, p.entity);
 						const t = q.entity(p.entity);
 						if (!t || !holdable(q, p.entity)) return deny("gather.grabbable", { reason: `${q.name(p.entity)}搬不动。` });
 						if (t.props.in === q.player) return null;
@@ -172,6 +171,7 @@ export const village: GameDef = {
 			schema: Type.Object({ goods: Type.String({ description: "货品实体 id" }) }),
 			entityParams: ["goods"],
 			rules: [
+				reachLaw("goods"),
 				{
 					id: "buy.goods",
 					judge: (q, p) => {
@@ -188,7 +188,6 @@ export const village: GameDef = {
 						if (!yields && g.props.in === q.player) return deny("buy.held", { reason: `${q.name(p.goods)}已经在你手里了。` });
 						const price = Math.max(1, (pb ?? pr!) - (yields ? stock : 0) - loyalCut(q, vendorId));
 						if (num(q.entity(q.player)?.props.coins) < price) return deny("buy.broke", { reason: "你的钱不够。" });
-						if (!canReach(q, p.goods)) return denyUnreachable(q.world, q.player, p.goods);
 						return yields
 							? grant([D.inc(p.goods, yields, -1), D.inc(q.player, yields, 1), D.inc(vendorId, "coins", price), D.inc(q.player, "coins", -price)], `你花${price}铜币从${q.name(vendorId)}手里买了一份${q.name(p.goods)}的出产。`)
 							: grant([D.set(p.goods, "in", q.player), D.inc(vendorId, "coins", price), D.inc(q.player, "coins", -price)], `你花${price}铜币向${q.name(vendorId)}买下了${q.name(p.goods)}。`);
@@ -238,10 +237,10 @@ export const village: GameDef = {
 			cost: 1,
 			entityParams: ["source"],
 			rules: [
+				reachLaw("source"),
 				{
 					id: "draw.water",
 					judge: (q, p) => {
-						if (!canReach(q, p.source)) return denyUnreachable(q.world, q.player, p.source);
 						const w = q.entity(p.source);
 						if (!w || w.props.supply !== true) return deny("draw.dry", { reason: `${q.name(p.source)}还是枯的，打不出水。` });
 						if (num(w.props.water) < 1) return deny("draw.empty", { reason: `${q.name(p.source)}的存水已经见底了。` });
@@ -268,14 +267,16 @@ export const village: GameDef = {
 			schema: Type.Object({ bush: Type.String({ description: "浆果丛 id" }) }),
 			cost: 1,
 			entityParams: ["bush"],
-			rules: [{
-				id: "harvest.bush",
-				judge: (q, p) => {
-					if (q.entity(p.bush)?.props.ripe !== true) return deny("harvest.unripe", { reason: `${q.name(p.bush)}还没有成熟。` });
-					if (!canReach(q, p.bush)) return deny("harvest.unreachable", { reason: `${q.name(p.bush)}无法被采集。` });
-					return grant([D.inc(q.player, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
+			rules: [
+				reachLaw("bush"),
+				{
+					id: "harvest.bush",
+					judge: (q, p) => {
+						if (q.entity(p.bush)?.props.ripe !== true) return deny("harvest.unripe", { reason: `${q.name(p.bush)}还没有成熟。` });
+						return grant([D.inc(q.player, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
+					},
 				},
-			}],
+			],
 		}),
 		repair: defineVerb({
 			label: "修葺",
@@ -316,19 +317,21 @@ export const village: GameDef = {
 			schema: Type.Object({ dog: Type.String({ description: "野兽 id" }) }),
 			cost: 1,
 			entityParams: ["dog"],
-			rules: [{
-				id: "dog.chase",
-				// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
-				judge: (q, p) => {
-					if (!canReach(q, p.dog)) return deny("subdue.unreachable", { reason: `你没能赶走${q.name(p.dog)}。` });
-					// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
-					if (q.entity(p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { reason: `${q.name(p.dog)}不是赶得跑的野兽。` });
-					if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
-					if (num(q.entity(q.player)?.props.fatigue) >= 40) return deny("dog.tired", { reason: `你太疲惫了，挥不动手，${q.name(p.dog)}只是远远地龇牙。` });
-					const bite = -(2 + q.roll(`dog.bite#${p.dog}`, 3));
-					return grant([D.set(p.dog, "alive", false), D.inc(q.player, "hp", bite)], `你抄起家伙赶跑了${q.name(p.dog)}，被它咬了一口。`);
+			rules: [
+				reachLaw("dog"),
+				{
+					id: "dog.chase",
+					// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
+					judge: (q, p) => {
+						// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
+						if (q.entity(p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { reason: `${q.name(p.dog)}不是赶得跑的野兽。` });
+						if (q.entity(p.dog)?.props.alive !== true) return deny("dog.gone", { reason: `${q.name(p.dog)}已经被赶跑了，不在这里了。` });
+						if (num(q.entity(q.player)?.props.fatigue) >= 40) return deny("dog.tired", { reason: `你太疲惫了，挥不动手，${q.name(p.dog)}只是远远地龇牙。` });
+						const bite = -(2 + q.roll(`dog.bite#${p.dog}`, 3));
+						return grant([D.set(p.dog, "alive", false), D.inc(q.player, "hp", bite)], `你抄起家伙赶跑了${q.name(p.dog)}，被它咬了一口。`);
+					},
 				},
-			}],
+			],
 		}),
 		scout: defineVerb({
 			label: "侦察",
