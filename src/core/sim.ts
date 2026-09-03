@@ -137,7 +137,7 @@ export interface Q {
 }
 
 /** 裁决：授予（未提交 deltas + 世界腔理由 + facts + 授予刻数）或结构化拒绝；规则返回 null = 不表态。
- *  ticks 是时间律的规则面（DESIGN 公理三）：改写本动作的实际流逝（缺省回落动词时价）。 */
+ *  ticks 是时间律的规则面（DESIGN 回合协议）：改写本动作的实际流逝（缺省回落动词时价）。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; reason?: string; facts?: Fact[]; ticks?: number }
 	| { ok: false; denial: Denial };
