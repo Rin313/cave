@@ -115,7 +115,8 @@ export class ProtocolViolation extends Error {
 // ---------- 法则内核：规则即代码，产出即数据（快照线以下是 Delta/Denial/Fact） ----------
 
 /** 规则判定上下文：只读世界视图 + 引擎自有语义的唯一入口（关系/骰子/时间/可见性）。
- *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
+ *  约束：规则只读不写，一切后果经返回的 Delta 表达，由模拟层统一提交/回滚——
+ *  活引用直改由可说性墙在裁决出口拦截（残差即裁决整体作废，law invariant.residual）。 */
 export interface Q {
 	readonly world: World;
 	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值——体验者推导的根与兜底。
@@ -540,6 +541,21 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
 
+/** 账本内容的结构同值（可说性墙的残差判据）：对象按键集、数组按序、原值按 ===。
+ *  不可账本化的值（NaN、函数、undefined 键）与任何快照读数不同值——直改必被识破。 */
+function sameContent(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return false;
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+		return a.every((v, i) => sameContent(v, b[i]));
+	}
+	const ka = Object.keys(a as Record<string, unknown>);
+	const kb = Object.keys(b as Record<string, unknown>);
+	if (ka.length !== kb.length) return false;
+	return ka.every((k) => k in (b as Record<string, unknown>) && sameContent((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。 */
 interface RawResult extends Omit<ActionStep, "kind" | "field"> {
 	deltas: Delta[];
@@ -643,25 +659,27 @@ export class Simulation {
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
 	}
 
-	/** 提交 + 硬墙：先快照；提交内做执行校验（fidelity——裁决必须被完整执行），提交后做不变式校验（执行后的世界必须成立）；
-	 *  任一翼违反即原子回滚整个提交并拒绝。渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；
-	 *  游戏不变式的 message 是游戏撰写的世界腔，直接作玩家文案。 */
-	private commitChecked(deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
+	/** 原子回滚：世界内容恢复为 s0（先删提交期间新建的顶层键——relations 等快照中不存在的——再整体覆写；
+	 *  s0 在恢复后即被丢弃，子对象与 this.world 共享无碍）。 */
+	private restore(s0: World): void {
+		for (const k of Object.keys(this.world)) if (!(k in s0)) delete (this.world as unknown as Record<string, unknown>)[k];
+		Object.assign(this.world, s0);
+	}
+
+	/** 提交 + 硬墙：以裁决入口快照 s0 为回滚基线（提交成功就地生效，任一翼违反即恢复 s0 并拒绝）。
+	 *  提交内做执行校验（fidelity——每条 delta 在其应用时刻必须可执行），提交后做不变式校验（执行后的世界必须成立）；
+	 *  残差翼（world ≡ S0）已在 apply/runSystems 的裁决出口审毕——本函数只见干净裁决。
+	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 直接作玩家文案。 */
+	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
-		const before = this.snapshot();
-		const rollback = (): void => {
-			// 先删掉提交期间新建的键（relations 等快照中不存在的），再整体恢复。
-			for (const k of Object.keys(this.world)) if (!(k in before)) delete (this.world as unknown as Record<string, unknown>)[k];
-			Object.assign(this.world, before);
-		};
 		const out = this.commit(deltas, src);
 		if ("refusal" in out) {
-			rollback();
+			this.restore(s0);
 			return { ok: false, changes: [], denial: out.refusal, reason: messagesFor(this.def).noResponse };
 		}
 		const inv = this.checkInvariants(genesis, out.changes);
 		if (inv) {
-			rollback();
+			this.restore(s0);
 			const denial: Denial = inv.authored
 				? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
 				: { law: `invariant.${inv.id}`, debug: inv.message };
@@ -683,11 +701,19 @@ export class Simulation {
 
 	apply(action: Action): Resolution {
 		const before = this.visible();
+		// 可说性墙：裁决入口快照 S0。裁决出口断言 world ≡ S0——经 Q 活引用直改账本即残差，
+		// 裁决整体作废并回滚到 S0（拒绝路径同审：deltas 为空而世界已变，同为残差）；
+		// 提交以 S0 为回滚基线，出口世界恒为 S0 ⊕ 已提交 deltas。
+		const s0 = this.snapshot();
 		const r = this.adjudicateRaw(action, before);
 		let step: Omit<ActionStep, "field">;
-		if (r.ok) {
+		if (!sameContent(this.world, s0)) {
+			this.restore(s0);
+			const who = r.ok ? (r.src ?? `action:${action.verb}`) : (r.denial?.law ?? action.verb);
+			step = { kind: "action", ok: false, reason: messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: { law: "invariant.residual", debug: `residual: ${who} 在裁决中经活引用直改账本，本次裁决整体作废` }, ticks: attemptCost(this.def.verbs[action.verb]) };
+		} else if (r.ok) {
 			const src = r.src ?? `action:${action.verb}`;
-			const cc = this.commitChecked(r.deltas, src);
+			const cc = this.commitChecked(s0, r.deltas, src);
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
 				step = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
@@ -753,11 +779,19 @@ export class Simulation {
 		};
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
+			// 可说性墙：系统入口快照 S0——sys.run 经 Q 活引用直改账本即残差（含 deltas 为空而世界已变）
+			const s0 = this.snapshot();
 			const res = sys.run(this.query({}));
+			if (!sameContent(this.world, s0)) {
+				this.restore(s0);
+				const before = [...this.visible()]; // 已回滚：读数即系统运行前的参照域
+				emit({ kind: "tick", at: this.world.time, ok: false, reason: messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: { law: "invariant.residual", debug: `residual: system ${sys.id} 在运行中经活引用直改账本，本次产出整体作废` }, src, field: { before, after: [...before] } });
+				continue;
+			}
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			// 每系统的提交是独立过墙边界；回滚即未跨越——世界仍是前态，after 即 before
 			const before = this.visible();
-			const cc = this.commitChecked(res.deltas, src);
+			const cc = this.commitChecked(s0, res.deltas, src);
 			const field: FieldSpan = { before: [...before], after: [...(cc.ok ? this.visible() : before)] };
 			const at = this.world.time;
 			if (!cc.ok) {

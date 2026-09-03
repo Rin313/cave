@@ -2,8 +2,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Step } from "../core/sim.ts";
-import { getGame } from "../games/registry.ts";
+import { GAMES, getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
+import { walltest } from "./walltest.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface ScenarioAction {
@@ -17,6 +18,8 @@ interface StepExpect {
 	state?: Record<string, unknown>;
 	/** 内核契约断言（结构性墙）：期望本步骤触发前置条件违约（未知动词/schema 不符）*/
 	protocol?: "action.unknown" | "action.schema";
+	/** 期望本步骤的刻步被硬墙拦截（残差/不变式——系统产出的必要拦截），拦截即通过 */
+	tickDenied?: boolean;
 }
 
 interface ScenarioStep {
@@ -85,9 +88,17 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				ok = false;
 				reason = "时间流逝，什么也没有发生。";
 			} else {
-				ok = true;
-				reason = results.map((r) => r.reason).join(" ");
-				for (const t of results) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+				const denied = results.filter((t) => !t.ok);
+				if (step.expect.tickDenied) {
+					// 期望刻步被硬墙拦截（残差/不变式）：拦截即通过
+					ok = denied.length > 0;
+					reason = denied.map((t) => t.denial?.debug ?? t.reason).join(" ") || "（无拦截）";
+					if (!ok) problems.push("期望刻步被硬墙拦截，未发生");
+				} else {
+					ok = true;
+					reason = results.map((r) => r.reason).join(" ");
+					for (const t of denied) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+				}
 			}
 		} else if (step.action) {
 			try {
@@ -126,7 +137,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
-			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
+			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
 			actual: `ok=${ok} reason="${reason}"`,
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
@@ -139,10 +150,19 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	};
 }
 
+/** 墙/协议的测试夹具（tools 层自有，不进 games 注册表）：scenario 文件按 id 引用。 */
+const FIXTURES: Record<string, GameDef> = { [walltest.id]: walltest };
+
+function resolveGame(id: string): GameDef {
+	const hit = GAMES[id] ?? FIXTURES[id];
+	if (!hit) throw new Error(`未知游戏：${id}（可用：${Object.keys(GAMES).concat(Object.keys(FIXTURES)).join("、")}）`);
+	return hit;
+}
+
 function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
 	// Simulation 挂研究动词（tick 步骤经同一裁决边界落钟）；断言只涉及游戏动词，不受影响
-	const def = withDevWait(getGame(file.game));
+	const def = withDevWait(resolveGame(file.game));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);
