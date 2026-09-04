@@ -1,4 +1,4 @@
-import type { GameDef, PropDef, PropValue, Q, Step, World } from "../core/sim.ts";
+import type { GameDef, PropDef, Q, Step, ViewValue, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { reachLaw } from "./space.ts";
 import { Type } from "typebox";
@@ -59,8 +59,9 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 	return lines.join("\n");
 }
 
-/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单（无 id 承诺的呈现面；实体索引由 core 装配并保证 ≡ 可见性门）。 */
-function digestExtraYume(world: World, player: string): Record<string, PropValue> {
+/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单（视图载荷 ViewValue——呈现投影形态自由；
+ *  无 id 承诺的呈现面；实体索引由 core 装配并保证 ≡ 可见性门）。 */
+function digestExtraYume(world: World, player: string): Record<string, ViewValue> {
 	const me = entity(world, player);
 	const cur = me?.props["in"] as string | null;
 	return {

@@ -2,7 +2,15 @@ import { Compile } from "typebox/compile";
 import { Type, type Static, type TObject, type TString } from "typebox";
 import { deepFreeze, roll as rollDice } from "./util.ts";
 
-export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
+/** 标量：账本值的原子形态（NaN/Infinity 非标量）。 */
+export type Scalar = string | number | boolean | null;
+
+/** 账本值：可单行线性化的值——标量或标量数组。可说性是账本值的定义性约束（公理一），不是渲染器的义务：
+ *  结构化状态的居所是实体与平键（承重墙键控），不是匿名记录；呈现投影的形态自由由 ViewValue 承载 */
+export type PropValue = Scalar | Scalar[];
+
+/** 视图载荷：呈现投影的 JSON 值——形态自由（只服务呈现的投影不进协议通道），不进账本、不进变更线性化。用户：digestExtra。 */
+export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
 export interface Entity {
 	id: string;
@@ -248,9 +256,10 @@ export interface GameDef {
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
 	/** 状态视图的派生纹理（世界 + 玩家 → 视图 extra 键下的附加纹理）：出口、随身清单等游戏自持语义的呈现。
 	 *  命名空间分区：core 装配字段（time/relations/entities）独占视图顶层，纹理覆写不可表示。
+	 *  视图载荷（ViewValue）形态自由——呈现投影不进协议通道（投影按消费者分类），与账本值分型。
 	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，纹理不承载它；携带可指名 id 时应配合
 	 *  beyondField 引用参数消费（地点恒可指名的声明面：名字来源在实体索引之外，门退位，由法则层回答）。 */
-	digestExtra?: (world: World, player: string) => Record<string, PropValue>;
+	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
 	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
@@ -276,6 +285,17 @@ export interface InvariantCtx {
 export interface Invariant {
 	id: string;
 	check: (world: World, ctx: InvariantCtx) => string | null;
+}
+
+/** 标量判定：NaN/Infinity 非标量。 */
+function isScalarValue(v: unknown): boolean {
+	return v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
+}
+
+/** 账本值形状：标量或标量数组，不嵌套。类型层（PropValue）除名只约束类型化作者——存档恢复路径无类型检查、
+ *  场景 JSON 与 probe 走 as 通道——形状判定在提交翼（commit）与状态翼（integrity）两道边界同拒。 */
+function isLedgerValue(v: unknown): boolean {
+	return isScalarValue(v) || (Array.isArray(v) && v.every(isScalarValue));
 }
 
 /** core 默认硬墙：引用完整性、注册表类型契约与词汇闭合（属性键 ⊆ 注册表）。
@@ -309,7 +329,10 @@ export function integrityInvariant(): Invariant {
 				}
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
-					if (v === null || v === undefined || pd.type === "any") continue;
+					if (v === null || v === undefined) continue;
+					// 账本值形状（可说性的墙侧面）：any 豁免标量类型检查，不豁免形状
+					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (scalar or scalar array)`;
+					if (pd.type === "any") continue;
 					if (pd.type === "id") {
 						// id 型属性契约：标量引用或引用数组；空串视为无引用，与标量规则一致；非字符串即违约
 						for (const ref of Array.isArray(v) ? v : [v]) {
@@ -534,7 +557,8 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 	const msgs = messagesFor(sim.def);
 	const compact = opts?.compact === true;
 	const lines: string[] = [];
-	const said = new Map<number, { changes: Change[]; facts: Fact[] }>();
+	// 刻桶：产出与拦截是同一因果步的两面，按 at 归并（at 随钟单调，插入序即时序）
+	const said = new Map<number, { changes: Change[]; facts: Fact[]; denials: string[] }>();
 	for (const s of steps) {
 		if (s.kind === "action") {
 			const changes = compact ? [] : narratableChanges(sim.def, s.changes).filter(perceivableOf(s));
@@ -543,26 +567,29 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 				s.facts?.length ? `〔${s.facts.map((f) => f.text).join("；")}〕` : "",
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}：${s.reason}${tail}`);
-		} else if (!s.ok) {
-			// 被硬墙拦截的刻步：bug 信号，独立成行（不与同刻产出混写）
-			lines.push(`⏱ ✗ ${s.reason || msgs.defaultReason}`);
 		} else {
-			const held = said.get(s.at) ?? { changes: [], facts: [] };
-			if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).filter(perceivableOf(s)));
-			if (s.facts?.length) held.facts.push(...s.facts);
-			if (held.changes.length || held.facts.length) said.set(s.at, held);
+			const held = said.get(s.at) ?? { changes: [], facts: [], denials: [] };
+			if (s.ok) {
+				if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).filter(perceivableOf(s)));
+				if (s.facts?.length) held.facts.push(...s.facts);
+			} else {
+				held.denials.push(s.reason || msgs.defaultReason);
+			}
+			if (held.changes.length || held.facts.length || held.denials.length) said.set(s.at, held);
 		}
 	}
-	for (const { changes, facts } of said.values()) {
-		lines.push(`⏱ ${[
+	for (const { changes, facts, denials } of said.values()) {
+		if (changes.length || facts.length) lines.push(`⏱ ${[
 			changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
 			facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
 		].join("")}`);
+		for (const d of denials) lines.push(`⏱ ✗ ${d}`);
 	}
-	// 静默刻聚合：每个被授予的刻恰有一个时间标记——同刻产出行、拦截行（独立 ⏱ ✗）、或 ×n 的一份
+	// 静默刻聚合：账目单位是刻（at）不是步——每个被授予的刻恰消费一份时间账目
+	//（产出桶行、拦截行、或同桶两行计一份），静默刻并入 ×n；
+	// compact 裁剪的纯变更刻不建桶（变更由状态视图承载，时间回落 ×n 表达）。
 	const granted = steps.reduce((n, s) => n + (s.kind === "action" ? s.ticks : 0), 0);
-	const deniedTicks = steps.reduce((n, s) => n + (s.kind === "tick" && !s.ok ? 1 : 0), 0);
-	if (granted - said.size - deniedTicks > 0) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size - deniedTicks}`);
+	if (granted - said.size > 0) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size}`);
 	return lines;
 }
 
@@ -603,6 +630,13 @@ export class Simulation {
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
+			// 参数通道与账本值同一形状约束：schema 属性须为标量型
+			for (const p of Object.keys(v.schema.properties)) {
+				const node = (v.schema.properties as Record<string, { type?: string } | undefined>)[p];
+				if (node?.type !== "string" && node?.type !== "number" && node?.type !== "boolean") {
+					throw new Error(`动词 ${name} 的参数「${p}」须为标量型（string/number/boolean），得到 ${String(node?.type)}`);
+				}
+			}
 			for (const p of v.entityParams ?? []) {
 				const node = (v.schema.properties as Record<string, { type?: string } | undefined>)[p];
 				if (!node) throw new Error(`动词 ${name} 的 entityParams「${p}」不是 schema 属性——引用参数声明与动词 schema 是同一事实的两面`);
@@ -920,17 +954,11 @@ export class Simulation {
 			else rs.push({ from, to, type, value });
 		};
 		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", debug: `commit: ${debug}` } });
-		const sayable = (v: PropValue): boolean => {
-			if (typeof v === "number") return Number.isFinite(v);
-			if (Array.isArray(v)) return v.every(sayable);
-			if (v !== null && typeof v === "object") return Object.values(v).every(sayable);
-			return true;
-		};
 		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
 		for (const d of deltas) {
 			if (d.op === "spawn") {
 				if (entity(this.world, d.entity.id)) return refuse(`spawn "${d.entity.id}": entity already exists`);
-				if (!sayable(d.entity.props)) return refuse(`spawn "${d.entity.id}": non-finite number in props`);
+				if (!Object.values(d.entity.props).every(isLedgerValue)) return refuse(`spawn "${d.entity.id}": props contain a non-ledger value (scalar or scalar array)`);
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
 				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name, src });
 				continue;
@@ -955,7 +983,7 @@ export class Simulation {
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (prev === d.value) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
-				if (!sayable(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): non-finite number`);
+				if (!isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
 				if (d.value === null) {
 					// 值 null 即删边（拓扑收缩与生长对称）；能走到此处则边必已存在（prev !== null），rels() 只取已入账的数组；
 					// 原地删——边表是本次提交共享的数组，不可整体替换
@@ -993,7 +1021,7 @@ export class Simulation {
 			const e = entity(this.world, d.entity);
 			if (!e) return refuse(`${d.op} "${d.entity}.${d.prop}": target entity missing`);
 			if (d.op === "set") {
-				if (!sayable(d.value)) return refuse(`set "${d.entity}.${d.prop}": non-finite number`);
+				if (!isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (scalar or scalar array)`);
 				const prev = e.props[d.prop] ?? null;
 				if (prev === d.value) continue;
 				e.props[d.prop] = d.value;

@@ -17,7 +17,9 @@
 			"name": "墙否决的原子回滚：回滚后账本仍可提交（冻结引用不得入账）",
 			"steps": [
 				{ "name": "合法授予被领域不变式否决：整提交回滚，状态零漂移", "action": { "verb": "trip", "params": {} }, "expect": { "ok": false, "reason": "封印", "state": { "player.vault": null, "player.touched": 0 } } },
-				{ "name": "回滚后的干净提交照常（回滚冻结的探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.vault": null } } }
+				{ "name": "回滚后的干净提交照常（回滚冻结的探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.vault": null } } },
+			{ "name": "对象形状值（类型层除名后的 as 夹带）：提交翼拒为非账本值，整提交回滚", "action": { "verb": "smuggle", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.note": null, "player.touched": 1 } } },
+			{ "name": "夹带被拒后账本仍健康（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.note": null } } }
 			]
 		},
 		{

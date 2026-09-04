@@ -1,4 +1,4 @@
-import type { GameDef, PropDef, Q } from "../core/sim.ts";
+import type { GameDef, PropDef, PropValue, Q } from "../core/sim.ts";
 import { D, defineVerb, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
@@ -82,6 +82,12 @@ export const walltest: GameDef = {
 			description: "越权动词：授予后触发审查者（sneaky 不变式）直改账本——冻结读态上写入即抛，崩溃在提交边界兑为墙否决。",
 			schema: Type.Object({}),
 			rules: [{ id: "sneakpoke.grant", judge: (q) => grant([D.inc(q.player, "sneak", 1)], "你碰了潜标。") }],
+		}),
+		smuggle: defineVerb({
+			label: "夹带",
+			description: "越权动词：规则铸出对象形状的 delta——提交翼拒为非账本值（可单行线性化），整提交回滚。",
+			schema: Type.Object({}),
+			rules: [{ id: "smuggle.leak", judge: (q) => grant([D.set(q.player, "note", { a: 1 } as unknown as PropValue)], "你夹带了。") }],
 		}),
 		arm: defineVerb({
 			label: "武装",
