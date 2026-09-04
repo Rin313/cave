@@ -18,7 +18,6 @@ export interface EngineOptions {
 	provider: string;
 	model: string;
 	thinkingLevel?: string;
-	sim?: Simulation;
 	sessionManager?: SessionManager;
 }
 
@@ -83,7 +82,6 @@ interface RunState {
 
 export class Engine {
 	readonly sim: Simulation;
-	private readonly def: GameDef;
 	private session: SessionHandle;
 	private readonly sessionManager: SessionManager;
 	private readonly memory: MemoryTurn[];
@@ -94,7 +92,6 @@ export class Engine {
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
-		def: GameDef,
 		sim: Simulation,
 		session: SessionHandle,
 		sessionManager: SessionManager,
@@ -102,7 +99,6 @@ export class Engine {
 		run: RunState,
 		channel: TurnChannel,
 	) {
-		this.def = def;
 		this.sim = sim;
 		this.session = session;
 		this.sessionManager = sessionManager;
@@ -157,12 +153,14 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
+	/** 映射层以 sim 为单一真源：def 取 sim.def——广告面（act schema 与系统提示）是同一张动词表的
+	 *  非内部投影（internal 动词过裁决边界、不进映射层）。 */
+	static async create(sim: Simulation, options: EngineOptions): Promise<Engine> {
+		const def = sim.def;
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
 		const modelDef = modelRuntime.getModel(options.provider, options.model);
 		if (!modelDef) throw new Error(`模型 ${options.provider}/${options.model} 不可用`);
 
-		const sim = options.sim ?? new Simulation(def);
 		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
 		// 初值 mapping 是失效安全：首个运行前的杂散事件文本会被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", acted: false, visibleBefore: new Set(), settled: "", current: "", proposals: [], warnings: [], usage: [] };
@@ -206,7 +204,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(def, sim, session, sessionManager, memory, run, channel);
+		return new Engine(sim, session, sessionManager, memory, run, channel);
 	}
 
 	get sessionFile(): string | undefined {
@@ -264,7 +262,7 @@ export class Engine {
 			moves: spineLines(this.sim, [...this.outcome.results, ...this.outcome.elapsed], { compact: true }),
 		};
 		this.memory.push(turn);
-		const limit = this.def.memoryLimit;
+		const limit = this.sim.def.memoryLimit;
 		if (this.memory.length > limit) this.memory.splice(0, this.memory.length - limit);
 		try {
 			this.sessionManager.appendCustomEntry(MEMORY_CUSTOM_TYPE, turn);
@@ -318,7 +316,8 @@ function buildTurnPrompt(state: string, intent: string, selection: string | unde
 /** 系统提示 = 表达契约（def.voice，世界语言，core 原样注入）+ 协议块（core 生成）。
  *  协议块是引擎机械的说明书（门闩/拒绝契约/保真与指称纪律）；人格与 craft 属世界语言。 */
 function buildSystemPrompt(def: GameDef): string {
-	const verbs = Object.entries(def.verbs)
+	// internal 动词不进广告面：映射层看不见的动词不可提案，工具边界（pi 校验）与内核前置门同源拒绝
+	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
 		.map(([name, v]) => {
 			const refs = v.entityParams ?? [];
 			const beyond = new Set(v.beyondField ?? []);
@@ -376,8 +375,10 @@ function buildNarratePrompt(sim: Simulation, elapsed: TickStep[], instruction: s
 /** act 工具：本回合唯一的动作提交口（one-shot 门闩）。
  *  execute 内完成：逐动作 apply（裁决→提交→按授予逐刻落钟——时间律的执行在裁决边界内）→ 世界腔策展作为工具结果返回。 */
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
+	// internal 动词不进 act schema：工具边界拒绝发生在 pi 校验层（错误回模型、可重试、门闩未耗）
+	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
 	const actionSchema = Type.Union(
-		Object.entries(def.verbs).map(([name, v]) =>
+		publicVerbs.map(([name, v]) =>
 			Type.Object(
 				{
 					verb: Type.Literal(name),
@@ -390,7 +391,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${Object.keys(def.verbs).join("/")}）。能构造出合法动作（动词承载意图、实体参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 省略 actions（空提案即拒绝，不写任何理由）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
+		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。能构造出合法动作（动词承载意图、实体参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 省略 actions（空提案即拒绝，不写任何理由）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
 				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" }),

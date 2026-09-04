@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
 import { Simulation, spineLines } from "../core/sim.ts";
-import type { GameDef, World } from "../core/sim.ts";
+import type { World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -120,7 +120,6 @@ function printAct(sim: Simulation, o: {
 interface RunCtx {
 	dir: string;
 	meta: RunMeta;
-	def: GameDef;
 	sim: Simulation;
 	engine: Engine;
 }
@@ -134,11 +133,12 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	// Simulation 挂研究动词（wait 走同一裁决边界）；Engine 仍持原始 def——合成动词不进映射层
+	// 单一真源：internal 研究动词与游戏动词同表共存（wait 走同一裁决边界），
+	// Engine 从 sim.def 投影映射层广告面
 	const sim = new Simulation(withDevWait(def), loadState(dir));
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sim, sessionManager: SessionManager.open(meta.sessionFile) });
+	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
 	try {
-		await fn({ dir, meta, def, sim, engine });
+		await fn({ dir, meta, sim, engine });
 	} finally {
 		engine.dispose();
 	}
@@ -156,7 +156,8 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	mkdirSync(dir, { recursive: true });
 	const sim = new Simulation(withDevWait(def));
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sim, sessionManager });
+	// 单一真源：Engine 从 sim.def 投影映射层广告面（internal 研究动词不进广告面）
+	const engine = await Engine.create(sim, { ...engineOptsFromEnv(gameId), sessionManager });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
 		const meta: RunMeta = {

@@ -120,8 +120,10 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** 规则判定上下文：冻结读态 + 引擎自有语义的唯一入口（关系/骰子/时间/可见性）。
- *  只读由结构保证：world 是裁决时读态的深冻结副本；一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。 */
+/** 规则判定上下文：冻结读态 + 引擎自有语义的唯一入口（关系/骰子/时间）。
+ *  只读由结构保证：world 是裁决时读态的深冻结副本；一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。
+ *  无可见域：感知投影只供 core 机器（门/视图/投影）与呈现消费，
+ *  规则分支于世界真相——grounding 的原料谓词（可达性等）住 games 层构件，机制不读自己派生的视图。 */
 export interface Q {
 	readonly world: World;
 	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值——体验者推导的根与兜底。
@@ -139,7 +141,6 @@ export interface Q {
 	relNum(from: string, to: string, type: string, dflt: number): number;
 	/** 确定性骰子（World 纯函数，apply/存档恢复一致）。 */
 	roll(key: string, sides: number): number;
-	visible(): Set<string>;
 }
 
 /** 裁决：授予（未提交 deltas + 世界腔理由 + facts + 授予刻数）或结构化拒绝；规则返回 null = 不表态。
@@ -197,6 +198,7 @@ export function defineVerb<S extends TObject>(spec: {
 	cost?: number;
 	entityParams?: RefKey<S>[];
 	beyondField?: RefKey<S>[];
+	internal?: boolean;
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -207,6 +209,7 @@ export function defineVerb<S extends TObject>(spec: {
 		schema: { ...spec.schema, additionalProperties: false },
 		...(spec.entityParams !== undefined && { entityParams: spec.entityParams }),
 		...(spec.beyondField !== undefined && { beyondField: spec.beyondField }),
+		...(spec.internal !== undefined && { internal: spec.internal }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
 }
@@ -224,6 +227,13 @@ export interface VerbDef {
 	 *  可见性门对其退位——存在性与可达性由法则层给出世界性回答。指称的历史积累不随视野蒸发，
 	 *  瞬时参照域表达不了它，只能由声明让位（地点恒可指名的肯定式声明）。 */
 	beyondField?: string[];
+	/** 内部动词：只存在于裁决面——映射层广告面（act schema 与系统提示）由同一张动词表投影时过滤，
+	 *  由代码直接 apply。推导（公理二出处轴 × 回合协议）：门的调用者是确定性代码，映射层只是其一；
+	 *  act 通道恰服务一个意志——裁决面 ⊋ 广告面是结构事实，补集必须可在声明面表达，
+	 *  否则代码驱动的 apply 只能在「污染意志菜单」与「def 并存双真源」间二选一
+	 *  （裸钟与按部署配置过滤均被否决：前者破钟的唯一写者，后者让事实离开事物）。
+	 *  PropDef.internal 是同一结构在词汇面的实例；广告面与裁决面是一张表的两个消费面，不是两张表。 */
+	internal?: boolean;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为无条件拒绝的兜底规则。 */
 	rules: Rule[];
 }
@@ -749,7 +759,6 @@ export class Simulation {
 				return Number.isFinite(n) ? n : dflt;
 			},
 			roll: (key, sides) => rollDice(world, key, sides),
-			visible: () => this.visibleIn(world),
 		};
 	}
 
