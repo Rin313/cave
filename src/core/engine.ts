@@ -73,7 +73,7 @@ interface RunState {
 	phase: "mapping" | "narration";
 	acted: boolean;
 	visibleBefore: Set<string>;
-	intent?: string;
+	intent?: string | undefined;
 	settled: string;
 	current: string;
 	proposals: { verb: string; params: unknown }[];
@@ -244,7 +244,7 @@ export class Engine {
 			// 摘要兜底原料 = 本回合全部事件（玩家动作 + 时间流逝）
 			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed]);
 		}
-		this.recordTurn(action.intent, this.outcome.elapsed);
+		this.recordTurn(action.intent);
 		return {
 			results: this.outcome.results,
 			elapsed: this.outcome.elapsed,
@@ -257,7 +257,7 @@ export class Engine {
 
 	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。
 	 *  近况 = 回合骨架的 compact 投影（裁决行保留 verdict/理由/事实；变更由状态视图承载）。 */
-	private recordTurn(intent: string, elapsed: TickStep[]): void {
+	private recordTurn(intent: string): void {
 		const turn: MemoryTurn = {
 			time: this.sim.world.time,
 			intent,

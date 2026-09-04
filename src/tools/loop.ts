@@ -80,7 +80,8 @@ function engineOptsFromEnv(gameId: string): { provider: string; model: string; t
 	const provider = process.env[`${prefix}_PROVIDER`];
 	const model = process.env[`${prefix}_MODEL`];
 	if (!provider || !model) throw new Error(`模型未配置：请设置 ${prefix}_PROVIDER 与 ${prefix}_MODEL 环境变量`);
-	return { provider, model, thinkingLevel: process.env[`${prefix}_THINKING`] };
+	const thinkingLevel = process.env[`${prefix}_THINKING`];
+	return { provider, model, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
 const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
@@ -144,7 +145,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 }
 
 function persistRun(ctx: RunCtx): void {
-	ctx.meta.sessionFile = ctx.engine.sessionFile;
+	if (ctx.engine.sessionFile !== undefined) ctx.meta.sessionFile = ctx.engine.sessionFile;
 	saveMeta(ctx.dir, ctx.meta);
 	saveState(ctx.dir, ctx.sim);
 }
@@ -163,7 +164,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 			runId,
 			createdAt: new Date().toISOString(),
 			turn: 0,
-			sessionFile: engine.sessionFile,
+			...(engine.sessionFile !== undefined && { sessionFile: engine.sessionFile }),
 			...engineOptsFromEnv(gameId),
 		};
 		saveMeta(dir, meta);
@@ -182,7 +183,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, meta, sim, engine } = ctx;
-		const outcome = await engine.act({ intent, selection });
+		const outcome = await engine.act(selection === undefined ? { intent } : { intent, selection });
 
 		meta.turn += 1;
 		persistRun(ctx);
@@ -198,7 +199,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			warnings: outcome.warnings,
 			usage: outcome.usage,
 		});
-		printAct(sim, { turn: meta.turn, intent, selection, outcome });
+		printAct(sim, { turn: meta.turn, intent, selection: selection ?? null, outcome });
 	});
 }
 
@@ -246,7 +247,7 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 
 async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async (ctx) => {
-		const { dir, meta, sim, engine } = ctx;
+		const { dir, sim, engine } = ctx;
 		const res = sim.apply(devWait(n));
 		const results = res.elapsed;
 		const { narration: scene, warnings, usage } = await engine.narrate(
@@ -310,8 +311,8 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, waits: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
 			try {
 				const meta = JSON.parse(readFileSync(metaPath(dir), "utf8")) as Partial<RunMeta>;
-				row.provider = meta.provider;
-				row.model = meta.model;
+				if (meta.provider !== undefined) row.provider = meta.provider;
+				if (meta.model !== undefined) row.model = meta.model;
 			} catch {
 				// meta 缺失不阻断聚合
 			}

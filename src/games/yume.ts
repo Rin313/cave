@@ -158,7 +158,7 @@ const interactVerb = defineVerb({
 	schema: Type.Object({ entity: Type.String({ description: "目标实体 id" }) }),
 	entityParams: ["entity"],
 	rules: [
-		{ id: "int.futon", judge: (q, p) => (p.entity !== "futon" ? null : grant([], "床垫陷下去一个你的形状，好像一直在等你回来。")) },
+		{ id: "int.futon", judge: (_q, p) => (p.entity !== "futon" ? null : grant([], "床垫陷下去一个你的形状，好像一直在等你回来。")) },
 		{
 			id: "int.tv",
 			judge: (q, p) => {
@@ -182,10 +182,10 @@ const interactVerb = defineVerb({
 				return grant([D.set(q.player, "ending", true)], "你隔着玻璃，拉住了那只手。手心很凉，回握的力气却很轻。");
 			},
 		},
-		{ id: "int.door.warm", judge: (q, p) => (p.entity !== "door_warm" ? null : grant([], "门把手是温的，像谁刚刚才松开。")) },
-		{ id: "int.door.breath", judge: (q, p) => (p.entity !== "door_breath" ? null : grant([], "门板在你掌心底下缓慢起伏。它在呼吸。")) },
-		{ id: "int.door.cold", judge: (q, p) => (p.entity !== "door_cold" ? null : grant([], "指尖冻得发麻。门缝里有风声，像很远的海。")) },
-		{ id: "int.door.hum", judge: (q, p) => (p.entity !== "door_hum" ? null : grant([], "门在嗡鸣。频率和你的牙一样。")) },
+		{ id: "int.door.warm", judge: (_q, p) => (p.entity !== "door_warm" ? null : grant([], "门把手是温的，像谁刚刚才松开。")) },
+		{ id: "int.door.breath", judge: (_q, p) => (p.entity !== "door_breath" ? null : grant([], "门板在你掌心底下缓慢起伏。它在呼吸。")) },
+		{ id: "int.door.cold", judge: (_q, p) => (p.entity !== "door_cold" ? null : grant([], "指尖冻得发麻。门缝里有风声，像很远的海。")) },
+		{ id: "int.door.hum", judge: (_q, p) => (p.entity !== "door_hum" ? null : grant([], "门在嗡鸣。频率和你的牙一样。")) },
 		{
 			id: "int.bird",
 			judge: (q, p) => {
@@ -233,8 +233,8 @@ const interactVerb = defineVerb({
 				return grant([D.set(q.player, "in", dest)], `独轮车人转了半圈。你再眨眼时，脚下已经是${q.name(dest)}。`);
 			},
 		},
-		{ id: "int.snowman", judge: (q, p) => (p.entity !== "snowman" ? null : grant([], "雪人的两张脸都在笑。你又数了一遍，还是两张。")) },
-		{ id: "int.lake", judge: (q, p) => (p.entity !== "lake" ? null : grant([], "冰层很厚。厚冰下面，有什么东西慢慢地游了过去。")) },
+		{ id: "int.snowman", judge: (_q, p) => (p.entity !== "snowman" ? null : grant([], "雪人的两张脸都在笑。你又数了一遍，还是两张。")) },
+		{ id: "int.lake", judge: (_q, p) => (p.entity !== "lake" ? null : grant([], "冰层很厚。厚冰下面，有什么东西慢慢地游了过去。")) },
 		{
 			id: "interact.fallback",
 			judge: (q) => {

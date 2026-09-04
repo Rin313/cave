@@ -153,7 +153,7 @@ export interface SystemRule {
 }
 
 export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: number): Verdict {
-	return { ok: true, deltas, reason, facts, ticks };
+	return { ok: true, deltas, ...(reason !== undefined && { reason }), ...(facts !== undefined && { facts }), ...(ticks !== undefined && { ticks }) };
 }
 
 /** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。 */
@@ -194,11 +194,11 @@ export function defineVerb<S extends TObject>(spec: {
 	return {
 		label: spec.label,
 		description: spec.description,
-		cost: spec.cost,
+		...(spec.cost !== undefined && { cost: spec.cost }),
 		// 工具边界与内核前置条件同一严格度：多余参数在工具层被拒，而非到内核才触发 ProtocolViolation
 		schema: { ...spec.schema, additionalProperties: false },
-		entityParams: spec.entityParams,
-		beyondField: spec.beyondField,
+		...(spec.entityParams !== undefined && { entityParams: spec.entityParams }),
+		...(spec.beyondField !== undefined && { beyondField: spec.beyondField }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
 }
@@ -582,10 +582,11 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 }
 
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。
- *  授予态 src 必填，拒绝态无变更即无出处。 */
+ *  授予态 src 必填（公理二：后果只能由规则产出）；
+ *  拒绝态 deniedBy/denial 必填（否决必有来源与世界腔；无变更即无出处）。 */
 type RawResult =
 	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas" | "src" | "deniedBy" | "denial">)
-	| ({ ok: false; deltas: Delta[] } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas">);
+	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas" | "deniedBy" | "denial">);
 
 export class Simulation {
 	readonly def: GameDef;
@@ -690,7 +691,7 @@ export class Simulation {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
-				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, facts: v.facts, src: `rule:${r.id}`, ticks: v.ticks ?? cost };
+				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src: `rule:${r.id}`, ticks: v.ticks ?? cost };
 			}
 			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}
@@ -741,13 +742,13 @@ export class Simulation {
 	 *  提交内做执行校验（fidelity——每条 delta 在其应用时刻必须可执行），提交后做不变式校验；
 	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 直接作玩家文案。
 	 *  提交过程的意外异常（规则铸出的坏 delta、审查者自身的 bug——含冻结读态上的越权写）同通道兑为墙否决。 */
-	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: boolean; changes: Change[]; denial?: Denial; reason?: string } {
+	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial; reason: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
 		try {
 			const out = this.commit(deltas, src);
 			if ("refusal" in out) {
 				this.restore(s0);
-				return { ok: false, changes: [], denial: out.refusal, reason: messagesFor(this.def).noResponse };
+				return { ok: false, denial: out.refusal, reason: messagesFor(this.def).noResponse };
 			}
 			const inv = this.checkInvariants(genesis, out.changes);
 			if (inv) {
@@ -755,13 +756,13 @@ export class Simulation {
 				const denial: Denial = inv.authored
 					? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
 					: { law: `invariant.${inv.id}`, debug: inv.message };
-				return { ok: false, changes: [], denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
+				return { ok: false, denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
 			}
 			return { ok: true, changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
-			return { ok: false, changes: [], denial: { law: "invariant.crash", debug }, reason: messagesFor(this.def).noResponse };
+			return { ok: false, denial: { law: "invariant.crash", debug }, reason: messagesFor(this.def).noResponse };
 		}
 	}
 
@@ -791,9 +792,9 @@ export class Simulation {
 			const cc = this.commitChecked(s0, r.deltas, r.src);
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
-				step = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
+				step = { kind: "action", ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 			} else {
-				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, src: r.src, ticks: r.ticks };
+				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), src: r.src, ticks: r.ticks };
 			}
 		} else {
 			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
@@ -859,7 +860,7 @@ export class Simulation {
 			if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
 			const at = this.world.time;
 			if (!cc.ok) {
-				emit({ kind: "tick", at, ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
+				emit({ kind: "tick", at, ok: false, reason: cc.reason, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
 				continue;
 			}
 			emit({
@@ -868,7 +869,7 @@ export class Simulation {
 				ok: true,
 				reason: res.facts?.length ? res.facts.map((f) => f.text).join(" ") : (res.reason ?? messagesFor(this.def).defaultReason),
 				changes: cc.changes,
-				facts: res.facts,
+				...(res.facts !== undefined && { facts: res.facts }),
 				src,
 				field,
 			});

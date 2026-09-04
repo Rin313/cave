@@ -303,7 +303,7 @@ function parseActionToken(token: string, sim: Simulation): Action {
 	return { verb: verbName!, params };
 }
 
-function describeAction(action: Action, def: GameDef): string {
+function describeAction(action: Action): string {
 	const parts = Object.entries(action.params)
 		.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
 		.join(" ");
@@ -325,7 +325,7 @@ interface RuleTrace {
 	verb: string;
 	rule: string;
 	/** undefined＝弃权（返回 null）；true/false＝表态（首表态即判决，后继规则的缺席即未达） */
-	ok?: boolean;
+	ok?: boolean | undefined;
 }
 
 /** 给 def 组合上记录包装（不改原 def、不复制裁决逻辑）：规则仍在真实裁决链上运行，
@@ -380,14 +380,14 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		combos.set(action.verb, (combos.get(action.verb) ?? 0) + 1);
 		trace.length = 0;
 		const fresh = new Simulation(instrumented);
-		const op = describeAction(action, def);
+		const op = describeAction(action);
 		try {
 			const { step, elapsed } = fresh.apply(action);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
 			} else {
 				const bug = step.deniedBy === "invariant" && step.denial && step.denial.reason == null ? (step.denial.debug ?? step.denial.law) : undefined;
-				rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason, bug });
+				rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason, ...(bug !== undefined && { bug }) });
 			}
 			// 刻步只会被不变式硬墙拦截：拦截即系统 bug——授予与拒绝两条路径都要查（授予后落钟的 systems 产出同样过墙）
 			for (const t of elapsed) {

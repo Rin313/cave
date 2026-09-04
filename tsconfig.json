@@ -1,20 +1,30 @@
 {
+	// ── 运行时块：Node 原生类型剥离 / tsc 只做检查 ──
 	"compilerOptions": {
 		"target": "esnext",
+		"lib": ["esnext"],
 		"module": "nodenext",
 		"moduleResolution": "nodenext",
-		"lib": ["esnext"],
+		"moduleDetection": "force",
 		"types": ["node"],
 		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		// ── 语法封禁块 ──
 		"verbatimModuleSyntax": true,
 		"erasableSyntaxOnly": true,
+		// ── 严格核心 ──
 		"strict": true,
-		"noImplicitOverride": true,
+		"exactOptionalPropertyTypes": true,
 		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true,
-		"noEmit": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noUncheckedSideEffectImports": true,
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true
+		// "noPropertyAccessFromIndexSignature": true
 	},
 	"include": ["src/**/*.ts"]
 }

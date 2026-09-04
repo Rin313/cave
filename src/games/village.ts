@@ -47,10 +47,6 @@ const VILLAGE_PROPS: Record<string, PropDef> = {
 	aggressive: { type: "boolean", label: "攻击性" },
 };
 
-function name(w: World, id: string): string {
-	return entity(w, id)?.name ?? id;
-}
-
 const num = (v: unknown): number => Number(v ?? 0);
 /** 可选数值属性的安全读取：仅认有限 number，缺省/非数返回 null（区别于 0——「属性不存在」不可冒充数值）。 */
 const fin = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -145,7 +141,7 @@ export const village: GameDef = {
 			rules: [{
 				id: "wait.pass",
 				// 时长经类型化参数由语言提案、由规则裁决（限制在 1–12）
-				judge: (q, p) => {
+				judge: (_q, p) => {
 					const span = Math.min(12, Math.max(1, Math.floor(Number(p.span ?? 1))));
 					return grant([], span >= 4 ? "你安静地待了好一阵子。" : "你静静地待了一会儿。", undefined, span);
 				},
