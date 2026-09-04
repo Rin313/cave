@@ -236,7 +236,7 @@ export interface GameDef {
 	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
 	/** 近况窗口的回合数（映射层的指代视野）。缺省 0。*/
 	memoryLimit?: number;
-	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见（未声明认识论语义的诚实零） */
+	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见 */
 	grounding?: (world: World, player: string) => string[];
 	/** 边感知（感知推论在关系边上的闭合）：体验者知觉哪些关系边。core 只保留不可覆写的结构过滤。
 	 *  同一谓词约束两面：状态视图（digest.relations）与事件投影（rel 变更行，经 FieldSpan.edges 随步快照） */

@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { Engine, type ActOutcome, type TokenUsage, type TurnWarning } from "../core/engine.ts";
+import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
 import { Simulation, spineLines } from "../core/sim.ts";
 import type { GameDef, World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
@@ -92,8 +92,8 @@ function usageLine(rows: TokenUsage[]): string {
 	return `  tok ×${rows.length}：入 ${k(i)}（缓读 ${k(cr)}／缓写 ${k(cw)}）出 ${k(o)}`;
 }
 
-function warnWarnings(ws: TurnWarning[]): void {
-	for (const w of ws) console.log(`  ⚠ 叙述兜底 round${w.round}：${w.error}`);
+function warnWarnings(ws: string[]): void {
+	for (const w of ws) console.log(`  ⚠ 叙述兜底：${w}`);
 }
 
 function printAct(sim: Simulation, o: {

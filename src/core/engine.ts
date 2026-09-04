@@ -34,8 +34,8 @@ export interface ActOutcome {
 	narration: string;
 	/** act 工具实际收到的动作提案（审计记录）。 */
 	proposals: { verb: string; params: unknown }[];
-	/** 过程报警（未调 act / 散文为空等叙述兜底）。 */
-	warnings: TurnWarning[];
+	/** 过程报警（未调 act / 散文为空等叙述兜底） */
+	warnings: string[];
 	/** 单次 LLM 调用用量，按调用序。 */
 	usage: TokenUsage[];
 }
@@ -43,14 +43,8 @@ export interface ActOutcome {
 /** 场景呈现（narrate）的返回：无意志、无 act 通道。 */
 export interface NarrationOutcome {
 	narration: string;
-	warnings: TurnWarning[];
+	warnings: string[];
 	usage: TokenUsage[];
-}
-
-export interface TurnWarning {
-	round: number;
-	error: string;
-	attempt: string;
 }
 
 export interface TokenUsage {
@@ -83,7 +77,7 @@ interface RunState {
 	settled: string;
 	current: string;
 	proposals: { verb: string; params: unknown }[];
-	warnings: TurnWarning[];
+	warnings: string[];
 	usage: TokenUsage[];
 }
 
@@ -243,7 +237,7 @@ export class Engine {
 		if (!this.run.acted) {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
 			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
-			this.run.warnings.push({ round: 1, error: "模型未调用 act 工具，本回合无裁决", attempt: "" });
+			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
 			narration = this.sim.summarize([]);
 		} else {
 			// 摘要兜底原料 = 本回合全部事件（玩家动作 + 时间流逝）
@@ -291,7 +285,7 @@ export class Engine {
 	private settleNarration(steps: Step[]): string {
 		const text = this.run.settled + this.run.current;
 		if (text.trim() === "") {
-			this.run.warnings.push({ round: 1, error: "散文为空。", attempt: text });
+			this.run.warnings.push("散文为空。");
 			return this.sim.summarize(steps);
 		}
 		return text;
