@@ -1,5 +1,5 @@
 import { Compile } from "typebox/compile";
-import { Type, type Static, type TObject } from "typebox";
+import { Type, type Static, type TObject, type TString } from "typebox";
 import { deepFreeze, roll as rollDice } from "./util.ts";
 
 export type PropValue = string | number | boolean | null | PropValue[] | { [k: string]: PropValue };
@@ -176,14 +176,19 @@ export const D = {
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
 
+/** 引用参数键：schema 中字符串型（含可省略）属性的键——引用参数声明与 schema 类型是同一事实，编译期锁定。 */
+type RefKey<S extends TObject> = {
+	[K in keyof S["properties"] & string]: S["properties"][K] extends TString ? K : never;
+}[keyof S["properties"] & string];
+
 /** 动词定义助手：规则参数 p 由 TypeBox schema 推导为编译期类型（边界处已完成 schema 校验）。 */
 export function defineVerb<S extends TObject>(spec: {
 	label: string;
 	description: string;
 	schema: S;
 	cost?: number;
-	entityParams?: string[];
-	beyondField?: string[];
+	entityParams?: RefKey<S>[];
+	beyondField?: RefKey<S>[];
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -205,7 +210,7 @@ export interface VerbDef {
 	schema: TObject;
 	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。规则可在授予中以 ticks 改写实际流逝。 */
 	cost?: number;
-	/** 声明哪些参数是实体指称：机械渲染按声明解析为名字、probe 按其枚举；可见性门缺省管辖（可指名必看得见）。 */
+	/** 声明哪些参数是实体指称：机械渲染按声明解析为名字、probe 按其枚举；可见性门缺省管辖（可指名必看得见） */
 	entityParams?: string[];
 	/** 域外可指的引用参数（⊆ entityParams）：名字来源在实体索引之外，
 	 *  可见性门对其退位——存在性与可达性由法则层给出世界性回答。指称的历史积累不随视野蒸发，
@@ -596,6 +601,11 @@ export class Simulation {
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
+			for (const p of v.entityParams ?? []) {
+				const node = (v.schema.properties as Record<string, { type?: string } | undefined>)[p];
+				if (!node) throw new Error(`动词 ${name} 的 entityParams「${p}」不是 schema 属性——引用参数声明与动词 schema 是同一事实的两面`);
+				if (node.type !== "string") throw new Error(`动词 ${name} 的 entityParams「${p}」的 schema 须为字符串型（可省略），得到 ${String(node.type)}`);
+			}
 			for (const p of v.beyondField ?? []) {
 				if (!(v.entityParams ?? []).includes(p)) throw new Error(`动词 ${name} 的 beyondField「${p}」未声明为 entityParams——域外可指是引用参数的修饰，不是独立的参数通道`);
 			}
