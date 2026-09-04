@@ -38,6 +38,12 @@
 			"steps": [
 				{ "name": "vault.tick 产出被守恒墙拦截：拦截行独立计时，不再并入 ×n", "tick": 1, "expect": { "tickDenied": true, "lines": ["✓ 流逝(1)：时间流逝。", "⏱ ✗ 封印纹丝不动。"] } }
 			]
+		},
+		{
+			"name": "指称解析按声明：字面字符串与实体 id 碰撞也不得解析，id 型属性解析为展示名",
+			"steps": [
+				{ "name": "字面保持字面，引用解析为名字", "action": { "verb": "tag", "params": {} }, "expect": { "ok": true, "lines": ["✓ 标记：你写下了标记。（你.便签: null → thing；你.指向: null → 那件东西）"] } }
+			]
 		}
 	]
 }

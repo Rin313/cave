@@ -2,16 +2,15 @@ import type { GameDef, PropDef, Q } from "../core/sim.ts";
 import { D, defineVerb, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
-/** 结构墙夹具（tools 层自有，不进 games 注册表；scenarios/walltest.json 引用）：
- *  裁决侧代码（规则/系统）收到的 Q.world 是裁决时读态的深冻结副本——越权写在写入点即抛
- *  TypeError（严格模式），活世界无从触及（规则从未持有可变引用，异步路径同样无门）；
- *  越权写钟（q.world.time）同样被拦——「钟的唯一写者是落钟循环」按构造成立。
- *  审查者（不变式）同权隔离：world 与 ctx.changes 是冻结读态/冻结记录——越权写同样即抛，
- *  崩溃在提交边界兑为墙否决（invariant.crash：先回滚 S0 后拒绝——崩溃可说，不洗白为世界性理由）。
- *  良序游戏（village/yume）永不过墙边界，探测不到回归——本夹具是唯一断言墙契约的仪器。
+/** 结构墙夹具：
+ *  裁决侧代码（规则/系统）收到的 Q.world 是裁决时读态的深冻结副本；
+ *  越权写钟（q.world.time）同样被拦。
+ *  审查者（不变式）同权隔离：world 与 ctx.changes 是冻结读态/冻结记录，
+ *  崩溃在提交边界兑为墙否决（invariant.crash：先回滚 S0 后拒绝）。
+ *  良序游戏永不过墙边界，探测不到回归——本夹具是唯一断言墙契约的仪器。
  *  干净对照步的职责不止「无误伤」：若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），
  *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」。
- *  异步路径不可测也无需测：无句柄可断言，由构造保证。 */
+ *  声明驱动的渲染/投影（字面值不冒充指称）在 tag 场景钉住。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -19,6 +18,9 @@ const PROPS: Record<string, PropDef> = {
 	vault: { type: "boolean", label: "封印" },
 	sneak: { type: "number", label: "潜标" },
 	armed: { type: "boolean", internal: true },
+	// 指称解析契约的字面/引用对照：note 是字面字符串（与实体 id 碰撞也不得解析），ref 是声明引用
+	note: { type: "string", label: "便签" },
+	ref: { type: "id", label: "指向" },
 };
 
 /** 蓄意越权：经 Q 读态直改属性（冻结视图上写入即抛）。 */
@@ -86,10 +88,19 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "arm.ok", judge: (q) => grant([D.set(q.player, "armed", true)], "系统越权已武装。") }],
 		}),
+		tag: defineVerb({
+			label: "标记",
+			description: "字面与引用同值写入：字面字符串保持字面，id 型属性解析为展示名。",
+			schema: Type.Object({}),
+			rules: [{ id: "tag.ok", judge: (q) => grant([D.set(q.player, "note", "thing"), D.set(q.player, "ref", "thing")], "你写下了标记。") }],
+		}),
 	},
 	world: {
 		time: 0,
-		entities: [{ id: "player", name: "你", props: { hp: 10, touched: 0 } }],
+		entities: [
+			{ id: "player", name: "你", props: { hp: 10, touched: 0 } },
+			{ id: "thing", name: "那件东西", props: {} },
+		],
 	},
 	systems: [
 		{

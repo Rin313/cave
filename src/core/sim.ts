@@ -183,6 +183,7 @@ export function defineVerb<S extends TObject>(spec: {
 	schema: S;
 	cost?: number;
 	entityParams?: string[];
+	beyondField?: string[];
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -192,6 +193,7 @@ export function defineVerb<S extends TObject>(spec: {
 		// 工具边界与内核前置条件同一严格度：多余参数在工具层被拒，而非到内核才触发 ProtocolViolation
 		schema: { ...spec.schema, additionalProperties: false },
 		entityParams: spec.entityParams,
+		beyondField: spec.beyondField,
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
 }
@@ -203,8 +205,12 @@ export interface VerbDef {
 	schema: TObject;
 	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。规则可在授予中以 ticks 改写实际流逝。 */
 	cost?: number;
-	/** 声明哪些参数是实体 id（供可见性校验与探测）。 */
+	/** 声明哪些参数是实体指称：机械渲染按声明解析为名字、probe 按其枚举；可见性门缺省管辖（可指名必看得见）。 */
 	entityParams?: string[];
+	/** 域外可指的引用参数（⊆ entityParams）：名字来源在实体索引之外，
+	 *  可见性门对其退位——存在性与可达性由法则层给出世界性回答。指称的历史积累不随视野蒸发，
+	 *  瞬时参照域表达不了它，只能由声明让位（地点恒可指名的肯定式声明）。 */
+	beyondField?: string[];
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为无条件拒绝的兜底规则。 */
 	rules: Rule[];
 }
@@ -238,7 +244,7 @@ export interface GameDef {
 	/** 状态视图的派生纹理（世界 + 玩家 → 视图 extra 键下的附加纹理）：出口、随身清单等游戏自持语义的呈现。
 	 *  命名空间分区：core 装配字段（time/relations/entities）独占视图顶层，纹理覆写不可表示。
 	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，纹理不承载它；携带可指名 id 时应配合
-	 *  非 entityParams 参数消费（地点恒可指名，由法则层回答）。 */
+	 *  beyondField 引用参数消费（地点恒可指名的声明面：名字来源在实体索引之外，门退位，由法则层回答）。 */
 	digestExtra?: (world: World, player: string) => Record<string, PropValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
@@ -430,30 +436,48 @@ export function departedNames(window: readonly { changes: Change[] }[]): Map<str
 	return m;
 }
 
-/** 值的语言无关取值：id 解析为展示名，其余原样字符串化。 */
-export function fmtValue(sim: Simulation, v: PropValue, departed?: ReadonlyMap<string, string>): string {
-	if (v === null) return "null";
-	if (typeof v === "string") {
-		const hit = sim.world.entities.find((e) => e.id === v);
-		if (hit) return hit.name;
-		const gone = departed?.get(v);
-		if (gone !== undefined) return gone;
+/** 声明驱动的取值渲染（渲染与投影的唯一解析点）：ref=true 的取值按引用解析——
+ *  字符串元素解析为展示名（在世读态，或渲染窗口内的离场底表），解析不出原样回显，
+ *  引用身份随 ids 返回（投影据此计指称，id 数组逐元素覆盖）；ref=false 一律字面。
+ *  引用性是声明事实不是推断事实：只有关系端点（结构性引用）与注册表 type:"id" 的属性值是引用。 */
+function renderValue(sim: Simulation, v: PropValue, ref: boolean, departed?: ReadonlyMap<string, string>): { text: string; ids: string[] } {
+	if (!ref) return { text: String(v), ids: [] };
+	const items = Array.isArray(v) ? v : [v];
+	const texts: string[] = [];
+	const ids: string[] = [];
+	for (const item of items) {
+		if (typeof item !== "string" || item === "") {
+			texts.push(String(item));
+			continue;
+		}
+		ids.push(item);
+		texts.push(entity(sim.world, item)?.name ?? departed?.get(item) ?? item);
 	}
-	return String(v);
+	return { text: texts.join("、"), ids };
+}
+
+/** 值位的引用性判定：注册表 type:"id" 的属性值（标量与引用数组）是引用；关系值与未声明值一律字面。 */
+function refProp(sim: Simulation, prop: string): boolean {
+	return sim.def.props?.[prop]?.type === "id";
 }
 
 /** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）。
  *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。
+ *  指称解析走 renderValue（声明驱动）：关系端点是引用，关系值与未声明属性值是字面。
  *  渲染窗口内 despawn 的实体以 departed 兜底解析。 */
 export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
 	if (c.kind === "spawn") return `+ ${c.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
 	if (c.kind === "rename") return `~ ${c.prev} → ${c.next}`;
-	if (c.kind === "rel") return `${fmtValue(sim, c.from, departed)}.${c.type}.${fmtValue(sim, c.to, departed)}: ${fmtValue(sim, c.prev, departed)} → ${fmtValue(sim, c.next, departed)}`;
+	if (c.kind === "rel") {
+		const val = (v: PropValue): string => renderValue(sim, v, false, departed).text;
+		return `${renderValue(sim, c.from, true, departed).text}.${c.type}.${renderValue(sim, c.to, true, departed).text}: ${val(c.prev)} → ${val(c.next)}`;
+	}
 	const e = sim.world.entities.find((x) => x.id === c.entity);
 	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	return `${name}.${label}: ${fmtValue(sim, c.prev, departed)} → ${fmtValue(sim, c.next, departed)}`;
+	const ref = refProp(sim, c.prop);
+	return `${name}.${label}: ${renderValue(sim, c.prev, ref, departed).text} → ${renderValue(sim, c.next, ref, departed).text}`;
 }
 
 /** internal 属性变更过滤（internal 隔离的机械缺省）：internal 不进表达输入的变更线性化。 */
@@ -462,20 +486,16 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
-/** 变更行的指称集：与渲染器的解析行为对齐（fmtValue 会说出名字之处，投影即数指称）——
- *  主语、关系端点、一切解析为实体（在世或窗口内离场）的字符串取值。 */
+/** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。
+ *  主语、关系端点、声明为引用的属性取值（id 型标量与数组元素，解析与否不论——引用身份由声明，
+ *  在场由投影审）。 */
 function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, string>): string[] {
-	const refs: string[] = [];
-	const val = (v: PropValue): void => {
-		if (typeof v === "string" && (entity(sim.world, v) !== undefined || departed.has(v))) refs.push(v);
-	};
-	if (c.kind === "rel") refs.push(c.from, c.to);
-	else refs.push(c.entity);
-	if (c.kind === "rel" || c.kind === "prop") {
-		val(c.prev);
-		val(c.next);
-	}
-	return refs;
+	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity];
+	const ref = refProp(sim, c.prop);
+	return [
+		...renderValue(sim, c.prev ?? null, ref, departed).ids,
+		...renderValue(sim, c.next ?? null, ref, departed).ids,
+	];
 }
 
 /** 回合骨架：事件流的规范单行渲染（线级可说单元的唯一机械）。
@@ -576,6 +596,9 @@ export class Simulation {
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
+			for (const p of v.beyondField ?? []) {
+				if (!(v.entityParams ?? []).includes(p)) throw new Error(`动词 ${name} 的 beyondField「${p}」未声明为 entityParams——域外可指是引用参数的修饰，不是独立的参数通道`);
+			}
 		}
 		// 「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
 		// 否则 t=0 是必要性自由区，def 结构错误与损坏存档要到首次提交才以全量拒绝的形式显形。
@@ -635,7 +658,10 @@ export class Simulation {
 		const msgs = messagesFor(this.def);
 		const verb = this.staticForm(action);
 		const cost = attemptCost(verb);
+		// 门的管辖面 = 引用参数 − 域外可指（beyondField 的名字来源在实体索引之外，门无从审，法则层回答）
+		const beyond = new Set(verb.beyondField ?? []);
 		const invalid = (verb.entityParams ?? [])
+			.filter((p) => !beyond.has(p))
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
 		if (invalid.length) {
@@ -774,31 +800,20 @@ export class Simulation {
 
 	/** 动作线性化（label/name 为游戏世界语，core 只做符号连接）。
 	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。
-	 *  机械指称解析受步的参照域管辖（事件投影的动作侧形态）：在世实体的名字只在跨度内铸造，
-	 *  可见性拒绝（law action.invisible）的尝试不解析活世界，域外 id 原样回显——模型自己的词不是新信息；
-	 *  已公开离场者由 departed 兜底（其名字已经变更行公开）。 */
+	 *  机械指称解析按声明进行且受步的参照域管辖：只有引用参数（entityParams）解析为名字，
+	 *  其余参数一律字面——模型自己的词不是新信息；域内引用解析名字，
+	 *  域外引用原样回显或以已公开离场者的名字兜底（可见性拒绝的参数必在域外——门以裁决前读态
+	 *  为权威集、拒绝不提交）。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
 		const action = step.action;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
-		const raw = step.denial?.law === "action.invisible";
 		const field = new Set([...step.field.before, ...step.field.after]);
-		const name = (v: PropValue): string => {
-			if (typeof v === "string") {
-				if (!raw && field.has(v)) {
-					const hit = entity(this.world, v);
-					if (hit) return hit.name;
-				}
-				const gone = departed?.get(v);
-				if (gone !== undefined) return gone;
-			}
-			return String(v);
-		};
-		const entityParams = new Set(verb.entityParams ?? []);
+		const refs = new Set(verb.entityParams ?? []);
 		const parts = Object.entries(action.params).map(([k, v]) => {
-			if (entityParams.has(k)) return name(v);
-			if (typeof v === "string") return name(v);
-			return String(v);
+			if (!refs.has(k) || typeof v !== "string") return String(v);
+			if (field.has(v)) return entity(this.world, v)?.name ?? departed?.get(v) ?? v;
+			return departed?.get(v) ?? v;
 		});
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
