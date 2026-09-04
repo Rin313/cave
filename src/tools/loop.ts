@@ -104,7 +104,7 @@ function printAct(sim: Simulation, o: {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
 	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
 	for (const a of o.outcome.proposals) console.log(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
-	for (const line of spineLines(sim, [...o.outcome.results, ...o.outcome.elapsed])) console.log(`  ${line}`);
+	for (const line of spineLines(sim, o.outcome.steps)) console.log(`  ${line}`);
 	warnWarnings(o.outcome.warnings);
 	const u = usageLine(o.outcome.usage);
 	if (u) console.log(u);
@@ -193,8 +193,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			intent,
 			selection: selection ?? null,
 			proposals: outcome.proposals,
-			results: outcome.results,
-			elapsed: outcome.elapsed,
+			steps: outcome.steps,
 			narration: outcome.narration,
 			warnings: outcome.warnings,
 			usage: outcome.usage,
@@ -223,7 +222,7 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 				meta.turn += 1;
 				appendTranscript(dir, {
 					turn: meta.turn, phase: "act", intent: line, selection: null,
-					proposals: outcome.proposals, results: outcome.results, elapsed: outcome.elapsed,
+					proposals: outcome.proposals, steps: outcome.steps,
 					narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
 				});
 				printAct(sim, { turn: meta.turn, intent: line, outcome, brief: true });

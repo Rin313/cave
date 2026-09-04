@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type MemoryTurn, type TurnRecord } from "./context.ts";
-import { Simulation, entity, spineLines, viewCard, type Action, type ActionStep, type GameDef, type Step, type TickStep } from "./sim.ts";
+import { Simulation, entity, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -30,9 +30,8 @@ const ACT_TOOL = "act";
 const ACT_LATCH_MSG = "行动窗口已关闭：act 每回合只能在裁决前调用一次。请忽略本次调用，基于回合内已有内容继续输出散文。";
 
 export interface ActOutcome {
-	results: ActionStep[];
-	/** 本回合刻步（动作授予的刻数逐刻运行 systems 的产出）。 */
-	elapsed: TickStep[];
+	/** 本回合事件流：动作步与其授予刻步按构造交错——回合内时序的唯一权威记录（渲染/地籍/近况共享，不得重排）。 */
+	steps: Step[];
 	/** 回合散文：模型生成，为空时回落确定性摘要。 */
 	narration: string;
 	/** act 工具实际收到的动作提案（审计记录）。 */
@@ -63,9 +62,9 @@ export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
 
-/** act 工具 execute 向 Engine 直通回写裁决结果（不经事件流嗅探或工具结果解析往返）。 */
+/** act 工具 execute 向 Engine 直通回写事件流 */
 interface TurnChannel {
-	onAdjudication: ((patch: { results?: ActionStep[]; elapsed?: TickStep[] }) => void) | null;
+	onAdjudication: ((patch: { steps?: Step[] }) => void) | null;
 }
 
 /** 单次 session.prompt 的运行状态。两相：mapping（行动窗口开放，text 丢弃）、narration（裁决已过或呈现服务，
@@ -91,8 +90,8 @@ export class Engine {
 	private readonly records: TurnRecord[];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
-	/** 本回合裁决累积（act 工具经 channel 直通回写）。 */
-	private outcome: { results: ActionStep[]; elapsed: TickStep[] } = { results: [], elapsed: [] };
+	/** 本回合事件流（act 工具经 channel 直通回写，按构造交错）。 */
+	private outcome: { steps: Step[] } = { steps: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
@@ -113,8 +112,7 @@ export class Engine {
 		this.run = run;
 		this.channel = channel;
 		channel.onAdjudication = (patch) => {
-			if (patch.results) this.outcome.results.push(...patch.results);
-			if (patch.elapsed?.length) this.outcome.elapsed = patch.elapsed;
+			if (patch.steps) this.outcome.steps = patch.steps;
 		};
 		session.subscribe((event) => {
 			switch (event.type) {
@@ -233,7 +231,7 @@ export class Engine {
 
 	/** 回合：一次 session.prompt 内先 act 一次性提交（one-shot 门闩），世界回应经工具结果返回，其后输出散文。 */
 	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
-		this.outcome = { results: [], elapsed: [] };
+		this.outcome = { steps: [] };
 		this.beginRun("mapping", action.intent);
 		const state = this.sim.digest();
 		await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection));
@@ -244,12 +242,11 @@ export class Engine {
 			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
 			narration = this.sim.summarize([]);
 		} else {
-			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed]);
+			narration = this.settleNarration(this.outcome.steps);
 		}
-		this.recordTurn(action.intent, [...this.outcome.results, ...this.outcome.elapsed]);
+		this.recordTurn(action.intent, this.outcome.steps);
 		return {
-			results: this.outcome.results,
-			elapsed: this.outcome.elapsed,
+			steps: this.outcome.steps,
 			narration,
 			proposals: this.run.proposals,
 			warnings: this.run.warnings,
@@ -280,10 +277,10 @@ export class Engine {
 	}
 
 	/** 场景呈现：无意志、无行动窗口——不写近况、不触门闩；运行直接进入 narration 相位，越权 act 调用被相位谓词拦截。 */
-	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<NarrationOutcome> {
+	async narrate(instruction: string, steps: Step[] = []): Promise<NarrationOutcome> {
 		this.beginRun("narration");
-		await this.session.prompt(buildNarratePrompt(this.sim, elapsed, instruction));
-		return { narration: this.settleNarration(elapsed), warnings: this.run.warnings, usage: this.run.usage };
+		await this.session.prompt(buildNarratePrompt(this.sim, steps, instruction));
+		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
 	}
 
 	/** 叙述收尾：正文为空 → 确定性摘要兜底。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
@@ -350,8 +347,8 @@ ${verbs}
 
 /** act 工具结果与呈现服务共用的事件策展：spineLines 骨架行（internal 恒滤）+ 未解析行 + 新见段。
  *  新见段 = 本回合新进可见集的实体，以状态视图同形的实体卡（含 id）承载——当回合即可指名，不欠下一回合的 digest。 */
-function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[] = []): string[] {
-	const lines = spineLines(sim, [...results, ...elapsed]);
+function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string[] {
+	const lines = spineLines(sim, steps);
 	if (refused) lines.unshift(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	if (revealed.length) {
 		lines.push("本回合新见：");
@@ -363,13 +360,12 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 	return lines;
 }
 
-function buildResultView(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[]): string {
-	const lines = formatTurnEvents(sim, results, refused, intent, revealed, elapsed);
-	return lines.join("\n");
+function buildResultView(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string {
+	return formatTurnEvents(sim, steps, refused, intent, revealed).join("\n");
 }
 
-function buildNarratePrompt(sim: Simulation, elapsed: TickStep[], instruction: string): string {
-	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, [], false, undefined, [], elapsed)];
+function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string): string {
+	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
 	lines.push("", instruction);
 	return lines.join("\n");
 }
@@ -412,8 +408,8 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			run.acted = true;
 			const proposed = (params.actions ?? []) as Action[];
 			run.proposals = [...proposed];
-			const results: ActionStep[] = [];
-			const elapsed: TickStep[] = [];
+			// 事件流按构造交错（动作步 + 其授予刻步）
+			const steps: Step[] = [];
 			if (proposed.length) {
 				// 静态形态已由 pi 校验；内核同型检查（validateBatch）是批次入口的前置条件——
 				// 违约在首个裁决前原子抛出（pi/sim 校验偏斜即引擎 bug）
@@ -421,15 +417,13 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 				for (const a of proposed) {
 					// 逐动作落钟：后续动作与 systems 都在后一世界态上裁决/运行（世界能在行为之间反应）
 					const res = sim.apply(a);
-					results.push(res.step);
-					elapsed.push(...res.elapsed);
+					steps.push(res.step, ...res.elapsed);
 				}
 			}
-			if (proposed.length) channel.onAdjudication?.({ results, elapsed });
-			// 工具结果是散文的唯一事件源（叙述只能跟随这里的内容）
+			if (proposed.length) channel.onAdjudication?.({ steps });
 			const revealed = [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
 			return {
-				content: [{ type: "text", text: buildResultView(sim, results, proposed.length === 0, run.intent, revealed, elapsed) }],
+				content: [{ type: "text", text: buildResultView(sim, steps, proposed.length === 0, run.intent, revealed) }],
 				details: {},
 			};
 		},

@@ -375,12 +375,14 @@ function edgeKey(r: Pick<Rel, "from" | "to" | "type">): string {
 	return `${r.from}|${r.to}|${r.type}`;
 }
 
-/** 事件流条目：动作步（ActionStep）与世界刻步（TickStep）。 */
+/** 事件流条目：动作步（ActionStep）与世界刻步（TickStep）——一个按构造保序的序列，两种条目均携带钟坐标 at。 */
 export type Step = ActionStep | TickStep;
 
 /** 动作裁决结果：一次动作过门的完整记录。 */
 export interface ActionStep {
 	kind: "action";
+	/** 裁决发生时刻的钟值（门被调用时；本授予的刻步为 at+1..at+ticks）——与 TickStep.at 同一坐标轴。 */
+	at: number;
 	ok: boolean;
 	reason: string;
 	changes: Change[];
@@ -509,8 +511,9 @@ function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, s
 /** 事件流的规范单行渲染（符号承担结构，语言词全部来自 messages/label/规则文案）。
  *  消费者：act 结果视图、近况投影（compact）、loop 控制台、回退摘要。
  *  契约：变更行按该步的可见快照投影——任一指称（主语/端点/引用值）不在快照内整行沉默；理由与 Fact 不过投影；
- *  internal 变更恒滤（覆写者仍可从 steps 原样读取）。刻步按 at 归并，静默刻聚合为「timePassed ×n」——
- *  账目单位是刻，compact 裁剪的纯变更刻不建桶、时间回落 ×n。opts.departed 覆盖离场者底表。 */
+ *  internal 变更恒滤（覆写者仍可从 steps 原样读取）。刻桶按 at 归并并归属其前导动作的授予区间
+ *  （动作是冲洗点，流序即回合内时序）；静默刻按授予归账为「timePassed ×n」（ActionStep.ticks 是
+ *  逐裁决的权威账目）——账目单位是刻，compact 裁剪的纯变更刻不建桶、时间回落 ×n。opts.departed 覆盖离场者底表。 */
 export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean; departed?: ReadonlyMap<string, string> }): string[] {
 	// 指称匹配宇宙 = 在世实体 ∪ 窗口内离场者；隐藏离场者的引用行随之沉默
 	const departedAll = opts?.departed ?? departedNames(steps);
@@ -528,10 +531,26 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 	const msgs = messagesFor(sim.def);
 	const compact = opts?.compact === true;
 	const lines: string[] = [];
-	// 刻桶按 at 归并（at 随钟单调，插入序即时序）
+	// 刻桶按 at 归并并归属其前导动作的授予区间——动作是冲洗点：流序即回合内时序，
+	// 静默刻按授予归账（granted − 有桶行的刻）
 	const said = new Map<number, { changes: Change[]; facts: Fact[]; denials: string[] }>();
+	let granted = 0;
+	const flush = (): void => {
+		for (const { changes, facts, denials } of said.values()) {
+			if (changes.length || facts.length) lines.push(`⏱ ${[
+				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
+				facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
+			].join("")}`);
+			for (const d of denials) lines.push(`⏱ ✗ ${d}`);
+		}
+		const silent = granted - said.size;
+		if (silent > 0) lines.push(`⏱ ${msgs.timePassed} ×${silent}`);
+		said.clear();
+	};
 	for (const s of steps) {
 		if (s.kind === "action") {
+			flush();
+			granted = s.ticks;
 			const changes = compact ? [] : narratableChanges(sim.def, s.changes).filter(perceivableOf(s));
 			const tail = [
 				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
@@ -549,16 +568,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 			if (held.changes.length || held.facts.length || held.denials.length) said.set(s.at, held);
 		}
 	}
-	for (const { changes, facts, denials } of said.values()) {
-		if (changes.length || facts.length) lines.push(`⏱ ${[
-			changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
-			facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
-		].join("")}`);
-		for (const d of denials) lines.push(`⏱ ✗ ${d}`);
-	}
-	// 静默刻聚合：有桶行的刻计一份账，其余刻并入 ×n（compact 的纯变更刻不建桶，回落 ×n）
-	const granted = steps.reduce((n, s) => n + (s.kind === "action" ? s.ticks : 0), 0);
-	if (granted - said.size > 0) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size}`);
+	flush();
 	return lines;
 }
 
@@ -577,8 +587,8 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。
  *  授予态 src 必填（后果的出处标识）；拒绝态 deniedBy/denial 必填（否决必有来源与世界腔）。 */
 type RawResult =
-	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas" | "src" | "deniedBy" | "denial">)
-	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas" | "deniedBy" | "denial">);
+	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "src" | "deniedBy" | "denial">)
+	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">);
 
 export class Simulation {
 	readonly def: GameDef;
@@ -764,6 +774,7 @@ export class Simulation {
 	apply(action: Action): Resolution {
 		// s0 = 裁决读态，硬墙的回滚基线
 		const s0 = this.readState();
+		const at = s0.time;
 		const before = this.visibleIn(s0);
 		const edgesBefore = this.edgeField(s0, before);
 		const r = this.adjudicateRaw(action, before, s0);
@@ -772,12 +783,12 @@ export class Simulation {
 			const cc = this.commitChecked(s0, r.deltas, r.src);
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
-				step = { kind: "action", ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
+				step = { kind: "action", at, ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 			} else {
-				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), src: r.src, ticks: r.ticks };
+				step = { kind: "action", at, ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), src: r.src, ticks: r.ticks };
 			}
 		} else {
-			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
+			step = { kind: "action", at, ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
 		// 可见快照在落钟前闭合；无提交（法则拒绝或硬墙回滚）则边界未跨越，after 即 before
 		const afterVis = step.ok ? this.visible() : before;
