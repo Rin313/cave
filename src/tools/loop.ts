@@ -124,7 +124,7 @@ interface RunCtx {
 	engine: Engine;
 }
 
-/** 打开既有 run 并装配引擎（load meta/state → open session → Engine.create），fn 结束后 dispose。 */
+/** 打开既有 run 并装配引擎；fn 结束后 dispose。 */
 async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
@@ -133,7 +133,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	// 单一真源：internal 研究动词与游戏动词同表共存（wait 走同一裁决边界），
+	// 唯一真相源：internal 研究动词与游戏动词同表共存（wait 走同一裁决边界），
 	// Engine 从 sim.def 投影映射层广告面
 	const sim = new Simulation(withDevWait(def), loadState(dir));
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
@@ -156,7 +156,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	mkdirSync(dir, { recursive: true });
 	const sim = new Simulation(withDevWait(def));
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	// 单一真源：Engine 从 sim.def 投影映射层广告面（internal 研究动词不进广告面）
+	// 唯一真相源：Engine 从 sim.def 投影映射层广告面（internal 研究动词不进广告面）
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(gameId), sessionManager });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
@@ -298,7 +298,6 @@ interface ReportRow {
 	lastIn: number | null;
 }
 
-/** 汇总 runs/ 下各 run 的回合数与 token 用量 */
 function collectReport(gameId: string | undefined): ReportRow[] {
 	const rows: ReportRow[] = [];
 	if (!existsSync(RUNS_ROOT)) return rows;

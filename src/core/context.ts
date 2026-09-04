@@ -50,7 +50,6 @@ export function projectWindow(sim: Simulation, records: readonly TurnRecord[]): 
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { compact: true, departed }) }));
 }
 
-/** 近况渲染：符号连接 + 游戏自产的世界腔理由 */
 export function renderMemory(memory: readonly MemoryTurn[]): string {
 	if (!memory.length) return "";
 	const lines = memory.map((m) => {

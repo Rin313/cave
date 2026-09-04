@@ -94,7 +94,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	for (const [i, step] of scenario.steps.entries()) {
 		let ok: boolean;
 		let reason: string;
-		let threw: string | null = null; // 本步骤在裁决中抛出的错误信息（结构墙拦截路径）
+		let threw: string | null = null;
 		const problems: string[] = [];
 		let stepSteps: Step[] | null = null; // 本步骤产生的 [动作步, ...刻步]（spineLines 渲染输入）
 		if (step.tick != null) {
@@ -190,7 +190,6 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	};
 }
 
-/** 墙/协议的测试夹具 */
 const FIXTURES: Record<string, GameDef> = { [walltest.id]: walltest };
 
 function resolveGame(id: string): GameDef {

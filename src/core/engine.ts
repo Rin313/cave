@@ -158,7 +158,7 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	/** 映射层以 sim 为单一真源：def 取 sim.def——广告面（act schema 与系统提示）是同一张动词表的
+	/** 映射层以 sim 为唯一真相源：def 取 sim.def——广告面（act schema 与系统提示）是同一张动词表的
 	 *  非内部投影（internal 动词过裁决边界、不进映射层）。 */
 	static async create(sim: Simulation, options: EngineOptions): Promise<Engine> {
 		const def = sim.def;
@@ -177,7 +177,6 @@ export class Engine {
 		if (def.memoryLimit === undefined) throw new Error("GameDef.memoryLimit 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
 		if (!Number.isInteger(def.memoryLimit) || def.memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(def.memoryLimit)}`);
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-		// 近况的事实源：回合地籍条目从会话文件读入；投影缓存在 Engine 构造时由 updateMemory 填充
 		const records = loadRecords(sessionManager.getEntries());
 		const memory: MemoryTurn[] = [];
 		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
@@ -371,7 +370,6 @@ function formatTurnEvents(sim: Simulation, results: ActionStep[], refused: boole
 	return lines;
 }
 
-/** act 工具结果：本回合世界回应的世界腔策展 */
 function buildResultView(sim: Simulation, results: ActionStep[], refused: boolean, intent: string | undefined, revealed: string[], elapsed: TickStep[]): string {
 	const lines = formatTurnEvents(sim, results, refused, intent, revealed, elapsed);
 	return lines.join("\n");

@@ -59,14 +59,14 @@ export const walltest: GameDef = {
 			label: "戳",
 			description: "越权动词：规则直改 hp 后授予（冻结读态上写入即抛，授予不存在）。",
 			schema: Type.Object({}),
-				rules: [{
-					id: "poke.leak",
-					judge: (q) => {
-						leakHp(q);
-						const me = entity(q.world, q.player)!;
-						return grant([D.set(q.player, "touched", num(me.props.touched) + 1)], "你戳了一下。");
-					},
-				}],
+			rules: [{
+				id: "poke.leak",
+				judge: (q) => {
+					leakHp(q);
+					const me = entity(q.world, q.player)!;
+					return grant([D.set(q.player, "touched", num(me.props.touched) + 1)], "你戳了一下。");
+				},
+			}],
 		}),
 		clockpoke: defineVerb({
 			label: "拨钟",
@@ -136,7 +136,7 @@ export const walltest: GameDef = {
 		}),
 		edgeobj: defineVerb({
 			label: "对象边",
-			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（宽读契约的边界）。",
+			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（边值与属性值同一账本形状）。",
 			schema: Type.Object({}),
 			rules: [{ id: "edgeobj.leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as RelValue)], "你夹带了。") }],
 		}),

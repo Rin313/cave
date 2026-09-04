@@ -9,7 +9,7 @@ export type Scalar = string | number | boolean | null;
  *  呈现投影的形态自由由 ViewValue 承载 */
 export type PropValue = Scalar | Scalar[];
 
-/** 存储边永不持 null：「无边」由边表缺席表达，relVal 以 null 回答；null 只作为 relSet 的删边信号存在。 */
+/** 非空边值：null 只作为 relSet 的删边信号存在，不入账。 */
 export type RelValue = Exclude<PropValue, null>;
 
 /** 视图载荷：呈现投影的 JSON 值——形态自由（只服务呈现的投影不进协议通道），不进账本、不进变更线性化。用户：digestExtra。 */
@@ -21,7 +21,7 @@ export interface Entity {
 	props: Record<string, PropValue>;
 }
 
-/** 关系边：社会/叙事状态的原子原语（存储边永不持 null——「无边」由数组缺席表达，relVal 以 null 回答） */
+/** 关系边：社会/叙事状态的原子原语。存储边永不持 null——「无边」由边表缺席表达（relVal 以 null 回答） */
 export interface Rel {
 	from: string;
 	to: string;
@@ -32,7 +32,6 @@ export interface Rel {
 export interface World {
 	time: number;
 	entities: Entity[];
-	/** 关系边表：from→to 的 type 关系。游戏声明，规则以 deltas 变更。 */
 	relations?: Rel[];
 }
 
@@ -57,7 +56,6 @@ export type Change =
 	| { kind: "spawn"; entity: string; name: string; src: string }
 	| { kind: "despawn"; entity: string; name: string; src: string };
 
-/** 动作提案：由游戏声明的动词表（verb）驱动，参数由动词 schema 约束。 */
 export interface Action {
 	verb: string;
 	params: Record<string, PropValue>;
@@ -69,7 +67,7 @@ export interface Action {
 export interface Messages {
 	/** 所有法则均未表态时的兜底回应；core 完整性不变式违反也回落此文案。 */
 	noResponse: string;
-	/** 实体参数不可见/不存在（core 校验层拒绝）的统一世界腔：幻觉 id 与隐藏实体同一文案。 */
+	/** 实体参数不可见/不存在的统一世界腔：幻觉 id 与隐藏实体同一文案。 */
 	invisibleEntity?: string;
 	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
@@ -84,25 +82,20 @@ export interface Fact {
 	text: string;
 }
 
-/** 属性类型。 */
 export type PropType = "string" | "number" | "boolean" | "id" | "tags" | "any";
 
-/** 属性注册表条目：类型的声明、世界化标签、内部标记 */
 export interface PropDef {
 	type: PropType;
-	/** 世界化说法（拒绝/变更文本里的属性名）。 */
+	/** 世界化说法（变更线性化文本里的属性名）。 */
 	label?: string;
 	/** 内部属性：不进 LLM 序列化、不进变更线性化（从源头杜绝泄漏）。 */
 	internal?: boolean;
 }
 
-/** 结构化拒绝：法则身份 + 世界腔理由 + 机器诊断。 */
 export interface Denial {
-	/** 法则标识 */
 	law: string;
 	/** 世界腔拒绝文案（法则 text 内联渲染 / 可达性构件 prose / 不变式 message）；缺省回落到 messages.noResponse。 */
 	reason?: string;
-	/** 审计用诊断 */
 	debug?: string;
 }
 
@@ -168,7 +161,6 @@ export function deny(law: string, o: { reason?: string } = {}): Verdict {
 	return { ok: false, denial: { law, ...o } };
 }
 
-/** Delta 构造糖。 */
 export const D = {
 	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
 	relSet: (from: string, to: string, type: string, value: RelValue | null): Delta => ({ op: "relSet", from, to, type, value }),
@@ -235,7 +227,7 @@ export interface GameDef {
 	world: World;
 	/** 时间系统：每 tick 按注册顺序运行的系统规则（world→deltas 的纯函数）。 */
 	systems?: SystemRule[];
-	/** 属性注册表：属性类型/世界化标签/内部标记。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），describeAction 与拒绝渲染读 label。词汇闭合：实体的属性键 ⊆ 注册表（integrity 墙钉住），缺省空注册表即不允许任何属性。 */
+	/** 属性注册表：属性类型/世界化标签/内部标记。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），变更线性化读 label。词汇闭合：实体的属性键 ⊆ 注册表（integrity 墙钉住），缺省空注册表即不允许任何属性。 */
 	props?: Record<string, PropDef>;
 	/** 回退摘要的声音覆写（可选）：缺省由引擎装配回合骨架投影（spineLines 单行连接，空步回落 noResponse）。
 	 *  覆写用于文学化兜底：steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
@@ -368,7 +360,6 @@ export function integrityInvariant(): Invariant {
 	};
 }
 
-/** 获取游戏声明的用户可见文案 */
 export function messagesFor(def: GameDef): Messages {
 	return def.messages;
 }
@@ -386,7 +377,6 @@ export function viewCard(def: GameDef, e: Entity): { id: string; name: string; p
 	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))) };
 }
 
-/** 属性世界化标签（拒绝/变更文本中的说法；无则返回 undefined）。 */
 export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
@@ -608,17 +598,14 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 	return lines;
 }
 
-/** 属性读取 */
 export function propGet(e: Entity, prop: string): PropValue {
 	return e.props[prop] ?? null;
 }
 
-/** 关系查询：from→to 的指定 type 的值（无则 null）。 */
 export function relVal(world: World, from: string, to: string, type: string): RelValue | null {
 	return world.relations?.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 关系查询：from 的全部关系边（可按 type 过滤）。 */
 export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
@@ -761,7 +748,6 @@ export class Simulation {
 		return (this.genesisCache ??= this.readState());
 	}
 
-	/** 静态形态违约的机器诊断 */
 	private schemaErrors(verbName: string, params: Record<string, PropValue>): string {
 		const errs = this.validators.get(verbName)!.Errors(params);
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
@@ -866,7 +852,6 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
-	/** 落钟执行器 */
 	private tick(n = 1): TickStep[] {
 		const out: TickStep[] = [];
 		for (let i = 0; i < n; i++) {
