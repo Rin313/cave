@@ -1,4 +1,4 @@
-import type { GameDef, PropDef, PropValue, Q } from "../core/sim.ts";
+import type { Entity, GameDef, PropDef, PropValue, Q, RelValue } from "../core/sim.ts";
 import { D, defineVerb, entity, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
@@ -100,6 +100,30 @@ export const walltest: GameDef = {
 			description: "字面与引用同值写入：字面字符串保持字面，id 型属性解析为展示名。",
 			schema: Type.Object({}),
 			rules: [{ id: "tag.ok", judge: (q) => grant([D.set(q.player, "note", "thing"), D.set(q.player, "ref", "thing")], "你写下了标记。") }],
+		}),
+		blank: defineVerb({
+			label: "置空引用",
+			description: "墙契约：id 引用写空串——无哨兵惯例（「无引用」由 null/缺席表达），integrity 拒绝。",
+			schema: Type.Object({}),
+			rules: [{ id: "blank.leak", judge: (q) => grant([D.set(q.player, "ref", "")], "你写下了一段空白。") }],
+		}),
+		junkspawn: defineVerb({
+			label: "夹带生灭",
+			description: "墙契约：spawn 带实体形状外的顶层键——形状封闭拒绝（公理一「此外无物」）。",
+			schema: Type.Object({}),
+			rules: [{ id: "junkspawn.leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
+		}),
+		edgearr: defineVerb({
+			label: "数组边",
+			description: "墙契约：边值与属性值同一账本形状——标量数组合法入账。",
+			schema: Type.Object({}),
+			rules: [{ id: "edgearr.ok", judge: () => grant([D.relSet("player", "thing", "标记", ["甲"])], "你系了一条带标记的边。") }],
+		}),
+		edgeobj: defineVerb({
+			label: "对象边",
+			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（宽读契约的边界）。",
+			schema: Type.Object({}),
+			rules: [{ id: "edgeobj.leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as RelValue)], "你夹带了。") }],
 		}),
 	},
 	world: {

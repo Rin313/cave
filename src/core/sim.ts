@@ -9,6 +9,9 @@ export type Scalar = string | number | boolean | null;
  *  呈现投影的形态自由由 ViewValue 承载 */
 export type PropValue = Scalar | Scalar[];
 
+/** 存储边永不持 null：「无边」由边表缺席表达，relVal 以 null 回答；null 只作为 relSet 的删边信号存在。 */
+export type RelValue = Exclude<PropValue, null>;
+
 /** 视图载荷：呈现投影的 JSON 值——形态自由（只服务呈现的投影不进协议通道），不进账本、不进变更线性化。用户：digestExtra。 */
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
@@ -23,7 +26,7 @@ export interface Rel {
 	from: string;
 	to: string;
 	type: string;
-	value: number | string | boolean;
+	value: RelValue;
 }
 
 export interface World {
@@ -38,7 +41,7 @@ export interface World {
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "inc"; entity: string; prop: string; by: number }
-	| { op: "relSet"; from: string; to: string; type: string; value: number | string | boolean | null }
+	| { op: "relSet"; from: string; to: string; type: string; value: RelValue | null }
 	| { op: "relInc"; from: string; to: string; type: string; by: number }
 	| { op: "rename"; entity: string; value: string }
 	| { op: "spawn"; entity: Entity }
@@ -169,7 +172,7 @@ export function deny(law: string, o: { reason?: string } = {}): Verdict {
 export const D = {
 	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
 	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
-	relSet: (from: string, to: string, type: string, value: number | string | boolean | null): Delta => ({ op: "relSet", from, to, type, value }),
+	relSet: (from: string, to: string, type: string, value: RelValue | null): Delta => ({ op: "relSet", from, to, type, value }),
 	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
 	rename: (entity: string, value: string): Delta => ({ op: "rename", entity, value }),
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
@@ -302,7 +305,17 @@ export function integrityInvariant(): Invariant {
 	return {
 		id: "integrity",
 		check: (world, ctx) => {
-			const ids = new Set(world.entities.map((e) => e.id));
+			// 形状封闭先于内容（公理一「此外无物」的状态翼兑现）：账本容器与顶层键按声明形状受审
+			if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
+			if (world.relations != null && !Array.isArray(world.relations)) return "integrity: world.relations must be an array";
+			for (const k of Object.keys(world)) {
+				if (k !== "time" && k !== "entities" && k !== "relations") return `integrity: world.${k} is not part of the ledger shape`;
+			}
+			const ids = new Set<string>();
+			for (const e of world.entities) {
+				if (e === null || typeof e !== "object" || Array.isArray(e)) return "integrity: entity must be a record";
+				ids.add(e.id);
+			}
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
 			if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
 			// playerId 是 def 指向世界的唯一数据引用（体验者推导与感知钩子的解引用原点），每次裁决都被解引用，
@@ -314,6 +327,11 @@ export function integrityInvariant(): Invariant {
 				// 卡片契约：id 与名字是引擎自有词汇的在场保证（存档恢复路径无类型检查，腐蚀通道在此封死）
 				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
 				if (typeof e.name !== "string" || e.name === "") return `integrity: ${e.id}.name must be non-empty string`;
+				// 形状封闭：实体顶层键 ⊆ {id, name, props}（记录形状已由 ids 遍历担保）
+				for (const k of Object.keys(e)) {
+					if (k !== "id" && k !== "name" && k !== "props") return `integrity: ${e.id}.${k} is not part of the entity shape`;
+				}
+				if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return `integrity: ${e.id}.props must be a record`;
 				// 词汇闭合：type 层封闭、token 层开放（与动词表同构），未声明词汇不入账；动态键值对走关系边、自由值形状走 any/tags
 				for (const k of Object.keys(e.props)) {
 					if (!vocabulary.has(k)) return `integrity: ${e.id}.${k} is not declared in the prop registry`;
@@ -325,10 +343,10 @@ export function integrityInvariant(): Invariant {
 					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (scalar or scalar array)`;
 					if (pd.type === "any") continue;
 					if (pd.type === "id") {
-						// id 型属性契约：标量引用或引用数组；空串视为无引用，与标量规则一致；非字符串即违约
+						// id 型属性契约：标量引用或引用数组，指向存在的实体；「无引用」由 null/缺席表达（无哨兵空串），非字符串即违约
 						for (const ref of Array.isArray(v) ? v : [v]) {
 							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
-							if (ref !== "" && !ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
+							if (!ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
 						}
 						continue;
 					}
@@ -343,7 +361,9 @@ export function integrityInvariant(): Invariant {
 				}
 			}
 			for (const r of world.relations ?? []) {
+				if (r === null || typeof r !== "object" || Array.isArray(r)) return "integrity: relation must be a record";
 				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
+				if (r.value === null || !isLedgerValue(r.value)) return `integrity: relation ${r.type} -> value is not a ledger value (stored edges never hold null)`;
 			}
 			return null;
 		},
@@ -465,7 +485,7 @@ function renderValue(sim: Simulation, v: PropValue, ref: boolean, departed?: Rea
 	const texts: string[] = [];
 	const ids: string[] = [];
 	for (const item of items) {
-		if (typeof item !== "string" || item === "") {
+		if (typeof item !== "string") {
 			texts.push(String(item));
 			continue;
 		}
@@ -586,7 +606,7 @@ export function propGet(e: Entity, prop: string): PropValue {
 }
 
 /** 关系查询：from→to 的指定 type 的值（无则 null）。 */
-export function relVal(world: World, from: string, to: string, type: string): number | string | boolean | null {
+export function relVal(world: World, from: string, to: string, type: string): RelValue | null {
 	return world.relations?.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
@@ -921,7 +941,7 @@ export class Simulation {
 		// 边表只在首个需要写入的边 delta 到来时入账
 		// 一经入账，本提交内保持同一数组引用
 		const rels = (): Rel[] => (this.world.relations ??= []);
-		const upsertRel = (from: string, to: string, type: string, value: number | string | boolean) => {
+		const upsertRel = (from: string, to: string, type: string, value: RelValue) => {
 			const rs = rels();
 			const hit = rs.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
