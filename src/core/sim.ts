@@ -787,8 +787,10 @@ export class Simulation {
 		return { step: { ...step, field }, elapsed };
 	}
 
-	/** 尝试行线性化：只有引用参数（entityParams）解析为名字，其余参数一律字面。
-	 *  域内引用取在世名，域外引用原样回显或以已公开离场者兜底（可见性拒绝的参数必在域外——
+	/** 尝试行线性化：参数按 schema 声明序渲染（不随提案 JSON 键序漂移）；只有引用参数（entityParams）
+	 *  解析为名字，其余一律字面。名字在渲染时刻解析，与变更行/指称集消费同一解析链（renderValue）：
+	 *  域内引用取现值名（改名连续性）；域外引用不查在世名——活体名解析仅限已感知指称，
+	 *  否则尝试行成为隐藏实体的存在性 oracle；已公开离场名兜底，其余原样回显（可见性拒绝的参数必在域外——
 	 *  门以裁决前可见集为权威、拒绝不提交）。departed 兜底本渲染窗口内已 despawn 的参数实体。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
 		const action = step.action;
@@ -796,11 +798,14 @@ export class Simulation {
 		if (!verb) return action.verb;
 		const field = new Set([...step.field.before, ...step.field.after]);
 		const refs = new Set(verb.entityParams ?? []);
-		const parts = Object.entries(action.params).map(([k, v]) => {
-			if (!refs.has(k) || typeof v !== "string") return String(v);
-			if (field.has(v)) return entity(this.world, v)?.name ?? departed?.get(v) ?? v;
-			return departed?.get(v) ?? v;
-		});
+		const parts = Object.keys(verb.schema.properties)
+			.filter((k) => k in action.params)
+			.map((k) => {
+				const v = action.params[k]!;
+				if (!refs.has(k) || typeof v !== "string") return renderValue(this, v, false, departed).text;
+				if (!field.has(v)) return departed?.get(v) ?? v;
+				return renderValue(this, v, true, departed).text;
+			});
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
