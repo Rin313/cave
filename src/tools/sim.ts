@@ -60,7 +60,7 @@ interface ScenarioReport {
 	steps: StepReport[];
 }
 
-/** 场景文件是手写 JSON，参数原样入裁决瓶颈：动词/schema 错写触发内核前置条件违约（ProtocolViolation） */
+/** 场景文件为手写 JSON：参数原样传入，动词/schema 错写触发 ProtocolViolation（内核前置条件违约） */
 function asAction(a: ScenarioAction): Action {
 	return { verb: a.verb, params: a.params as Record<string, PropValue> };
 }
@@ -137,8 +137,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				reason = res.step.reason;
 				for (const t of res.elapsed) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
 			} catch (e) {
-				// 前置条件违约在裁决之外：场景文件的动词/参数笔误，不得洗白为「世界拒绝」类的合法失败；
-				// 显式声明 expect.protocol / expect.throws 的步骤例外——作者在此断言内核契约（结构性墙）
+				// 前置条件违约是场景笔误，不得混同于世界拒绝；显式声明 expect.protocol / expect.throws 的步骤例外
 				ok = false;
 				reason = e instanceof Error ? e.message : String(e);
 				threw = reason;
@@ -488,7 +487,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		const isAdvance = head === "advance";
 		const n = isAdvance ? Number(parts[1] ?? 1) : 0;
 		const actionDesc = isAdvance ? `advance ${n}` : token;
-		// apply 即完整裁决边界：动作按授予刻数自动流逝（时间律）；advance 是研究摇钟（dev.wait 合成动词，同一扇门）
+		// apply 含落钟：动作按授予刻数自动流逝；advance 经 dev.wait 合成动词走同一裁决边界
 		let results: Step[];
 		if (isAdvance) {
 			const res = sim.apply(devWait(n));
@@ -529,7 +528,7 @@ async function main(): Promise<void> {
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
-    动作按裁决授予的刻数自动流逝（时间律：apply 即完整裁决边界）；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
+    动作按裁决授予的刻数自动流逝；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
   sim probe --game <id> [--max <n>]    裁决地图：每动词穷举 entityParams × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态显影：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;

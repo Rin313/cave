@@ -144,7 +144,6 @@ export const village: GameDef = {
 			schema: Type.Object({ span: Type.Optional(Type.Number({ description: "等待的刻数（1–12），缺省一刻" })) }),
 			rules: [{
 				id: "wait.pass",
-				// 时长经类型化参数由语言提案、由规则裁决（限制在 1–12）
 				judge: (_q, p) => {
 					const span = Math.min(12, Math.max(1, Math.floor(Number(p.span ?? 1))));
 					return grant([], span >= 4 ? "你安静地待了好一阵子。" : "你静静地待了一会儿。", undefined, span);
@@ -326,7 +325,6 @@ export const village: GameDef = {
 					id: "dog.chase",
 					// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 					judge: (q, p) => {
-						// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
 						if (entity(q.world, p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { reason: `${nameOf(q, p.dog)}不是赶得跑的野兽。` });
 						if (entity(q.world, p.dog)?.props.alive !== true) return deny("dog.gone", { reason: `${nameOf(q, p.dog)}已经被赶跑了，不在这里了。` });
 						const me = entity(q.world, q.player)!;
@@ -356,8 +354,7 @@ export const village: GameDef = {
 			}],
 		}),
 	},
-	// 时间律：世界时间只经裁决边界流逝，刻数由裁决授予（VerbDef.cost / Verdict.ticks）——
-	// 多数劳作一刻，吃喝攀谈瞬时，昏睡一夜四刻
+	// 刻数：劳作/汲水/采集/修葺/驱逐一刻，昏睡四刻，其余瞬时
 	world: {
 		time: 0,
 		entities: [
@@ -380,8 +377,6 @@ export const village: GameDef = {
 	systems: [
 		{
 			id: "dog.forebode",
-			// 征兆即世界事件：夜袭前一刻的 fact-only 氛围输出（迟滞阈值——有吠声未必有袭击）。
-			// 「即将发生」不进协议通道（core 不编辑感知），先兆由世界供给：有出处、跨回合同一、与袭击同一出处纪律。
 			run: (q) => {
 				if (q.time % 4 !== 2) return null;
 				const beasts = q.world.entities.filter((e) => e.props.alive === true && e.props.aggressive === true);
@@ -436,7 +431,6 @@ export const village: GameDef = {
 		},
 		{
 			id: "field.grow",
-			// 泛化到一切声明了 yields 的田：产出键控于属性，不再依赖内部标记
 			run: (q) => {
 				if (q.time % 4 !== 0) return null;
 				return {
@@ -454,8 +448,7 @@ export const village: GameDef = {
 	invariants: [
 		{
 			id: "coins.conserved",
-			// era/DoL 守恒模式：铜币总量 == 种子值（含村里散落的铜币），任何提交凭空铸币/灭币都被回滚；
-			// 种子读 genesis（实际起点世界）而非 def.world——存档恢复/变体开局时两者不同
+			// 铜币总量 == 种子值（含村里散落的铜币）。种子读 genesis 而非 def.world——存档恢复/变体开局时两者不同
 			check: (world, ctx) => {
 				const seed = sumProp(ctx.genesis, "coins");
 				const now = sumProp(world, "coins");
@@ -464,9 +457,7 @@ export const village: GameDef = {
 		},
 		{
 			id: "coins.provenance",
-			// 过渡不变式：守恒防总量漂移，本条防错误再分配——coins 的每次变更必须
-			// 来自合法经济规则的 src。
-			// 新增移动铜币的规则时须同步扩展此白名单——铜币流向由此显式化。
+			// coins 的每次变更必须来自合法经济规则的 src；新增移动铜币的规则时须同步扩展此白名单
 			check: (_world, ctx) => {
 				const allowed = new Set(["rule:buy.goods", "rule:sell.goods", "rule:scout.luck", "rule:repair.step"]);
 				const bad = ctx.changes.filter((c) => c.kind === "prop" && c.prop === "coins" && !allowed.has(c.src));
@@ -474,7 +465,6 @@ export const village: GameDef = {
 			},
 		},
 	],
-	// 触觉认识论：可指名即可及——容器不透明，闭合容器的内容物不在参照域。感知域 ≡ 可达域时
-	// 施动前提由可见性门独任
+	// 感知域 ≡ 可达域：施动前提由可见性门独任，不接 reachLaw（重复接线即死法则，见 space.ts 接线判据）
 	grounding: (world, player) => [...inTreeVisible(world, player)],
 };

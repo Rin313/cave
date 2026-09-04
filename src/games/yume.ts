@@ -53,7 +53,6 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 		else if (c.kind === "despawn") lines.push(`消失了：${c.name}。`);
 		else if (c.kind === "rename") lines.push(`改名：${c.prev} → ${c.next}。`);
 	}
-	// 被拒尝试的理由与法则事实（低语）同样是世界的回应
 	for (const s of steps) {
 		if (s.kind === "action" && !s.ok) lines.push(s.reason);
 		if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
@@ -61,8 +60,7 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 	return lines.join("\n");
 }
 
-/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单（视图载荷 ViewValue——呈现投影形态自由；
- *  无 id 承诺的呈现面；实体索引由 core 装配并保证 ≡ 可见性门）。 */
+/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单。 */
 function digestExtraYume(world: World, player: string): Record<string, ViewValue> {
 	const me = entity(world, player);
 	const cur = me?.props["in"] as string | null;
@@ -98,8 +96,7 @@ const sleepVerb = defineVerb({
 });
 
 /** 移动：沿路径在相邻地点间走（一刻）。暗处需要光（灯效果）。
- *  dest 是域外可指的引用参数：地点的名字来自出口列表与旅行史，不随视野蒸发——
- *  雾外地点的提案照常入裁决，存在性与可达性由法则层给出世界性回答。 */
+ *  dest 声明 beyondField：地点名来自出口列表与旅行史，雾外可指，存在性由法则回答。 */
 const goVerb = defineVerb({
 	label: "移动",
 	description: "沿路前往相邻的地点（dest 是地点实体 id，见出口列表）。走动推进梦的时刻。",
@@ -269,7 +266,7 @@ export const yume: GameDef = {
 		interact: interactVerb,
 		take: takeVerb,
 	},
-	// 时间律：梦的时刻只随走动（go 一刻）与醒来（sleep.wake 授一刻）推进；静止的梦命运冻结，低语伴随行走
+	// 梦的时刻只随 go（一刻）与醒来（一刻）推进；静止的梦命运冻结，低语伴随行走
 	world: {
 		time: 0,
 		entities: [
@@ -316,7 +313,6 @@ export const yume: GameDef = {
 		],
 	},
 	systems: [
-		// 纯氛围系统：世界之言——低语没有机制含义，只许被转述
 		{
 			id: "dream.air",
 			run: (q) => {
@@ -331,7 +327,6 @@ export const yume: GameDef = {
 			},
 		},
 		{
-			// 终局观测：收齐四枚效果后醒来待在房间，阳台上的人影出现（spawn）。世界从不解释条件。
 			id: "ending.watch",
 			run: (q) => {
 				const me = entity(q.world, q.player);
@@ -348,8 +343,8 @@ export const yume: GameDef = {
 		},
 	],
 	props: YUME_PROPS,
-	// 边感知：path 边是世界拓扑的实现细节（出口经 digestExtra 以地点名呈现），不进模型视图——
-	// 石猫建路的 relSet 变更行随之沉默（小屋 spawn 卡与法则理由承载揭示）；法则层照常读全真相（Q.rel 不过投影）
+	// path 边是拓扑实现细节（出口经 digestExtra 以地点名呈现）——石猫建路的 relSet 变更行随之沉默，
+	// 揭示由小屋 spawn 卡与法则理由承载；法则层照常读全真相
 	edgePerception: () => (r) => r.type !== "path",
 	grounding: (world, player) => {
 		const cur = entity(world, player)?.props["in"] as string | null;

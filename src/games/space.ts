@@ -84,9 +84,8 @@ export function enclosingSpace(world: World, id: string): string | null {
 	return null;
 }
 
-/** 现宿主原语：锚点（意志的地址）在包含链上的最近器皿，缺省锚点自身（第一人称恒等退化）。
- *  附身 = 地址的空间迁移（D.set(地址, "in", 器皿)）——迁移必经 delta 入账：id 引用契约使器皿 despawn
- *  前的迁出成为强制（静默回退不存在）；单宿主由标量 id 类型契约结构强制。 */
+/** 锚点沿 in 链上溯的最近器皿（vesselProp 键控），缺省锚点自身。
+ *  附身 = 对地址 D.set(addr, "in", 器皿) 迁移——迁移经 delta 过墙，器皿 despawn 前必须先迁出（id 引用契约强制）。 */
 export function hostOf(world: World, anchor: string, opts: SpaceOpts = {}): string {
 	const key = opts.vesselProp ?? "vessel";
 	let cur: string | null = anchor;
@@ -111,10 +110,9 @@ export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}
 	return vis;
 }
 
-/** 可达性法则（卫语句工厂）：可达则弃权（交后续规则），不可达即拒绝（law "reach"，理由为构件世界腔）。
- *  subject 显式绑定动词 schema 里的目标参数名——接线是一行可见调用，位置即优先级，例外法则插在其前。
- *  接线判据：前提的否定情形落在参照域内（可指名而不可及）才接线；感知域 ⊆ 可达域时可见性门已独任此前提，
- *  接线即死法则——grounding 与前提法则是同一次认识论决策的两面，改感知域必重审全部接线。 */
+/** 可达性法则（卫语句工厂）：可达则弃权，不可达即拒绝（law "reach"）。
+ *  subject 显式绑定动词 schema 的目标参数名——接线是一行可见调用，位置即优先级，例外法则插在其前。
+ *  接线判据：前提的否定情形可指名而不可及时才接线；感知域 ⊆ 可达域时可见性门已独任此前提，接线即死法则。 */
 export const reachLaw = (subject: string, opts: SpaceOpts = {}): Rule => ({
 	id: "reach",
 	judge: (q) => {

@@ -133,8 +133,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	// 唯一真相源：internal 研究动词与游戏动词同表共存（wait 走同一裁决边界），
-	// Engine 从 sim.def 投影映射层广告面
+	// withDevWait 挂 internal 研究动词（wait 走同一裁决边界）；Engine 从 sim.def 取动词表
 	const sim = new Simulation(withDevWait(def), loadState(dir));
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
 	try {
@@ -156,7 +155,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	mkdirSync(dir, { recursive: true });
 	const sim = new Simulation(withDevWait(def));
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	// 唯一真相源：Engine 从 sim.def 投影映射层广告面（internal 研究动词不进广告面）
+	// Engine 从 sim.def 取动词表（internal 研究动词不进映射层）
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(gameId), sessionManager });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");

@@ -5,14 +5,14 @@ import { deepFreeze, roll as rollDice } from "./util.ts";
 /** 标量：账本值的原子形态（NaN/Infinity 非标量）。 */
 export type Scalar = string | number | boolean | null;
 
-/** 账本值：可单行线性化的值——标量或标量数组。结构化状态的居所是实体与平键（承重墙键控），不是匿名记录；
- *  呈现投影的形态自由由 ViewValue 承载 */
+/** 账本值：标量或标量数组——变更行做单行渲染，对象形状会退化为 [object Object]，由硬墙拒绝。
+ *  结构化状态放实体与平键；呈现投影的形态自由走 ViewValue。 */
 export type PropValue = Scalar | Scalar[];
 
 /** 非空边值：null 只作为 relSet 的删边信号存在，不入账。 */
 export type RelValue = Exclude<PropValue, null>;
 
-/** 视图载荷：呈现投影的 JSON 值——形态自由（只服务呈现的投影不进协议通道），不进账本、不进变更线性化。用户：digestExtra。 */
+/** 视图载荷：形态自由的 JSON 值，仅供呈现——不进账本、不进变更线性化。用户：digestExtra。 */
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
 export interface Entity {
@@ -35,10 +35,8 @@ export interface World {
 	relations?: Rel[];
 }
 
-/** 结构化变更原语：全为绝对写——授予的被触键后态规格自含（规则持有冻结读态，
- *  相对形式在记录层零残留：ActionStep 只存绝对 prev/next 的 Change）。规则/系统产出，模拟层经硬墙提交。
- *  relSet 值 null 即删边；despawn 只级联清理关系边，id 型属性引用不清扫——悬空由完整性硬墙回滚
- *  （清理策略的盘点原语见 refsTo）。 */
+/** 变更原语：全为绝对写（后态自含，不做相对增减）——变更记录与回滚都按绝对值对账。只由规则/系统产出，经硬墙提交。
+ *  relSet 值 null 即删边；despawn 只级联清理关系边，id 型属性引用不清扫——悬空由完整性硬墙回滚（盘点原语见 refsTo）。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "relSet"; from: string; to: string; type: string; value: RelValue | null }
@@ -46,9 +44,8 @@ export type Delta =
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-/** 世界变更记录（commit 的唯一产出）：与 Delta 按基底类别同构——set 合流为 prop（提交后不区分操作形态，
- *  prev/next 即差异）；rel 携带完整边端点（from/to），next null 即删边；
- *  spawn/despawn 的 name 是生灭实体的展示名——实体已离开状态，变更是其名字的唯一载体（渲染历史事件以 departedNames 兜底）。*/
+/** 提交产出的变更记录：prop/rename 只留 prev/next，rel 携带完整端点（next null 即删边）。
+ *  spawn/despawn 携带展示名——实体已离场，这条记录是渲染历史事件时名字的唯一来源（见 departedNames）。 */
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue; src: string }
 	| { kind: "rename"; entity: string; prev: string; next: string; src: string }
@@ -61,23 +58,22 @@ export interface Action {
 	params: Record<string, PropValue>;
 }
 
-/** core 产出的用户可见文案契约：由游戏经 GameDef.messages 必填注入自有语言，core 不内嵌任何语言、
- *  不解析实体名进文案——涉及实体的指称由规则在自家世界腔理由内解析（法则可见世界真相，门只可见公开状态）；
- *  机器诊断一律走 Denial.debug。 */
+/** core 产出的用户可见文案：由游戏必填注入，core 不内嵌文案、不在文案里解析实体名（指称由规则在自家理由里解决）；
+ *  机器诊断走 Denial.debug。 */
 export interface Messages {
 	/** 所有法则均未表态时的兜底回应；core 完整性不变式违反也回落此文案。 */
 	noResponse: string;
-	/** 实体参数不可见/不存在的统一世界腔：幻觉 id 与隐藏实体同一文案。 */
+	/** 实体参数不可见/不存在的统一文案：幻觉 id 与隐藏实体同一文案。 */
 	invisibleEntity?: string;
 	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
 	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
 	notInActionPhase: string;
-	/** 时间流逝的世界腔描述（刻步的段头与近况渲染；事件流中刻不是动作）。 */
+	/** 时间流逝的文案（刻步的段头与近况渲染）。 */
 	timePassed: string;
 }
 
-/** 法则产出的世界腔事实：进结果视图，供叙述跟随。 */
+/** 法则产出的玩家可见事实：进结果视图，供叙述跟随。 */
 export interface Fact {
 	text: string;
 }
@@ -94,15 +90,13 @@ export interface PropDef {
 
 export interface Denial {
 	law: string;
-	/** 世界腔拒绝文案（法则 text 内联渲染 / 可达性构件 prose / 不变式 message）；缺省回落到 messages.noResponse。 */
+	/** 拒绝文案（规则理由 / 可达性构件 / 不变式 message）；缺省回落 messages.noResponse。 */
 	reason?: string;
 	debug?: string;
 }
 
-/** 静态形态前置条件违约：未知动词 / schema 不符。
- *  静态形态错在裁决之外——工具边界由 pi 校验拒绝（错误回模型、可重试、门闩未耗）；
- *  内核收到同类动作即调用方违约（工具边界偏斜 / 场景笔误 / probe 域声明错误）。
- *  世界真相（含感知——不可见）在裁决之内，走世界性拒绝。 */
+/** 静态形态违约（未知动词 / schema 不符）。正常拒绝点在工具边界（pi 校验，错误回模型、可重试）；
+ *  内核收到同类动作即调用方违约（工具边界偏斜 / 场景笔误 / probe 越过 schema），抛出而非按世界拒绝处理。 */
 export class ProtocolViolation extends Error {
 	readonly law: "action.unknown" | "action.schema";
 	readonly debug: string;
@@ -114,15 +108,11 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** 规则判定上下文：冻结读态 + 协议锚（player/time/params）+ roll。
- *  只读由结构保证：world 是裁决时读态的深冻结副本；一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。
- *  无可见域：规则分支于世界真相，不读感知投影（可达性等原料谓词住 games 层构件）。 */
+/** 规则判定上下文。只读由结构保证：world 是裁决读态的深冻结副本，一切后果经返回值表达、由模拟层统一提交/回滚；
+ *  规则分支于世界真相，不读感知投影（可达性等谓词住 games 层构件）。 */
 export interface Q {
 	readonly world: World;
-	/** 玩家（def.playerId，意志的居所）：意志在世界的全部足迹是一根引用，本字段即其值——体验者推导的根与兜底。
-	 *  无主语动词的缺省主语是体验者而非本字段：第一人称下二者恒等（退化读法）；附身游戏经空间构件 hostOf
-	 *  从本字段推导链上器皿，不直接以本字段作主语。显式主语动词的语义主语从参数取
-	 *  （上帝视角的主语全在参数里，后果落在被指令者）。 */
+	/** def.playerId 的现值。语义主语与视角的推导（无主语动词缺省、附身经空间构件 hostOf）是 games 层职责。 */
 	readonly player: string;
 	readonly time: number;
 	readonly params: Record<string, PropValue>;
@@ -130,8 +120,8 @@ export interface Q {
 	roll(key: string, sides: number): number;
 }
 
-/** 裁决：授予（未提交 deltas + 世界腔理由 + facts + 授予刻数）或结构化拒绝；规则返回 null = 不表态。
- *  ticks 是时间律的规则面（回合协议）：改写本动作的实际流逝（缺省回落动词时价）。 */
+/** 规则表态：授予（deltas + 玩家文案理由 + facts + ticks）或结构化拒绝；null = 不表态，交由后续规则。
+ *  ticks 改写本动作的实际流逝刻数（缺省回落动词 cost）。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; reason?: string; facts?: Fact[]; ticks?: number }
 	| { ok: false; denial: Denial };
@@ -169,7 +159,7 @@ export const D = {
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
 
-/** 引用参数键：schema 中字符串型（含可省略）属性的键——引用参数声明与 schema 类型是同一事实，编译期锁定。 */
+/** 引用参数键：schema 中字符串型（含可省略）属性的键（编译期锁定，声明与 schema 类型不偏斜）。 */
 type RefKey<S extends TObject> = {
 	[K in keyof S["properties"] & string]: S["properties"][K] extends TString ? K : never;
 }[keyof S["properties"] & string];
@@ -207,11 +197,10 @@ export interface VerbDef {
 	cost?: number;
 	/** 声明哪些参数是实体指称：机械渲染按声明解析为名字、probe 按其枚举；可见性门缺省管辖（可指名必看得见） */
 	entityParams?: string[];
-	/** 域外可指的引用参数（⊆ entityParams）：名字来源在实体索引之外（出口列表、旅行史），可见性门退位——
-	 *  存在性与可达性由法则层回答；指称的历史积累不随视野蒸发，只能由声明让位。 */
+	/** ⊆ entityParams：可见性门退位的引用参数——名字来源在实体索引之外（出口列表、旅行史等场景纹理），
+	 *  存在性与可达性由法则层回答。 */
 	beyondField?: string[];
-	/** 内部动词：只存在于裁决面——由代码直接 apply，过同一裁决边界与硬墙；广告面（act schema 与系统提示）
-	 *  由同一张动词表投影时过滤。PropDef.internal 是同一结构在词汇面的实例。 */
+	/** 内部动词：不进映射层（act schema 与系统提示的投影滤除），只由代码直接 apply——同一裁决边界与硬墙。 */
 	internal?: boolean;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为无条件拒绝的兜底规则。 */
 	rules: Rule[];
@@ -220,52 +209,50 @@ export interface VerbDef {
 export interface GameDef {
 	id: string;
 	title: string;
-	/** 意志的居所：def 指向世界的唯一数据引用，integrity 墙恒查其可解。Q.player 即其值；
-	 *  缺省主语、体验者与视角语义（附身 = 居所的空间迁移，链上最近器皿）由 games 层构件与感知钩子从它推导。 */
+	/** def 指向世界的唯一数据引用，integrity 硬墙恒查其可解；Q.player 即其值。
+	 *  主语与视角的推导（附身等）由 games 层构件与感知钩子承担。 */
 	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
 	/** 时间系统：每 tick 按注册顺序运行的系统规则（world→deltas 的纯函数）。 */
 	systems?: SystemRule[];
-	/** 属性注册表：属性类型/世界化标签/内部标记。状态视图与变更线性化读 internal（internal 隔离由 core 机械保证），变更线性化读 label。词汇闭合：实体的属性键 ⊆ 注册表（integrity 墙钉住），缺省空注册表即不允许任何属性。 */
+	/** 属性注册表：类型/label（变更线性化的属性名）/internal（不进状态视图与变更线性化）。
+	 *  词汇闭合由 integrity 硬墙钉住：实体属性键 ⊆ 注册表，缺省空注册表即不允许任何属性（动态键值走关系边）。 */
 	props?: Record<string, PropDef>;
-	/** 回退摘要的声音覆写（可选）：缺省由引擎装配回合骨架投影（spineLines 单行连接，空步回落 noResponse）。
-	 *  覆写用于文学化兜底：steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
-	 *  （internal 隔离是模型面纪律，不约束世界侧文案），玩家文案的忠实自负。 */
+	/** 回退摘要覆写（缺省 = spineLines 单行连接，空步回落 noResponse）。steps 为本回合事件流（动作步+刻步，按序）；
+	 *  钩子在世界侧运行，可读 internal 属性。 */
 	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
 	/** 近况窗口的回合数——映射层指代与续接锚的时间视界 */
 	memoryLimit: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见 */
 	grounding?: (world: World, player: string) => string[];
-	/** 边感知：体验者知觉哪些关系边（与 grounding 同形，缺省恒真）。core 保留不可覆写的端点可见结构过滤；
-	 *  同一谓词约束两面：状态视图（digest.relations）与事件投影（rel 变更行，经 FieldSpan.edges 随步快照） */
+	/** 边感知：知觉哪些关系边（与 grounding 同形，缺省恒真）。同一谓词约束状态视图（digest.relations）与
+	 *  事件投影（rel 变更行，经 FieldSpan.edges 随步快照）；端点可见过滤是 core 内核，本谓词叠加其上。 */
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
-	/** 状态视图的派生纹理（出口、随身清单等游戏自持语义，入视图 extra 键）：视图载荷 ViewValue 形态自由，
-	 *  与账本值分型。命名空间分区：core 装配字段（time/relations/entities）独占视图顶层，纹理覆写不可表示。
-	 *  无 id 承诺：参照域由 core 装配并保证 ≡ 可见性门，纹理不承载它；携带可指名 id 时配合 beyondField 引用参数消费。 */
+	/** 状态视图的派生纹理（出口、随身清单等），入视图 extra 键，形态自由（ViewValue）。
+	 *  视图顶层 time/relations/entities 为 core 装配字段，纹理不可覆写；纹理不承诺实体参照域——
+	 *  携带可指名 id 时须配合 beyondField 引用参数消费。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
-	/** core 产出的用户可见文案（游戏自有语言，必填：core 不内嵌任何语言，缺省即空，倒逼游戏注入）。 */
+	/** core 产出的用户可见文案（必填——core 不内嵌文案）。 */
 	messages: Messages;
-	/** 表达契约（世界语言，可选）：叙述者人格、世界读法、写作纪律——表达侧的作者供稿面。*/
+	/** 表达契约（可选）：叙述者人格、世界读法、写作纪律；core 原样注入 system prompt。 */
 	voice?: string;
 }
 
-/** 不变式检查上下文：世界 + 游戏定义（注册表等）+ 本实例的实际起点世界（守恒类种子的正确锚点）+ 本次提交的变更。 */
+/** 不变式检查上下文：起点世界快照（守恒类种子的锚点）+ 本次提交的全部变更（provenance 审计）。 */
 export interface InvariantCtx {
 	def: GameDef;
-	/** 创世快照：本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
+	/** 本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
 	genesis: World;
-	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）：过渡不变式据此审计 provenance。
-	 *  每条规则/系统的提交独立过墙，粒度即单次提交。 */
+	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）；每条规则/系统的提交独立过墙。 */
 	changes: Change[];
 }
 
-/** 不变式：提交后校验，返回世界腔/结构化拒绝理由（null 通过）。违反即回滚整个提交并拒绝。
- *  两种形态共用本接口：状态不变式只读 world（守恒类，防总量漂移）；
- *  过渡不变式经 ctx.changes 读提交（provenance 类，防错误再分配）。
- *  审查者与裁决侧同权隔离：world / ctx.genesis / ctx.changes 均为冻结读态或冻结记录 */
+/** 不变式：每次提交后校验（null 通过），违反即整提交回滚并拒绝。状态不变式只读 world（守恒类）；
+ *  过渡不变式经 ctx.changes 读提交（provenance 类）。world 与 ctx 均为冻结读态——审查者写账本即抛，
+ *  崩溃在提交边界兑为墙否决。 */
 export interface Invariant {
 	id: string;
 	check: (world: World, ctx: InvariantCtx) => string | null;
@@ -276,14 +263,14 @@ function isScalarValue(v: unknown): boolean {
 	return v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 账本值形状：标量或标量数组，不嵌套。类型层（PropValue）除名只约束类型化作者——存档恢复路径无类型检查、
- *  场景 JSON 与 probe 走 as 通道——形状判定在提交翼（commit）与状态翼（integrity）两道边界同拒。 */
+/** 账本值形状的运行时判定：PropValue 类型挡不住 as 通道（存档恢复、场景 JSON、probe），
+ *  形状在提交翼（commit）与 integrity 两道边界同拒。 */
 function isLedgerValue(v: unknown): boolean {
 	return isScalarValue(v) || (Array.isArray(v) && v.every(isScalarValue));
 }
 
-/** core 默认硬墙：引用完整性、注册表类型契约与词汇闭合（属性键 ⊆ 注册表）。
- * 世界全域扫描：spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug（悬空引用、类型错写、未声明词汇）。 */
+/** core 默认硬墙：引用完整性、注册表类型契约与词汇闭合（属性键 ⊆ 注册表）。世界全域扫描——
+ *  spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug（悬空引用、类型错写、未声明词汇）。 */
 export function integrityInvariant(): Invariant {
 	const got = (v: PropValue): string => {
 		if (v === null) return "null";
@@ -295,7 +282,6 @@ export function integrityInvariant(): Invariant {
 	return {
 		id: "integrity",
 		check: (world, ctx) => {
-			// 形状封闭先于内容（公理一「此外无物」的状态翼兑现）：账本容器与顶层键按声明形状受审
 			if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
 			if (world.relations != null && !Array.isArray(world.relations)) return "integrity: world.relations must be an array";
 			for (const k of Object.keys(world)) {
@@ -308,13 +294,11 @@ export function integrityInvariant(): Invariant {
 			}
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
 			if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
-			// playerId 是 def 指向世界的唯一数据引用（体验者推导与感知钩子的解引用原点），每次裁决都被解引用，
-			// 属于「引擎将解引用的引用必须可解」的墙的管辖——否则 despawn 主体静默过墙，后续裁决级联劣化。
+			// playerId 每次裁决都被解引用——主体静默 despawn 会让后续裁决级联劣化，故属墙的管辖
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
 			const registry = Object.entries(ctx.def.props ?? {});
 			const vocabulary = new Set(registry.map(([k]) => k));
 			for (const e of world.entities) {
-				// 卡片契约：id 与名字是引擎自有词汇的在场保证（存档恢复路径无类型检查，腐蚀通道在此封死）
 				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
 				if (typeof e.name !== "string" || e.name === "") return `integrity: ${e.id}.name must be non-empty string`;
 				// 形状封闭：实体顶层键 ⊆ {id, name, props}（记录形状已由 ids 遍历担保）
@@ -322,18 +306,17 @@ export function integrityInvariant(): Invariant {
 					if (k !== "id" && k !== "name" && k !== "props") return `integrity: ${e.id}.${k} is not part of the entity shape`;
 				}
 				if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return `integrity: ${e.id}.props must be a record`;
-				// 词汇闭合：type 层封闭、token 层开放（与动词表同构），未声明词汇不入账；动态键值对走关系边、自由值形状走 any/tags
 				for (const k of Object.keys(e.props)) {
 					if (!vocabulary.has(k)) return `integrity: ${e.id}.${k} is not declared in the prop registry`;
 				}
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
 					if (v === null || v === undefined) continue;
-					// 账本值形状（可说性的墙侧面）：any 豁免标量类型检查，不豁免形状
+					// any 豁免标量类型检查，不豁免账本值形状
 					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (scalar or scalar array)`;
 					if (pd.type === "any") continue;
 					if (pd.type === "id") {
-						// id 型属性契约：标量引用或引用数组，指向存在的实体；「无引用」由 null/缺席表达（无哨兵空串），非字符串即违约
+						// 「无引用」由 null/缺席表达（无哨兵空串）
 						for (const ref of Array.isArray(v) ? v : [v]) {
 							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
 							if (!ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
@@ -381,9 +364,7 @@ export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
-/** 参照域跨度：裁决边界两侧的感知投影快照——事件投影的判定输入
- *  与 Change.prev/next 同一本体：提交后不可重算的历史，只存在于记录，不是账本状态。
- *  edges 是边感知快照 */
+/** 一次提交边界两侧的可见实体集快照（edges 为边感知快照）。裁决时取定，提交后不重算——历史渲染只读记录。 */
 export interface FieldSpan {
 	before: string[];
 	after: string[];
@@ -395,8 +376,7 @@ function edgeKey(r: Pick<Rel, "from" | "to" | "type">): string {
 	return `${r.from}|${r.to}|${r.type}`;
 }
 
-/** 事件流条目（审计与表达输入的基本形态）：动作裁决与世界刻步是两种本体——
- *  刻是世界的因（驱动 systems 的因果步，提交失败不回退时间），不是意志的果 */
+/** 事件流条目：动作步（ActionStep）与世界刻步（TickStep）。 */
 export type Step = ActionStep | TickStep;
 
 /** 动作裁决结果：一次动作过门的完整记录。 */
@@ -405,14 +385,12 @@ export interface ActionStep {
 	ok: boolean;
 	reason: string;
 	changes: Change[];
-	/** 参照域跨度：提交边界两侧的感知投影快照（落钟前闭合——刻步自带跨度）。 */
+	/** 提交边界两侧的可见快照（落钟前闭合；刻步自带）。 */
 	field: FieldSpan;
 	action: Action;
-	/** 本动作授予的时间流逝（刻）：授予取规则 ticks 改写或动词时价，失败取动词时价（凡入裁决即尝试）。
-	 *  时间律：世界时间只经裁决边界流逝，刻数由裁决授予；apply 据此在裁决边界内逐刻推进 systems。 */
+	/** 本动作授予的刻数（成功取规则 ticks 或动词 cost，失败取动词 cost）；apply 据此逐刻落钟。 */
 	ticks: number;
-	/** 否决来源：rule——动词卫语句链的否决（含全部规则未表态时的引擎闭合回落，law "action.unanswered"；
-	 *  可见性门同归此值——感知是世界真相）；invariant——不变式硬墙的必要性拦截（规格违反信号或戏剧性必然）。*/
+	/** 否决来源：rule＝卫语句链或可见性门（全部未表态的引擎闭合为 law "action.unanswered"）；invariant＝硬墙拦截。 */
 	deniedBy?: "rule" | "invariant";
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
@@ -421,8 +399,7 @@ export interface ActionStep {
 	src?: string;
 }
 
-/** 动作裁决的完整解析：动作步（意志的果）+ 本动作授予执行出的刻步（世界的因）。
- *  二者在事件流中是并列形态（刻不是动作）；授予数以 ActionStep.ticks 为权威记录。 */
+/** apply 的结果：动作步 + 其授予刻数内产出的刻步（授予数以 ActionStep.ticks 为权威）。 */
 export interface Resolution {
 	step: ActionStep;
 	elapsed: TickStep[];
@@ -435,7 +412,7 @@ export interface TickStep {
 	ok: boolean;
 	reason: string;
 	changes: Change[];
-	/** 参照域跨度：本系统提交边界两侧的感知投影快照。 */
+	/** 本系统提交边界两侧的可见快照。 */
 	field: FieldSpan;
 	/** 刻步只会被不变式硬墙拦截（系统产出没有其他否决路径）。 */
 	deniedBy?: "invariant";
@@ -449,23 +426,21 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-/** 把结构化拒绝渲染为世界腔文本：优先 denial.reason（法则内联 text 渲染 / 可达性 prose / 不变式 message），缺省兜底 noResponse。 */
+/** 拒绝渲染为玩家文案：优先 denial.reason，缺省兜底 noResponse。 */
 export function renderDenial(def: GameDef, denial: Denial): string {
 	if (denial.reason != null) return denial.reason;
 	return messagesFor(def).noResponse;
 }
 
-/** 离开状态者的名字底表：despawn 变更是其名字的唯一载体（名字随实体离开状态）。
- *  渲染历史事件（变更行/尝试行）时必须以渲染窗口内的 despawn 记录兜底解析。 */
+/** 离场者名字底表：despawn 记录是离场实体名字的唯一来源——渲染历史事件须以渲染窗口内的记录兜底解析。 */
 export function departedNames(window: readonly { changes: Change[] }[]): Map<string, string> {
 	const m = new Map<string, string>();
 	for (const s of window) for (const c of s.changes) if (c.kind === "despawn") m.set(c.entity, c.name);
 	return m;
 }
 
-/** 已公开离场者底表（名字兜底的合法集）：despawn 在其步的参照域内（离场被感知）才铸造合法名字，
- *  被投影的隐藏离场者不铸造。渲染窗口的跨度由调用方声明（传入的 steps 即窗口）——
- *  近况投影以整个近况窗口为跨度供给 spineLines 的 opts.departed。 */
+/** 已公开离场者底表：离场发生在自身步的可见快照内才入表——隐藏离场者不进，引用它的变更行在投影中沉默。
+ *  渲染窗口由调用方传入的 steps 声明（近况投影传整个窗口，供 spineLines 的 opts.departed）。 */
 export function shownDepartedNames(steps: readonly { changes: Change[]; field: FieldSpan }[]): Map<string, string> {
 	const m = new Map<string, string>();
 	for (const s of steps) {
@@ -475,10 +450,9 @@ export function shownDepartedNames(steps: readonly { changes: Change[]; field: F
 	return m;
 }
 
-/** 声明驱动的取值渲染（渲染与投影的唯一解析点）：ref=true 的取值按引用解析——
- *  字符串元素解析为展示名（在世读态，或渲染窗口内的离场底表），解析不出原样回显，
- *  引用身份随 ids 返回（投影据此计指称，id 数组逐元素覆盖）；ref=false 一律字面。
- *  引用性是声明事实不是推断事实：只有关系端点（结构性引用）与注册表 type:"id" 的属性值是引用。 */
+/** 取值渲染（渲染与投影的唯一解析点）：ref=true 按引用解析——字符串元素解析为展示名（在世读态或离场底表），
+ *  解析不出原样回显，引用身份随 ids 返回（投影据此计指称）；ref=false 一律字面。
+ *  引用性由声明决定：只有关系端点与注册表 type:"id" 的属性值是引用。 */
 function renderValue(sim: Simulation, v: PropValue, ref: boolean, departed?: ReadonlyMap<string, string>): { text: string; ids: string[] } {
 	if (!ref) return { text: String(v), ids: [] };
 	const items = Array.isArray(v) ? v : [v];
@@ -500,10 +474,8 @@ function refProp(sim: Simulation, prop: string): boolean {
 	return sim.def.props?.[prop]?.type === "id";
 }
 
-/** 变更的语言无关线性化（数据渲染，core 不内嵌语言词，只做符号连接，按 Change.kind 分派）。
- *  name/label/type 均为游戏声明的世界语；缺 label 时回退原 prop 名。
- *  指称解析走 renderValue（声明驱动）：关系端点是引用，关系值与未声明属性值是字面。
- *  渲染窗口内 despawn 的实体以 departed 兜底解析。 */
+/** 变更线性化（core 只做符号连接，name/label 取自游戏声明，缺 label 回退原 prop 名）。
+ *  指称解析走 renderValue：关系端点是引用，关系值与未声明属性值是字面；窗口内 despawn 的实体以 departed 兜底。 */
 export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
 	if (c.kind === "spawn") return `+ ${c.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
@@ -525,9 +497,7 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
-/** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。
- *  主语、关系端点、声明为引用的属性取值（id 型标量与数组元素，解析与否不论——引用身份由声明，
- *  在场由投影审）。 */
+/** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。 */
 function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, string>): string[] {
 	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity];
 	const ref = refProp(sim, c.prop);
@@ -537,22 +507,19 @@ function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, s
 	];
 }
 
-/** 回合骨架：事件流的规范单行渲染——符号承担结构（✓/✗/⏱/×n），语言词全部来自 messages/label/规则文案。
- *  消费者：act 结果视图（模型）、近况（compact）、loop 控制台、缺省回退摘要（玩家）。
- *  契约：变更行按步的参照域跨度投影（全部指称在场才可说，任一缺席整行沉默；理由与 Fact 是规则铸造的世界语，不过投影）；
- *  internal 属性变更恒滤（覆写者仍可从 steps 原样读取）；刻步按 at 归并，静默刻聚合为 ×n（账目单位是刻，
- *  每个被授予的刻恰消费一份时间账目；compact 裁剪的纯变更刻不建桶，时间回落 ×n 表达）。
- *  opts.departed：渲染窗口的已公开离场者底表覆盖——渲染窗口的跨度由调用方声明（近况投影以整个近况窗口
- *  为渲染窗口，「t 回合提及、t+k 回合离场」的实体由此兜底名字）；缺省 = 本数组派生。 */
+/** 事件流的规范单行渲染（符号承担结构，语言词全部来自 messages/label/规则文案）。
+ *  消费者：act 结果视图、近况投影（compact）、loop 控制台、回退摘要。
+ *  契约：变更行按该步的可见快照投影——任一指称（主语/端点/引用值）不在快照内整行沉默；理由与 Fact 不过投影；
+ *  internal 变更恒滤（覆写者仍可从 steps 原样读取）。刻步按 at 归并，静默刻聚合为「timePassed ×n」——
+ *  账目单位是刻，compact 裁剪的纯变更刻不建桶、时间回落 ×n。opts.departed 覆盖离场者底表。 */
 export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean; departed?: ReadonlyMap<string, string> }): string[] {
-	// 离场底表：被投影的 despawn 不铸造合法名字，引用隐藏离场者的行在指称判定中随之沉默；
-	// 指称匹配宇宙 = 在世实体 ∪ 渲染窗口内全部离场者（生灭行指称只有主语，与离场名互不依赖）。
+	// 指称匹配宇宙 = 在世实体 ∪ 窗口内离场者；隐藏离场者的引用行随之沉默
 	const departedAll = opts?.departed ?? departedNames(steps);
 	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
 	const shownDeparted = opts?.departed ?? shownDepartedNames(steps);
 	const perceivableOf = (s: Step): ((c: Change) => boolean) => {
 		const field = spanOf(s);
-		// 边感知（与状态视图同一谓词的跨度快照）：rel 变更行要求边在跨度两侧知觉的并集内
+		// rel 变更行要求边在跨度两侧知觉的并集内
 		const edgeSpan = s.field.edges ? new Set([...s.field.edges.before, ...s.field.edges.after]) : undefined;
 		return (c) => {
 			if (c.kind === "rel" && edgeSpan && !edgeSpan.has(edgeKey(c))) return false;
@@ -562,7 +529,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 	const msgs = messagesFor(sim.def);
 	const compact = opts?.compact === true;
 	const lines: string[] = [];
-	// 刻桶：产出与拦截是同一因果步的两面，按 at 归并（at 随钟单调，插入序即时序）
+	// 刻桶按 at 归并（at 随钟单调，插入序即时序）
 	const said = new Map<number, { changes: Change[]; facts: Fact[]; denials: string[] }>();
 	for (const s of steps) {
 		if (s.kind === "action") {
@@ -590,9 +557,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		].join("")}`);
 		for (const d of denials) lines.push(`⏱ ✗ ${d}`);
 	}
-	// 静默刻聚合：账目单位是刻（at）不是步——每个被授予的刻恰消费一份时间账目
-	//（产出桶行、拦截行、或同桶两行计一份），静默刻并入 ×n；
-	// compact 裁剪的纯变更刻不建桶（变更由状态视图承载，时间回落 ×n 表达）。
+	// 静默刻聚合：有桶行的刻计一份账，其余刻并入 ×n（compact 的纯变更刻不建桶，回落 ×n）
 	const granted = steps.reduce((n, s) => n + (s.kind === "action" ? s.ticks : 0), 0);
 	if (granted - said.size > 0) lines.push(`⏱ ${msgs.timePassed} ×${granted - said.size}`);
 	return lines;
@@ -647,8 +612,7 @@ export class Simulation {
 				if (!(v.entityParams ?? []).includes(p)) throw new Error(`动词 ${name} 的 beyondField「${p}」未声明为 entityParams——域外可指是引用参数的修饰，不是独立的参数通道`);
 			}
 		}
-		// 「不变式管永远」包括起点：初始世界同样过墙（genesis = 自身，changes = 空）——
-		// 否则 t=0 是必要性自由区，def 结构错误与损坏存档要到首次提交才以全量拒绝的形式显形。
+		// 初始世界同样过墙（genesis = 自身，changes = 空）——def 结构错误与损坏存档在此显形，而非首次提交
 		const broken = this.checkInvariants(this.readState(), []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
 	}
@@ -661,7 +625,7 @@ export class Simulation {
 		return this.visibleIn(this.readState());
 	}
 
-	/** 参照域计算：grounding 收冻结读态（投影是状态的函数——纯度按构造成立）。 */
+	/** 可见集：grounding 收冻结读态。 */
 	private visibleIn(world: World): Set<string> {
 		if (this.def.grounding) return new Set(this.def.grounding(world, this.player));
 		return new Set(world.entities.map((e) => e.id));
@@ -676,8 +640,8 @@ export class Simulation {
 		return out;
 	}
 
-	/** 裁决时读态：快照 + 深冻结。裁决侧代码（Q.world / grounding / digestExtra / summarize）一律收此读态——
-	 *  活世界不出 core，任何时机（含异步）无从触账本；它同时是提交的回滚基线 S0。 */
+	/** 裁决读态：快照 + 深冻结。裁决侧代码（Q.world / grounding / digestExtra / summarize）一律收此读态——
+	 *  越权写即在冻结对象上抛错（walltest 钉住）；同时是提交的回滚基线。 */
 	private readState(): World {
 		return deepFreeze(this.snapshot());
 	}
@@ -693,9 +657,8 @@ export class Simulation {
 		return verb;
 	}
 
-	/** 批次预校验：整批动作在首个裁决前过静态形态检查，违约即整批原子拒绝。
-	 *  批次执行方（act 工具）必须在裁决循环前调用——否则第 n 个动作的静态违约会把
-	 *  前 n-1 个已裁决动作变成不可说后果 */
+	/** 批次预校验：整批动作在首个裁决前过静态形态检查。批次执行方（act 工具）必须在裁决循环前调用——
+	 *  否则第 n 个动作的静态违约会把前 n-1 个已裁决动作变成无记录后果。 */
 	validateBatch(actions: readonly Action[]): void {
 		for (const a of actions) this.staticForm(a);
 	}
@@ -705,15 +668,14 @@ export class Simulation {
 		const msgs = messagesFor(this.def);
 		const verb = this.staticForm(action);
 		const cost = attemptCost(verb);
-		// 门的管辖面 = 引用参数 − 域外可指（beyondField 的名字来源在实体索引之外，门无从审，法则层回答）
+		// 可见性门管辖面 = 引用参数 − beyondField（名字来源在实体索引之外，由法则层回答）
 		const beyond = new Set(verb.beyondField ?? []);
 		const invalid = (verb.entityParams ?? [])
 			.filter((p) => !beyond.has(p))
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
 		if (invalid.length) {
-			// 门的世界腔是可见状态的函数：幻觉 id 与隐藏实体同一文案，不解析门外实体——
-			// 「拒绝不携带涉及实体」在门上同样成立（审计 id 走 debug），否则 id 盲猜即存在性 oracle
+			// 幻觉 id 与隐藏实体同一文案，不解析门外实体（审计 id 走 debug）——否则 id 盲猜即存在性 oracle
 			const reason = msgs.invisibleEntity ?? msgs.noResponse;
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
 		}
@@ -722,7 +684,7 @@ export class Simulation {
 			const v = r.judge(q);
 			if (!v) continue;
 			if (v.ok) {
-				// 刻数不可执行即授予不可执行（世界不修正判决）：走不变式通道拒绝（probe 据此报 bug），尝试仍耗动词时价
+				// 刻数违约走不变式通道拒绝（probe 据此报 bug），尝试仍耗动词时价
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
@@ -753,18 +715,16 @@ export class Simulation {
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
 	}
 
-	/** 原子回滚：世界内容恢复为 s0（先删提交期间新建的顶层键——relations 等快照中不存在的——再整体覆写）。
-	 *  s0 是裁决读态（深冻结）：回滚以克隆赋值解冻——冻结是裁决侧的读隔离手段，不是账本的属性，
-	 *  冻结引用入账即砖死后续提交。 */
+	/** 原子回滚：恢复为 s0（先删提交期间新建的顶层键——如 relations——再整体覆写）。
+	 *  以克隆赋值解冻：冻结是读隔离手段，冻结引用不得留在活账本上（否则后续提交全部抛错）。 */
 	private restore(s0: World): void {
 		for (const k of Object.keys(this.world)) if (!(k in s0)) delete (this.world as unknown as Record<string, unknown>)[k];
 		Object.assign(this.world, JSON.parse(JSON.stringify(s0)) as World);
 	}
 
-	/** 提交 + 硬墙：以裁决时读态 s0 为回滚基线（提交成功就地生效，任一翼违反即恢复 s0 并拒绝）。
-	 *  提交内做执行校验（fidelity——每条 delta 在其应用时刻必须可执行），提交后做不变式校验；
-	 *  渲染按产出方分流：core 完整性违反只有 debug 诊断（回落 noResponse）；游戏不变式的 message 直接作玩家文案。
-	 *  提交过程的意外异常（规则铸出的坏 delta、审查者自身的 bug——含冻结读态上的越权写）同通道兑为墙否决。 */
+	/** 提交 + 硬墙：以裁决读态 s0 为回滚基线。先 commit（执行校验），后不变式校验；
+	 *  core 完整性违反只有 debug（回落 noResponse），游戏不变式的 message 直接作玩家文案；
+	 *  提交过程的意外异常（坏 delta、审查者越权写）同通道兑为墙否决。 */
 	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial; reason: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
 		try {
@@ -789,8 +749,7 @@ export class Simulation {
 		}
 	}
 
-	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者。
-	 *  审查者收冻结读态（world 取快照、changes 深冻结——与裁决侧同权隔离）。 */
+	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者。审查者收冻结读态与冻结记录。 */
 	private checkInvariants(genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
 		const world = this.readState();
 		const frozen = deepFreeze(changes);
@@ -804,8 +763,7 @@ export class Simulation {
 	}
 
 	apply(action: Action): Resolution {
-		// 结构墙：S0 = 裁决时读态（深冻结）；
-		// 出口世界 ≡ S0 ⊕ 已提交 deltas 按构造成立。
+		// s0 = 裁决读态，硬墙的回滚基线
 		const s0 = this.readState();
 		const before = this.visibleIn(s0);
 		const edgesBefore = this.edgeField(s0, before);
@@ -822,8 +780,7 @@ export class Simulation {
 		} else {
 			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
-		// 跨度在落钟前闭合：提交边界是感知的离散单位，刻步自带跨度；
-		// 无提交（法则拒绝或硬墙回滚）则边界未跨越——世界仍是前态，after 即 before
+		// 可见快照在落钟前闭合；无提交（法则拒绝或硬墙回滚）则边界未跨越，after 即 before
 		const afterVis = step.ok ? this.visible() : before;
 		const afterEdges = step.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
 		const field: FieldSpan = { before: [...before], after: [...afterVis] };
@@ -832,12 +789,9 @@ export class Simulation {
 		return { step: { ...step, field }, elapsed };
 	}
 
-	/** 动作线性化（label/name 为游戏世界语，core 只做符号连接）。
-	 *  departed 兜底渲染窗口内已 despawn 的参数实体（同提交内先行动作生灭、后续动作被拒的尝试行）。
-	 *  机械指称解析按声明进行且受步的参照域管辖：只有引用参数（entityParams）解析为名字，
-	 *  其余参数一律字面——模型自己的词不是新信息；域内引用解析名字，
-	 *  域外引用原样回显或以已公开离场者的名字兜底（可见性拒绝的参数必在域外——门以裁决前读态
-	 *  为权威集、拒绝不提交）。 */
+	/** 尝试行线性化：只有引用参数（entityParams）解析为名字，其余参数一律字面。
+	 *  域内引用取在世名，域外引用原样回显或以已公开离场者兜底（可见性拒绝的参数必在域外——
+	 *  门以裁决前可见集为权威、拒绝不提交）。departed 兜底本渲染窗口内已 despawn 的参数实体。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
 		const action = step.action;
 		const verb = this.def.verbs[action.verb];
@@ -872,7 +826,7 @@ export class Simulation {
 			const s0 = this.readState();
 			const res = sys.run(this.query(s0, {}));
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
-			// 每系统的提交是独立过墙边界；回滚即未跨越——世界仍是前态，after 即 before
+			// 每系统独立过墙；回滚即边界未跨越，after 即 before
 			const before = this.visibleIn(s0);
 			const edgesBefore = this.edgeField(s0, before);
 			const cc = this.commitChecked(s0, res.deltas, src);
@@ -903,9 +857,8 @@ export class Simulation {
 		return JSON.parse(JSON.stringify(this.world)) as World;
 	}
 
-	/** 状态视图（唯一装配线）：prompt 的状态呈现由 core 组装——可见实体（grounding）× 注册表过滤
-	 *  × 关系投影（端点可见的结构过滤 ∧ edgePerception 语义谓词）；def.digestExtra 派生纹理入独立 extra 键
-	 *  参照域契约由构造保证：视图实体索引 ≡ 可见性门的权威集——模型看得见的才可指名，可指名的必看得见。 */
+	/** 状态视图：可见实体（grounding）× 注册表过滤 × 关系（端点可见 ∧ edgePerception）；digestExtra 入 extra 键。
+	 *  实体集与可见性门同源（同一 visibleIn）——模型可指名的必出现在视图。 */
 	digest(): string {
 		const w = this.readState();
 		const vis = this.visibleIn(w);
@@ -925,14 +878,12 @@ export class Simulation {
 		return lines.length ? lines.join("\n") : messagesFor(this.def).noResponse;
 	}
 
-	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行——
-	 *  逐条校验而非提交前预检（同一授予内 spawn 后 set 是合法书写）；不可执行即拒绝整个提交（commitChecked 原子回滚）。
-	 *  幂等跳过的唯一判据是目标状态已成立：relSet 删不存在的边成立（无边即状态，悬空端点之间本不容边）；
-	 *  set 同值以目标存在为前提——主语不存在的「已成立」不可判定，存在性拒绝在前，永不回落为跳过。 */
+	/** 提交的执行校验：每条 delta 在其应用时刻必须可执行——逐条校验而非提交前预检（同一授予内 spawn 后 set
+	 *  是合法书写），不可执行即拒绝整个提交（commitChecked 原子回滚）。幂等跳过的唯一判据是目标状态已成立：
+	 *  relSet 删不存在的边成立（无边即状态）；set 同值以目标存在为前提——存在性拒绝在前，永不回落为跳过。 */
 	private commit(deltas: Delta[], src: string): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
-		// 边表只在首个需要写入的边 delta 到来时入账
-		// 一经入账，本提交内保持同一数组引用
+		// 边表惰性入账；一经创建，本提交内保持同一数组引用
 		const rels = (): Rel[] => (this.world.relations ??= []);
 		const upsertRel = (from: string, to: string, type: string, value: RelValue) => {
 			const rs = rels();
@@ -972,8 +923,7 @@ export class Simulation {
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
 				if (!isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
 				if (d.value === null) {
-					// 值 null 即删边（拓扑收缩与生长对称）；能走到此处则边必已存在（prev !== null），rels() 只取已入账的数组；
-					// 原地删——边表是本次提交共享的数组，不可整体替换
+					// 能走到此处则边必已存在（prev !== null）；原地删——边表是本提交共享的数组，不可整体替换
 					const rs = rels();
 					const i = rs.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
 					if (i >= 0) rs.splice(i, 1);

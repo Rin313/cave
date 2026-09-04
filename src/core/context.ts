@@ -1,13 +1,12 @@
-// 上下文裁剪策略：LLM 每次调用只见「近况投影 + 当前运行后缀」，会话文件仍保存全量审计。
-// 持久化的事实是回合地籍条目（intent + steps 原样，经 custom 条目存于会话文件——custom 不参与 LLM 上下文）；
-// 近况是它的纯投影：窗口更新时由 projectWindow 重算（Π(records, 世界现值)），永不持久化，
-// 进程重启由条目重投影重建——重建 ≡ 内存窗口（同一纯函数、同一输入）。
+// LLM 上下文裁剪：每次调用只见「近况投影 + 当前运行后缀」，会话文件仍保存全量审计。
+// 持久化事实是回合条目（intent + steps 原样，custom 条目不参与 LLM 上下文）；近况为用时重算的投影，
+// 永不持久化，进程重启由条目重建。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { shownDepartedNames, spineLines, type Simulation, type Step } from "./sim.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
-/** 回合地籍条目（持久化的事实，唯一写点：回合定稿）：玩家原话逐字 + 机械事件史原样（动作步+刻步）。
+/** 持久化的回合条目（唯一写点：回合定稿）：玩家原话逐字 + 事件步原样。
  *  空 steps = 意图未落地（空提案或未调 act），投影渲染为「未解析」。 */
 export interface TurnRecord {
 	time: number;
@@ -30,7 +29,7 @@ interface EntryLike {
 	data?: unknown;
 }
 
-/** 从会话 custom 条目读回合地籍条目；形状不符的条目跳过（换型/损坏容错）。 */
+/** 从会话 custom 条目读回合条目；形状不符的条目跳过（换型/损坏容错）。 */
 export function loadRecords(entries: readonly EntryLike[]): TurnRecord[] {
 	const out: TurnRecord[] = [];
 	for (const e of entries) {
@@ -42,9 +41,8 @@ export function loadRecords(entries: readonly EntryLike[]): TurnRecord[] {
 	return out;
 }
 
-/** 近况投影：每条目以当前世界渲染其 steps（compact 骨架行——裁决行保留 verdict/理由/事实，变更由状态视图承载）。
- *  名字解析随世界现值（改名连续性：近况行与状态视图同一指称）；跨回合离场者以窗口级已公开离场者底表兜底
- *  （despawn 变更是离场者名字的唯一载体，渲染窗口 = 整个近况窗口）。 */
+/** 近况投影：每条目以当前世界渲染其 steps（compact 骨架行，变更由状态视图承载）。
+ *  名字解析随世界现值（改名连续）；跨回合离场者以窗口级已公开离场者底表兜底。 */
 export function projectWindow(sim: Simulation, records: readonly TurnRecord[]): MemoryTurn[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { compact: true, departed }) }));
