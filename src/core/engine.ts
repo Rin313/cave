@@ -235,7 +235,7 @@ export class Engine {
 		let narration: string;
 		if (!this.run.acted) {
 			// 模型未调 act：其文本未经裁决、不可作为叙述，回落确定性摘要（近况记为未解析）。
-			// 时间律：无裁决即无流逝——本回合世界静止，这是定义，不是缺陷。
+			// 无裁决即无流逝——本回合世界静止。
 			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
 			narration = this.sim.summarize([]);
 		} else {
@@ -271,9 +271,8 @@ export class Engine {
 		}
 	}
 
-	/** 场景呈现服务（表达层的场景模式；与 summarize/digest 同类的呈现设施）：
-	 *  无意志、无 act 通道、无时间流逝——不写近况、不触门闩：运行直接进入 narration 相位，
-	 *  从不写 mapping，行动窗口结构性不存在；越权 act 调用被相位谓词机械拦截。 */
+	/** 场景呈现服务（表达层的场景模式）：无意志、无 act 通道、无时间流逝——不写近况、不触门闩；
+	 *  运行直接进入 narration 相位，越权 act 调用被相位谓词机械拦截。 */
 	async narrate(instruction: string, elapsed: TickStep[] = []): Promise<NarrationOutcome> {
 		this.beginRun("narration");
 		await this.session.prompt(buildNarratePrompt(this.sim, elapsed, instruction));

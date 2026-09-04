@@ -9,8 +9,7 @@ export function deepFreeze<T>(value: T): T {
 	return value;
 }
 
-/** 确定性字符串哈希：任意字符串 → [0,1) 均匀分布值。纯函数、无状态。
- *  games 层用它从世界状态派生自有随机语义 */
+/** 确定性字符串哈希：任意字符串 → [0,1) 均匀分布值。纯函数、无状态（roll 的底座）。 */
 export function hashStr(s: string): number {
 	let h = 0x811c9dc5;
 	for (let i = 0; i < s.length; i++) {

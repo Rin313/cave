@@ -4,9 +4,9 @@
 
 | 层 | 选型 | 说明 |
 |---|---|---|
-| 桌面壳 | **Electron** | |
+| 桌面壳 | **Electron** | 目标形态；原型期交互面为 `tools/loop.ts` CLI |
 | LLM 编排 | **pi coding-agent SDK** | 进程内集成，SDK 文档随包分发在 `node_modules/@earendil-works/pi-coding-agent/docs/` |
-| 持久化 | **SQLite** | 存档 + 回合审计 |
+| 持久化 | **SQLite** | 存档 + 回合审计；目标形态，原型期由 `loop` 的 runs/ 目录落盘 |
 
 ## 2. 核心架构主张
 
@@ -18,7 +18,7 @@
 
 ## 3. 持久化边界
 
-模拟层状态是 JSON 可序列化的，SQLite 不存热状态，存存档与审计（**目标**；原型期由 `loop` 的 `runs/` 目录以 JSONL + `state.json` 落盘，SQLite 落地后迁移）：
+模拟层状态是 JSON 可序列化的，SQLite 不存热状态，存存档与审计：
 
 | 表 | 内容 |
 |---|---|
