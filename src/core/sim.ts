@@ -473,6 +473,18 @@ export function departedNames(window: readonly { changes: Change[] }[]): Map<str
 	return m;
 }
 
+/** 已公开离场者底表（名字兜底的合法集）：despawn 在其步的参照域内（离场被感知）才铸造合法名字，
+ *  被投影的隐藏离场者不铸造。渲染窗口的跨度由调用方声明（传入的 steps 即窗口）——
+ *  近况投影以整个近况窗口为跨度供给 spineLines 的 opts.departed。 */
+export function shownDepartedNames(steps: readonly { changes: Change[]; field: FieldSpan }[]): Map<string, string> {
+	const m = new Map<string, string>();
+	for (const s of steps) {
+		const field = new Set([...s.field.before, ...s.field.after]);
+		for (const c of s.changes) if (c.kind === "despawn" && field.has(c.entity)) m.set(c.entity, c.name);
+	}
+	return m;
+}
+
 /** 声明驱动的取值渲染（渲染与投影的唯一解析点）：ref=true 的取值按引用解析——
  *  字符串元素解析为展示名（在世读态，或渲染窗口内的离场底表），解析不出原样回显，
  *  引用身份随 ids 返回（投影据此计指称，id 数组逐元素覆盖）；ref=false 一律字面。
@@ -539,17 +551,15 @@ function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, s
  *  消费者：act 结果视图（模型）、近况（compact）、loop 控制台、缺省回退摘要（玩家）。
  *  契约：变更行按步的参照域跨度投影（全部指称在场才可说，任一缺席整行沉默；理由与 Fact 是规则铸造的世界语，不过投影）；
  *  internal 属性变更恒滤（覆写者仍可从 steps 原样读取）；刻步按 at 归并，静默刻聚合为 ×n（账目单位是刻，
- *  每个被授予的刻恰消费一份时间账目；compact 裁剪的纯变更刻不建桶，时间回落 ×n 表达）。 */
-export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean }): string[] {
-	// 先裁生灭行（指称只有主语，与离场名互不依赖）定「已公开离场者」：被投影的 despawn 不铸造合法名字，
-	// 引用隐藏离场者的行在指称判定中随之沉默；指称匹配宇宙 = 在世实体 ∪ 窗口内全部离场者。
-	const departedAll = departedNames(steps);
+ *  每个被授予的刻恰消费一份时间账目；compact 裁剪的纯变更刻不建桶，时间回落 ×n 表达）。
+ *  opts.departed：渲染窗口的已公开离场者底表覆盖——渲染窗口的跨度由调用方声明（近况投影以整个近况窗口
+ *  为渲染窗口，「t 回合提及、t+k 回合离场」的实体由此兜底名字）；缺省 = 本数组派生。 */
+export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean; departed?: ReadonlyMap<string, string> }): string[] {
+	// 离场底表：被投影的 despawn 不铸造合法名字，引用隐藏离场者的行在指称判定中随之沉默；
+	// 指称匹配宇宙 = 在世实体 ∪ 渲染窗口内全部离场者（生灭行指称只有主语，与离场名互不依赖）。
+	const departedAll = opts?.departed ?? departedNames(steps);
 	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
-	const shownDeparted = new Map<string, string>();
-	for (const s of steps) {
-		const field = spanOf(s);
-		for (const c of s.changes) if (c.kind === "despawn" && field.has(c.entity)) shownDeparted.set(c.entity, c.name);
-	}
+	const shownDeparted = opts?.departed ?? shownDepartedNames(steps);
 	const perceivableOf = (s: Step): ((c: Change) => boolean) => {
 		const field = spanOf(s);
 		// 边感知（与状态视图同一谓词的跨度快照）：rel 变更行要求边在跨度两侧知觉的并集内

@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MEMORY_CUSTOM_TYPE, loadMemory, pruneContext, type MemoryTurn } from "./context.ts";
+import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type MemoryTurn, type TurnRecord } from "./context.ts";
 import { Simulation, entity, messagesFor, spineLines, viewCard, type Action, type ActionStep, type GameDef, type Step, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
@@ -85,6 +85,8 @@ export class Engine {
 	private session: SessionHandle;
 	private readonly sessionManager: SessionManager;
 	private readonly memory: MemoryTurn[];
+	/** 回合地籍条目（持久化的事实：intent + steps；窗口 = 裁剪后的最近 memoryLimit 条）。 */
+	private readonly records: TurnRecord[];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
 	/** 本回合裁决累积（act 工具经 channel 直通回写）。 */
@@ -96,6 +98,7 @@ export class Engine {
 		session: SessionHandle,
 		sessionManager: SessionManager,
 		memory: MemoryTurn[],
+		records: TurnRecord[],
 		run: RunState,
 		channel: TurnChannel,
 	) {
@@ -103,6 +106,8 @@ export class Engine {
 		this.session = session;
 		this.sessionManager = sessionManager;
 		this.memory = memory;
+		this.records = records;
+		this.updateMemory();
 		this.run = run;
 		this.channel = channel;
 		channel.onAdjudication = (patch) => {
@@ -170,10 +175,11 @@ export class Engine {
 			retry: { enabled: true, maxRetries: 2 },
 		});
 		if (def.memoryLimit === undefined) throw new Error("GameDef.memoryLimit 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
-		const memoryLimit = def.memoryLimit;
-		if (!Number.isInteger(memoryLimit) || memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(memoryLimit)}`);
+		if (!Number.isInteger(def.memoryLimit) || def.memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(def.memoryLimit)}`);
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-		const memory = loadMemory(sessionManager.getEntries(), memoryLimit);
+		// 近况的事实源：回合地籍条目从会话文件读入；投影缓存在 Engine 构造时由 updateMemory 填充
+		const records = loadRecords(sessionManager.getEntries());
+		const memory: MemoryTurn[] = [];
 		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
 		const loader = new DefaultResourceLoader({
 			cwd: process.cwd(),
@@ -204,7 +210,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(sim, session, sessionManager, memory, run, channel);
+		return new Engine(sim, session, sessionManager, memory, records, run, channel);
 	}
 
 	get sessionFile(): string | undefined {
@@ -242,7 +248,7 @@ export class Engine {
 			// 摘要兜底原料 = 本回合全部事件（玩家动作 + 时间流逝）
 			narration = this.settleNarration([...this.outcome.results, ...this.outcome.elapsed]);
 		}
-		this.recordTurn(action.intent);
+		this.recordTurn(action.intent, [...this.outcome.results, ...this.outcome.elapsed]);
 		return {
 			results: this.outcome.results,
 			elapsed: this.outcome.elapsed,
@@ -253,22 +259,28 @@ export class Engine {
 		};
 	}
 
-	/** 回合落账：近况窗口推进并持久化为会话 custom 条目（不入 LLM 上下文，重启后由 loadMemory 重建）。
-	 *  近况 = 回合骨架的 compact 投影（裁决行保留 verdict/理由/事实；变更由状态视图承载）。 */
-	private recordTurn(intent: string): void {
-		const turn: MemoryTurn = {
-			time: this.sim.world.time,
-			intent,
-			moves: spineLines(this.sim, [...this.outcome.results, ...this.outcome.elapsed], { compact: true }),
-		};
-		this.memory.push(turn);
-		const limit = this.sim.def.memoryLimit;
-		if (this.memory.length > limit) this.memory.splice(0, this.memory.length - limit);
+	/** 回合落账：回合地籍条目（事实：intent + steps）持久化为会话 custom 条目（不入 LLM 上下文），
+	 *  随后近况窗口更新。投影缓存永不持久化——重启由 loadRecords + projectWindow 重建，
+	 *  重建 ≡ 内存窗口（同一纯函数、同一输入）。 */
+	private recordTurn(intent: string, steps: Step[]): void {
+		const record: TurnRecord = { time: this.sim.world.time, intent, steps };
+		this.records.push(record);
 		try {
-			this.sessionManager.appendCustomEntry(MEMORY_CUSTOM_TYPE, turn);
+			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
 		} catch {
 			// 持久化失败不阻断回合：内存窗口仍有效
 		}
+		this.updateMemory();
+	}
+
+	/** 近况窗口更新：records 裁剪到 memoryLimit 后整体重投影（近况 ≡ Π(records, 世界现值)）。
+	 *  投影点在窗口更新时（create/recordTurn），不在每次 LLM 调用时——act 落钟推进世界后，
+	 *  同回合的映射与续行调用共享同一近况头（回合内前缀字节稳定）。 */
+	private updateMemory(): void {
+		const limit = this.sim.def.memoryLimit;
+		if (this.records.length > limit) this.records.splice(0, this.records.length - limit);
+		this.memory.length = 0;
+		this.memory.push(...projectWindow(this.sim, this.records));
 	}
 
 	/** 场景呈现服务（表达层的场景模式）：无意志、无 act 通道、无时间流逝——不写近况、不触门闩；
