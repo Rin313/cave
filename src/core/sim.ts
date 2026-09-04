@@ -395,7 +395,7 @@ export interface ActionStep {
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
-	/** 变更来源标识（law:<id> / rule:<verb> / system:<id>），审计依据。 */
+	/** 变更来源标识（rule:<ruleId> / system:<systemId>），审计依据。 */
 	src?: string;
 }
 
@@ -581,10 +581,11 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
 }
 
-/** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。 */
-interface RawResult extends Omit<ActionStep, "kind" | "field"> {
-	deltas: Delta[];
-}
+/** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。
+ *  授予态 src 必填，拒绝态无变更即无出处。 */
+type RawResult =
+	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas" | "src" | "deniedBy" | "denial">)
+	| ({ ok: false; deltas: Delta[] } & Omit<ActionStep, "kind" | "field" | "ok" | "deltas">);
 
 export class Simulation {
 	readonly def: GameDef;
@@ -787,13 +788,12 @@ export class Simulation {
 		const r = this.adjudicateRaw(action, before, s0);
 		let step: Omit<ActionStep, "field">;
 		if (r.ok) {
-			const src = r.src ?? `action:${action.verb}`;
-			const cc = this.commitChecked(s0, r.deltas, src);
+			const cc = this.commitChecked(s0, r.deltas, r.src);
 			if (!cc.ok) {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
 				step = { kind: "action", ok: false, reason: cc.reason ?? messagesFor(this.def).noResponse, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 			} else {
-				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, src, ticks: r.ticks };
+				step = { kind: "action", ok: true, reason: r.reason, changes: cc.changes, action, facts: r.facts, src: r.src, ticks: r.ticks };
 			}
 		} else {
 			step = { kind: "action", ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
