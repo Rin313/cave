@@ -12,7 +12,8 @@ const num = (v: unknown): number => Number(v ?? 0);
  *  良序游戏永不过墙边界，探测不到回归——本夹具是唯一断言墙契约的仪器。
  *  干净对照步的职责不止「无误伤」：若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），
  *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」。
- *  声明驱动的渲染/投影（字面值不冒充指称）在 tag 场景钉住。 */
+ *  声明驱动的渲染/投影（字面值不冒充指称）在 tag 场景钉住。
+ *  级联删边的入账（弱引用的消散可说——变更流是后态的完整 diff）在 sever 场景钉住。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -138,6 +139,18 @@ export const walltest: GameDef = {
 			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（边值与属性值同一账本形状）。",
 			schema: Type.Object({}),
 			rules: [{ id: "edgeobj.leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as RelValue)], "你夹带了。") }],
+		}),
+		bond: defineVerb({
+			label: "缔结",
+			description: "级联场景前置：与那件东西结一条带值的关系边（弱引用的建立）。",
+			schema: Type.Object({}),
+			rules: [{ id: "bond.ok", judge: () => grant([D.relSet("player", "thing", "标记", "甲")], "你与那件东西结下纽带。") }],
+		}),
+		sever: defineVerb({
+			label: "断绝",
+			description: "墙契约：despawn 那件东西——级联删边逐条入账（despawn 记录在前，边消散紧随，边表序）。",
+			schema: Type.Object({}),
+			rules: [{ id: "sever.ok", judge: () => grant([D.despawn("thing")], "你斩断了那件东西。") }],
 		}),
 	},
 	world: {

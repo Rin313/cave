@@ -81,7 +81,7 @@ core 的承诺分三层：**公理**是定义性承诺；**协议不变量**是�
 
 ### 3.4 生灭与拓扑
 
-- Delta 原语：`set / relSet / rename / spawn / despawn`（relSet 值 null 即删边——拓扑收缩与生长对称，存储边永不持 null；非 null 边值与属性值同一账本形状契约——标量或标量数组）。提交产出按基底类别同构分形的变更记录 `Change`（kind: prop/rename/rel/spawn/despawn——rel 携带完整边端点，next null 即删边；rename 携带 prev/next 名字）。生灭原语配合 relSet 建径/删径让世界拓扑生长与收缩；despawn 级联清理关系边，悬空 id 引用由完整性硬墙回滚。
+- Delta 原语：`set / relSet / rename / spawn / despawn`（relSet 值 null 即删边——拓扑收缩与生长对称，存储边永不持 null；非 null 边值与属性值同一账本形状契约——标量或标量数组）。提交产出按基底类别同构分形的变更记录 `Change`（kind: prop/rename/rel/spawn/despawn——rel 携带完整边端点，next null 即删边；rename 携带 prev/next 名字）。生灭原语配合 relSet 建径/删径让世界拓扑生长与收缩；despawn 级联清理关系边——级联是 despawn 的机械后果，逐条入账为 rel Change（next null，按边表序紧随 despawn 记录），变更流因此是后态的完整 diff；悬空 id 引用由完整性硬墙回滚。
 - **生长与收缩对称**：硬墙对悬空引用 fail-closed ；引用清点原语 `refsTo(def, world, id)`（按注册表 `type:"id"` 枚举指向该实体的 (entity, prop)，标量与引用数组同覆盖，语义无关的机械操作），清理策略（置空、转移、级联生灭）是游戏语义，由规则决定；容器级 despawn 同理由此表达（先迁散子女再 despawn）。
 - 关系边表 `world.relations` 表达社会 / 叙事状态，表达层格式化为世界腔文本。
 

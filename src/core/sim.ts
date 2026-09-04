@@ -36,7 +36,8 @@ export interface World {
 }
 
 /** 变更原语：全为绝对写（后态自含，不做相对增减）——变更记录与回滚都按绝对值对账。只由规则/系统产出，经硬墙提交。
- *  relSet 值 null 即删边；despawn 只级联清理关系边，id 型属性引用不清扫——悬空由完整性硬墙回滚（盘点原语见 refsTo）。 */
+ *  relSet 值 null 即删边；despawn 级联清理关系边且逐条入账（rel Change，next null——弱引用随主消散，消散可说），
+ *  id 型属性引用不清扫——悬空由完整性硬墙回滚（强引用挡 despawn，盘点原语见 refsTo）。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "relSet"; from: string; to: string; type: string; value: RelValue | null }
@@ -44,7 +45,7 @@ export type Delta =
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-/** 提交产出的变更记录：prop/rename 只留 prev/next，rel 携带完整端点（next null 即删边）。
+/** 提交产出的变更记录：prop/rename 只留 prev/next，rel 携带完整端点（next null 即删边；despawn 级联删边复用同一形状，不另立形态）。
  *  spawn/despawn 携带展示名——实体已离场，这条记录是渲染历史事件时名字的唯一来源（见 departedNames）。 */
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue; src: string }
@@ -909,15 +910,21 @@ export class Simulation {
 				if (i < 0) return refuse(`despawn "${d.entity}": entity missing`);
 				const gone = this.world.entities[i]!;
 				this.world.entities.splice(i, 1);
-				// 原地级联删边：只清已存在的边表，不为级联建表；同提交内后续边写入仍共享同一数组
+				// 原地级联删边：级联是 despawn 的机械后果（弱引用随主消散），逐条入账——变更流必须是后态的完整 diff。
+				// 只清已存在的边表，不为级联建表；逆序遍历、unshift 保边表序（确定性），同提交内后续边写入仍共享同一数组
 				const existing = this.world.relations;
+				const dissolved: Rel[] = [];
 				if (existing) {
 					for (let j = existing.length - 1; j >= 0; j--) {
 						const r = existing[j]!;
-						if (r.from === d.entity || r.to === d.entity) existing.splice(j, 1);
+						if (r.from === d.entity || r.to === d.entity) {
+							dissolved.unshift(r);
+							existing.splice(j, 1);
+						}
 					}
 				}
 				changes.push({ kind: "despawn", entity: d.entity, name: gone.name, src });
+				for (const r of dissolved) changes.push({ kind: "rel", from: r.from, to: r.to, type: r.type, prev: r.value, next: null, src });
 				continue;
 			}
 			if (d.op === "relSet") {
