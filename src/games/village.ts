@@ -119,8 +119,9 @@ export const village: GameDef = {
 			rules: [{
 				id: "eat.berry",
 				judge: (q) => {
-					if (num(entity(q.world, q.player)?.props.berries) < 1) return deny("eat.none", { reason: "你翻遍了口袋，没有浆果可吃。" });
-					return grant([D.inc(q.player, "berries", -1), D.inc(q.player, "satiety", 25), D.inc(q.player, "hp", 5)], "你吃下了一颗浆果，肚子舒服了些。");
+					const me = entity(q.world, q.player)!;
+					if (num(me.props.berries) < 1) return deny("eat.none", { reason: "你翻遍了口袋，没有浆果可吃。" });
+					return grant([D.set(q.player, "berries", num(me.props.berries) - 1), D.set(q.player, "satiety", num(me.props.satiety) + 25), D.set(q.player, "hp", num(me.props.hp) + 5)], "你吃下了一颗浆果，肚子舒服了些。");
 				},
 			}],
 		}),
@@ -133,7 +134,7 @@ export const village: GameDef = {
 				judge: (q) => {
 					const a = entity(q.world, q.player)!;
 					if (a.props.down === true) return grant([D.set(q.player, "down", false), D.set(q.player, "fatigue", 0), D.set(q.player, "hp", 30), D.set(q.player, "satiety", 10)], "你昏昏沉沉睡了一夜，醒来后重新站起。", undefined, 4);
-					return grant([D.set(q.player, "fatigue", 0), D.inc(q.player, "hp", 8), D.inc(q.player, "satiety", -5)], "你歇了歇，缓过劲来。", undefined, 1);
+					return grant([D.set(q.player, "fatigue", 0), D.set(q.player, "hp", num(a.props.hp) + 8), D.set(q.player, "satiety", num(a.props.satiety) - 5)], "你歇了歇，缓过劲来。", undefined, 1);
 				},
 			}],
 		}),
@@ -159,7 +160,7 @@ export const village: GameDef = {
 				id: "talk.nice",
 				judge: (q, p) => {
 					if (trust(q, p.target) >= 5) return deny("talk.bored", { reason: `${nameOf(q, p.target)}已经没什么新鲜话可说了。` });
-					return grant([D.relInc(p.target, q.player, "信任", 1)], `你和${nameOf(q, p.target)}攀谈了一阵，关系亲近了些。`);
+					return grant([D.relSet(p.target, q.player, "信任", trust(q, p.target) + 1)], `你和${nameOf(q, p.target)}攀谈了一阵，关系亲近了些。`);
 				},
 			}],
 		}),
@@ -184,10 +185,11 @@ export const village: GameDef = {
 						if (yields && stock < 1) return deny("buy.emptystock", { reason: `${nameOf(q, p.goods)}已经卖光了。` });
 						if (!yields && g.props.in === q.player) return deny("buy.held", { reason: `${nameOf(q, p.goods)}已经在你手里了。` });
 						const price = Math.max(1, (pb ?? pr!) - (yields ? stock : 0) - loyalCut(q, vendorId));
-						if (num(entity(q.world, q.player)?.props.coins) < price) return deny("buy.broke", { reason: "你的钱不够。" });
+						const me = entity(q.world, q.player)!;
+						if (num(me.props.coins) < price) return deny("buy.broke", { reason: "你的钱不够。" });
 						return yields
-							? grant([D.inc(p.goods, yields, -1), D.inc(q.player, yields, 1), D.inc(vendorId, "coins", price), D.inc(q.player, "coins", -price)], `你花${price}铜币从${nameOf(q, vendorId)}手里买了一份${nameOf(q, p.goods)}的出产。`)
-							: grant([D.set(p.goods, "in", q.player), D.inc(vendorId, "coins", price), D.inc(q.player, "coins", -price)], `你花${price}铜币向${nameOf(q, vendorId)}买下了${nameOf(q, p.goods)}。`);
+							? grant([D.set(p.goods, yields, num(g.props[yields]) - 1), D.set(q.player, yields, num(me.props[yields]) + 1), D.set(vendorId, "coins", num(vendor.props.coins) + price), D.set(q.player, "coins", num(me.props.coins) - price)], `你花${price}铜币从${nameOf(q, vendorId)}手里买了一份${nameOf(q, p.goods)}的出产。`)
+							: grant([D.set(p.goods, "in", q.player), D.set(vendorId, "coins", num(vendor.props.coins) + price), D.set(q.player, "coins", num(me.props.coins) - price)], `你花${price}铜币向${nameOf(q, vendorId)}买下了${nameOf(q, p.goods)}。`);
 					},
 				},
 			],
@@ -209,7 +211,8 @@ export const village: GameDef = {
 						if (!vendor || !dest || vendor.props.alive === false) return deny("sell.novendor", { reason: "眼下没人收这货。" });
 						if (isNight(q) && vendor.props.closesNight === true) return deny("sell.closed", { reason: `夜色已深，${nameOf(q, vendorId)}已经歇下了。` });
 						const price = num(g.props.resale);
-						return grant([D.set(p.goods, "in", dest), D.inc(q.player, "coins", price), D.inc(vendorId, "coins", -price)], `你把${nameOf(q, p.goods)}卖回给了${nameOf(q, vendorId)}。`);
+						const me = entity(q.world, q.player)!;
+						return grant([D.set(p.goods, "in", dest), D.set(q.player, "coins", num(me.props.coins) + price), D.set(vendorId, "coins", num(vendor.props.coins) - price)], `你把${nameOf(q, p.goods)}卖回给了${nameOf(q, vendorId)}。`);
 					},
 				},
 				{ id: "sell.fallback", judge: () => deny("sell.fallback", { reason: "你手里没有可出卖的货品。" }) },
@@ -222,8 +225,9 @@ export const village: GameDef = {
 			rules: [{
 				id: "eatgrain.eat",
 				judge: (q) => {
-					if (num(entity(q.world, q.player)?.props.grain) < 1) return deny("eatgrain.none", { reason: "你翻遍口袋，没有谷物可吃。" });
-					return grant([D.inc(q.player, "grain", -1), D.inc(q.player, "satiety", 30), D.inc(q.player, "hp", 6)], "你嚼了一把谷物，腹中稍安。");
+					const me = entity(q.world, q.player)!;
+					if (num(me.props.grain) < 1) return deny("eatgrain.none", { reason: "你翻遍口袋，没有谷物可吃。" });
+					return grant([D.set(q.player, "grain", num(me.props.grain) - 1), D.set(q.player, "satiety", num(me.props.satiety) + 30), D.set(q.player, "hp", num(me.props.hp) + 6)], "你嚼了一把谷物，腹中稍安。");
 				},
 			}],
 		}),
@@ -240,7 +244,8 @@ export const village: GameDef = {
 						const w = entity(q.world, p.source);
 						if (!w || w.props.supply !== true) return deny("draw.dry", { reason: `${nameOf(q, p.source)}还是枯的，打不出水。` });
 						if (num(w.props.water) < 1) return deny("draw.empty", { reason: `${nameOf(q, p.source)}的存水已经见底了。` });
-						return grant([D.inc(p.source, "water", -1), D.inc(q.player, "water", 1)], `你从${nameOf(q, p.source)}提上一桶清水。`);
+						const me = entity(q.world, q.player)!;
+						return grant([D.set(p.source, "water", num(w.props.water) - 1), D.set(q.player, "water", num(me.props.water) + 1)], `你从${nameOf(q, p.source)}提上一桶清水。`);
 					},
 				},
 			],
@@ -252,8 +257,9 @@ export const village: GameDef = {
 			rules: [{
 				id: "drink.sip",
 				judge: (q) => {
-					if (num(entity(q.world, q.player)?.props.water) < 1) return deny("drink.none", { reason: "你没有水可喝。" });
-					return grant([D.inc(q.player, "water", -1), D.inc(q.player, "fatigue", -20), D.inc(q.player, "hp", 3)], "你喝了几口清水，精神一振。");
+					const me = entity(q.world, q.player)!;
+					if (num(me.props.water) < 1) return deny("drink.none", { reason: "你没有水可喝。" });
+					return grant([D.set(q.player, "water", num(me.props.water) - 1), D.set(q.player, "fatigue", num(me.props.fatigue) - 20), D.set(q.player, "hp", num(me.props.hp) + 3)], "你喝了几口清水，精神一振。");
 				},
 			}],
 		}),
@@ -268,7 +274,8 @@ export const village: GameDef = {
 					id: "harvest.bush",
 					judge: (q, p) => {
 						if (entity(q.world, p.bush)?.props.ripe !== true) return deny("harvest.unripe", { reason: `${nameOf(q, p.bush)}还没有成熟。` });
-						return grant([D.inc(q.player, "berries", 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
+						const me = entity(q.world, q.player)!;
+						return grant([D.set(q.player, "berries", num(me.props.berries) + 1), D.set(p.bush, "ripe", false)], "你采下了一颗浆果。");
 					},
 				},
 			],
@@ -286,18 +293,20 @@ export const village: GameDef = {
 						const s = entity(q.world, p.structure);
 						const ph = fin(s?.props.phase);
 						if (!s || ph === null) return deny("repair.nostructure", { reason: `${nameOf(q, p.structure)}不需要修葺。` });
-						if (ph === 0) return grant([D.inc(p.structure, "phase", 1)], `你清理了${nameOf(q, p.structure)}里的淤泥。`);
+						if (ph === 0) return grant([D.set(p.structure, "phase", ph + 1)], `你清理了${nameOf(q, p.structure)}里的淤泥。`);
 						if (ph === 1) {
 							const material = q.world.entities.find((e) => e.props.in === q.player && tagsOf(e).includes("wood"));
 							if (!material) return deny("repair.nomaterial", { reason: `你得先把木料拿到手，才修得了${nameOf(q, p.structure)}。` });
-							return grant([D.inc(p.structure, "phase", 1)], `你用${material.name}加固了${nameOf(q, p.structure)}。`);
+							return grant([D.set(p.structure, "phase", ph + 1)], `你用${material.name}加固了${nameOf(q, p.structure)}。`);
 						}
 						if (ph === 2) {
 							const patronId = typeof s.props.patron === "string" ? s.props.patron : "";
-							if (!patronId || !entity(q.world, patronId)) return deny("repair.nopatron", { reason: `${nameOf(q, p.structure)}修好了，却没有人来验收。` });
+							const patron = patronId ? entity(q.world, patronId) : null;
+							if (!patron) return deny("repair.nopatron", { reason: `${nameOf(q, p.structure)}修好了，却没有人来验收。` });
+							const me = entity(q.world, q.player)!;
 							const bounty = Math.max(0, num(s.props.bounty));
 							return grant(
-								[D.inc(p.structure, "phase", 1), D.set(p.structure, "supply", true), D.set(p.structure, "water", num(s.props.capacity)), D.inc(q.player, "coins", bounty), D.inc(patronId, "coins", -bounty)],
+								[D.set(p.structure, "phase", ph + 1), D.set(p.structure, "supply", true), D.set(p.structure, "water", num(s.props.capacity)), D.set(q.player, "coins", num(me.props.coins) + bounty), D.set(patronId, "coins", num(patron.props.coins) - bounty)],
 								`你为${nameOf(q, p.structure)}封好了底，清泉涌出！${nameOf(q, patronId)}赏了你${bounty}枚铜币。`,
 							);
 						}
@@ -320,9 +329,10 @@ export const village: GameDef = {
 						// 施动前提是法则义务，不是探测域的声明：攻击性在此裁决，而非只写在枚举域里
 						if (entity(q.world, p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { reason: `${nameOf(q, p.dog)}不是赶得跑的野兽。` });
 						if (entity(q.world, p.dog)?.props.alive !== true) return deny("dog.gone", { reason: `${nameOf(q, p.dog)}已经被赶跑了，不在这里了。` });
-						if (num(entity(q.world, q.player)?.props.fatigue) >= 40) return deny("dog.tired", { reason: `你太疲惫了，挥不动手，${nameOf(q, p.dog)}只是远远地龇牙。` });
+						const me = entity(q.world, q.player)!;
+						if (num(me.props.fatigue) >= 40) return deny("dog.tired", { reason: `你太疲惫了，挥不动手，${nameOf(q, p.dog)}只是远远地龇牙。` });
 						const bite = -(2 + q.roll(`dog.bite#${p.dog}`, 3));
-						return grant([D.set(p.dog, "alive", false), D.inc(q.player, "hp", bite)], `你抄起家伙赶跑了${nameOf(q, p.dog)}，被它咬了一口。`);
+						return grant([D.set(p.dog, "alive", false), D.set(q.player, "hp", num(me.props.hp) + bite)], `你抄起家伙赶跑了${nameOf(q, p.dog)}，被它咬了一口。`);
 					},
 				},
 			],
@@ -340,7 +350,8 @@ export const village: GameDef = {
 					if (!spot) return deny("scout.nospot", { reason: "这里没什么可翻找的。" });
 					if (q.roll("find.coin", 4) < 3) return deny("scout.unlucky", { reason: "你翻找了一圈，一无所获。" });
 					if (num(spot.props.coins) < 2) return deny("scout.picked", { reason: "能捡的都被人捡干净了。" });
-					return grant([D.inc(spot.id, "coins", -2), D.inc(q.player, "coins", 2)], "你四处翻了翻，在墙角捡到了两枚铜币。");
+					const me = entity(q.world, q.player)!;
+					return grant([D.set(spot.id, "coins", num(spot.props.coins) - 2), D.set(q.player, "coins", num(me.props.coins) + 2)], "你四处翻了翻，在墙角捡到了两枚铜币。");
 				},
 			}],
 		}),
@@ -380,14 +391,15 @@ export const village: GameDef = {
 		},
 		{
 			id: "dog.night",
-			// roll 在条件层只掷一次；每只野兽各扣 1 体力。
+			// roll 在条件层只掷一次；野兽合计扣体力（净移动一笔入账）。
 			run: (q) => {
 				if (q.time % 4 !== 3 || q.roll("dog.night", 4) !== 1) return null;
-				if (entity(q.world, q.player)?.props.down === true) return null;
+				const me = entity(q.world, q.player)!;
+				if (me.props.down === true) return null;
 				const beasts = q.world.entities.filter((e) => e.props.alive === true && e.props.aggressive === true);
 				if (!beasts.length) return null;
 				return {
-					deltas: beasts.map(() => D.inc(q.player, "hp", -1)),
+					deltas: [D.set(q.player, "hp", num(me.props.hp) - beasts.length)],
 					facts: [{ text: "夜色里，野狗窜出来在你小腿上咬了一口！" }],
 				};
 			},
@@ -395,19 +407,19 @@ export const village: GameDef = {
 		{
 			id: "body.fatigue",
 			run: (q) => ({
-				deltas: q.world.entities.filter((e) => e.props.actor === true && e.props.down !== true).map((p) => D.inc(p.id, "fatigue", 2)),
+				deltas: q.world.entities.filter((e) => e.props.actor === true && e.props.down !== true).map((p) => D.set(p.id, "fatigue", num(p.props.fatigue) + 2)),
 			}),
 		},
 		{
 			id: "body.hunger",
 			run: (q) => ({
-				deltas: q.world.entities.filter((e) => e.props.actor === true && e.props.down !== true && num(e.props.satiety) > 0).map((p) => D.inc(p.id, "satiety", -6)),
+				deltas: q.world.entities.filter((e) => e.props.actor === true && e.props.down !== true && num(e.props.satiety) > 0).map((p) => D.set(p.id, "satiety", num(p.props.satiety) - 6)),
 			}),
 		},
 		{
 			id: "body.starve",
 			run: (q) => ({
-				deltas: q.world.entities.filter((e) => e.props.actor === true && e.props.down !== true && num(e.props.satiety) <= 0).flatMap((p) => [D.set(p.id, "satiety", 0), D.inc(p.id, "hp", -4)]),
+				deltas: q.world.entities.filter((e) => e.props.actor === true && e.props.down !== true && num(e.props.satiety) <= 0).flatMap((p) => [D.set(p.id, "satiety", 0), D.set(p.id, "hp", num(p.props.hp) - 4)]),
 			}),
 		},
 		{
@@ -430,7 +442,10 @@ export const village: GameDef = {
 				return {
 					deltas: q.world.entities
 						.filter((e) => typeof e.props.yields === "string" && num(e.props[e.props.yields]) < 10)
-						.map((w) => D.inc(w.id, String(w.props.yields), 1)),
+						.map((w) => {
+							const key = String(w.props.yields);
+							return D.set(w.id, key, num(w.props[key]) + 1);
+						}),
 				};
 			},
 		},

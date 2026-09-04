@@ -2,6 +2,8 @@ import type { Entity, GameDef, PropDef, PropValue, Q, RelValue } from "../core/s
 import { D, defineVerb, entity, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
+const num = (v: unknown): number => Number(v ?? 0);
+
 /** 结构墙夹具：
  *  裁决侧代码（规则/系统）收到的 Q.world 是裁决时读态的深冻结副本；
  *  越权写钟（q.world.time）同样被拦。
@@ -45,19 +47,26 @@ export const walltest: GameDef = {
 			label: "触及",
 			description: "干净动作：touched +1（对照：冻结不得误伤）。",
 			schema: Type.Object({}),
-			rules: [{ id: "touch.ok", judge: (q) => grant([D.inc(q.player, "touched", 1)], "你触到了世界。") }],
+			rules: [{
+				id: "touch.ok",
+				judge: (q) => {
+					const me = entity(q.world, q.player)!;
+					return grant([D.set(q.player, "touched", num(me.props.touched) + 1)], "你触到了世界。");
+				},
+			}],
 		}),
 		poke: defineVerb({
 			label: "戳",
 			description: "越权动词：规则直改 hp 后授予（冻结读态上写入即抛，授予不存在）。",
 			schema: Type.Object({}),
-			rules: [{
-				id: "poke.leak",
-				judge: (q) => {
-					leakHp(q);
-					return grant([D.inc(q.player, "touched", 1)], "你戳了一下。");
-				},
-			}],
+				rules: [{
+					id: "poke.leak",
+					judge: (q) => {
+						leakHp(q);
+						const me = entity(q.world, q.player)!;
+						return grant([D.set(q.player, "touched", num(me.props.touched) + 1)], "你戳了一下。");
+					},
+				}],
 		}),
 		clockpoke: defineVerb({
 			label: "拨钟",
@@ -81,7 +90,13 @@ export const walltest: GameDef = {
 			label: "触潜标",
 			description: "越权动词：授予后触发审查者（sneaky 不变式）直改账本——冻结读态上写入即抛，崩溃在提交边界兑为墙否决。",
 			schema: Type.Object({}),
-			rules: [{ id: "sneakpoke.grant", judge: (q) => grant([D.inc(q.player, "sneak", 1)], "你碰了潜标。") }],
+			rules: [{
+				id: "sneakpoke.grant",
+				judge: (q) => {
+					const me = entity(q.world, q.player)!;
+					return grant([D.set(q.player, "sneak", num(me.props.sneak) + 1)], "你碰了潜标。");
+				},
+			}],
 		}),
 		smuggle: defineVerb({
 			label: "夹带",

@@ -36,18 +36,18 @@ export interface World {
 	relations?: Rel[];
 }
 
-/** 结构化变更原语：规则/系统产出，模拟层经硬墙提交。relSet 值 null 即删边；despawn 只级联清理关系边，
- *  id 型属性引用不清扫——悬空由完整性硬墙回滚（清理策略的盘点原语见 refsTo）。 */
+/** 结构化变更原语：全为绝对写——授予的被触键后态规格自含（规则持有冻结读态，
+ *  相对形式在记录层零残留：ActionStep 只存绝对 prev/next 的 Change）。规则/系统产出，模拟层经硬墙提交。
+ *  relSet 值 null 即删边；despawn 只级联清理关系边，id 型属性引用不清扫——悬空由完整性硬墙回滚
+ *  （清理策略的盘点原语见 refsTo）。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
-	| { op: "inc"; entity: string; prop: string; by: number }
 	| { op: "relSet"; from: string; to: string; type: string; value: RelValue | null }
-	| { op: "relInc"; from: string; to: string; type: string; by: number }
 	| { op: "rename"; entity: string; value: string }
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-/** 世界变更记录（commit 的唯一产出）：与 Delta 按基底类别同构——set/inc 合流为 prop（提交后不区分操作形态，
+/** 世界变更记录（commit 的唯一产出）：与 Delta 按基底类别同构——set 合流为 prop（提交后不区分操作形态，
  *  prev/next 即差异）；rel 携带完整边端点（from/to），next null 即删边；
  *  spawn/despawn 的 name 是生灭实体的展示名——实体已离开状态，变更是其名字的唯一载体（渲染历史事件以 departedNames 兜底）。*/
 export type Change =
@@ -171,9 +171,7 @@ export function deny(law: string, o: { reason?: string } = {}): Verdict {
 /** Delta 构造糖。 */
 export const D = {
 	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
-	inc: (entity: string, prop: string, by: number): Delta => ({ op: "inc", entity, prop, by }),
 	relSet: (from: string, to: string, type: string, value: RelValue | null): Delta => ({ op: "relSet", from, to, type, value }),
-	relInc: (from: string, to: string, type: string, by: number): Delta => ({ op: "relInc", from, to, type, by }),
 	rename: (entity: string, value: string): Delta => ({ op: "rename", entity, value }),
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
@@ -935,7 +933,7 @@ export class Simulation {
 	/** 提交 = 裁决的完整执行（执行翼；状态翼不变式在 commitChecked）。每条 delta 在其应用时刻必须可执行——
 	 *  逐条校验而非提交前预检（同一授予内 spawn 后 set 是合法书写）；不可执行即拒绝整个提交（commitChecked 原子回滚）。
 	 *  幂等跳过的唯一判据是目标状态已成立：relSet 删不存在的边成立（无边即状态，悬空端点之间本不容边）；
-	 *  set 同值与零效果增量以目标存在为前提——主语不存在的「已成立」不可判定，存在性拒绝在前，永不回落为跳过。 */
+	 *  set 同值以目标存在为前提——主语不存在的「已成立」不可判定，存在性拒绝在前，永不回落为跳过。 */
 	private commit(deltas: Delta[], src: string): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
 		// 边表只在首个需要写入的边 delta 到来时入账
@@ -990,18 +988,6 @@ export class Simulation {
 				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value, src });
 				continue;
 			}
-			if (d.op === "relInc") {
-				if (dangling(d.from, d.to)) return refuse(`relInc ${d.from}->${d.to} (${d.type}): endpoint missing`);
-				const cur = relVal(this.world, d.from, d.to, d.type);
-				const prev = cur ?? 0;
-				if (typeof prev !== "number" || !Number.isFinite(prev)) return refuse(`relInc ${d.from}->${d.to} (${d.type}): current value is not a finite number`);
-				const next = prev + d.by;
-				if (!Number.isFinite(next)) return refuse(`relInc ${d.from}->${d.to} (${d.type}): result is not a finite number`);
-				if (next === prev) continue;
-				upsertRel(d.from, d.to, d.type, next);
-				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next, src });
-				continue;
-			}
 			if (d.op === "rename") {
 				const e = entity(this.world, d.entity);
 				if (!e) return refuse(`rename "${d.entity}": target entity missing`);
@@ -1013,23 +999,12 @@ export class Simulation {
 				continue;
 			}
 			const e = entity(this.world, d.entity);
-			if (!e) return refuse(`${d.op} "${d.entity}.${d.prop}": target entity missing`);
-			if (d.op === "set") {
-				if (!isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (scalar or scalar array)`);
-				const prev = e.props[d.prop] ?? null;
-				if (prev === d.value) continue;
-				e.props[d.prop] = d.value;
-				changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value, src });
-			} else {
-				const cur = e.props[d.prop];
-				const prev = cur ?? 0;
-				if (typeof prev !== "number" || !Number.isFinite(prev)) return refuse(`inc "${d.entity}.${d.prop}": current value is not a finite number`);
-				const next = prev + d.by;
-				if (!Number.isFinite(next)) return refuse(`inc "${d.entity}.${d.prop}": result is not a finite number`);
-				if (next === prev) continue;
-				e.props[d.prop] = next;
-				changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next, src });
-			}
+			if (!e) return refuse(`set "${d.entity}.${d.prop}": target entity missing`);
+			if (!isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (scalar or scalar array)`);
+			const prev = e.props[d.prop] ?? null;
+			if (prev === d.value) continue;
+			e.props[d.prop] = d.value;
+			changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value, src });
 		}
 		return { changes };
 	}
