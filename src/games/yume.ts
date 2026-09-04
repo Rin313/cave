@@ -254,7 +254,6 @@ export const yume: GameDef = {
 		noResponse: "什么也没有发生。",
 		invisibleEntity: "你的视野里没有那样的东西。",
 		defaultReason: "……",
-		notInActionPhase: "梦境此刻不接受操作。",
 		timePassed: "梦里的时间悄悄流走",
 	},
 	voice: `你是梦的记录者，不是解说员。用安静、精确、略带错位的语言写梦：短句、感官细节，不解释梦的逻辑。称呼玩家为「你」。

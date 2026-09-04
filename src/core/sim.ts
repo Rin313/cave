@@ -67,8 +67,6 @@ export interface Messages {
 	invisibleEntity?: string;
 	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
-	/** act 门闩拦截（本回合已裁决后误调 act 工具时的防御性拒绝）。 */
-	notInActionPhase: string;
 	/** 时间流逝的文案（刻步的段头与近况渲染）。 */
 	timePassed: string;
 }

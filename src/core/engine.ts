@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type MemoryTurn, type TurnRecord } from "./context.ts";
-import { Simulation, entity, messagesFor, spineLines, viewCard, type Action, type ActionStep, type GameDef, type Step, type TickStep } from "./sim.ts";
+import { Simulation, entity, spineLines, viewCard, type Action, type ActionStep, type GameDef, type Step, type TickStep } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -24,6 +24,10 @@ export interface EngineOptions {
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 const ACT_TOOL = "act";
+
+/** act 门闩拒绝（通道语言，core 自持）：门闩是裁决边界外的协议拦截——世界没有产生拒绝，
+ *  文案不得带世界腔（防止模型把幻影世界事件叙述进散文）；收件人是模型，不进玩家视野。 */
+const ACT_LATCH_MSG = "行动窗口已关闭：act 每回合只能在裁决前调用一次。请忽略本次调用，基于回合内已有内容继续输出散文。";
 
 export interface ActOutcome {
 	results: ActionStep[];
@@ -399,7 +403,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			// one-shot 门闩：act 仅在 mapping 相位受理（呈现运行与已裁决回合同样被拦）
 			if (run.phase !== "mapping") {
 				return {
-					content: [{ type: "text", text: JSON.stringify({ ok: false, error: messagesFor(def).notInActionPhase }) }],
+					content: [{ type: "text", text: JSON.stringify({ ok: false, error: ACT_LATCH_MSG }) }],
 					details: {},
 				};
 			}

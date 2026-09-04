@@ -39,7 +39,6 @@ export const walltest: GameDef = {
 	messages: {
 		noResponse: "世界没有回应。",
 		defaultReason: "……",
-		notInActionPhase: "不在行动阶段。",
 		timePassed: "时间流逝",
 	},
 	verbs: {
