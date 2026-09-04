@@ -1,5 +1,5 @@
 import type { GameDef, PropDef, PropValue, Q } from "../core/sim.ts";
-import { D, defineVerb, grant } from "../core/sim.ts";
+import { D, defineVerb, entity, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
 /** 结构墙夹具：
@@ -25,7 +25,7 @@ const PROPS: Record<string, PropDef> = {
 
 /** 蓄意越权：经 Q 读态直改属性（冻结视图上写入即抛）。 */
 function leakHp(q: Q): void {
-	const me = q.entity(q.player);
+	const me = entity(q.world, q.player);
 	if (me) me.props.hp = (typeof me.props.hp === "number" ? me.props.hp : 0) - 1;
 }
 
@@ -115,7 +115,7 @@ export const walltest: GameDef = {
 			// 未武装时沉默放行，同注册表的被拦刻步（vault.tick）才有干净的刻可测
 			id: "leak.tick",
 			run: (q) => {
-				if (q.entity(q.player)?.props.armed !== true) return null;
+				if (entity(q.world, q.player)?.props.armed !== true) return null;
 				leakHp(q);
 				return null;
 			},

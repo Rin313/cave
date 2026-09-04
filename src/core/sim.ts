@@ -118,7 +118,7 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** 规则判定上下文：冻结读态 + 引擎自有语义的唯一入口（关系/骰子/时间）。
+/** 规则判定上下文：冻结读态 + 协议锚（player/time/params）+ roll。
  *  只读由结构保证：world 是裁决时读态的深冻结副本；一切后果经返回的 Delta 表达，由模拟层统一提交/回滚。
  *  无可见域：规则分支于世界真相，不读感知投影（可达性等原料谓词住 games 层构件）。 */
 export interface Q {
@@ -130,12 +130,6 @@ export interface Q {
 	readonly player: string;
 	readonly time: number;
 	readonly params: Record<string, PropValue>;
-	entity(id: string): Entity | undefined;
-	name(id: string): string;
-	/** 关系值（无边为 null）。 */
-	rel(from: string, to: string, type: string): number | string | boolean | null;
-	/** 关系数值比较：缺边/非数按 dflt 参与——缺省语义显式命名在调用点。 */
-	relNum(from: string, to: string, type: string, dflt: number): number;
 	/** 确定性骰子（World 纯函数，apply/存档恢复一致）。 */
 	roll(key: string, sides: number): number;
 }
@@ -725,21 +719,11 @@ export class Simulation {
 	}
 
 	private query(world: World, params: Record<string, PropValue>): Q {
-		const player = this.player;
 		return {
 			world,
-			player,
+			player: this.player,
 			time: world.time,
 			params,
-			entity: (id) => entity(world, id),
-			name: (id) => entity(world, id)?.name ?? id,
-			rel: (from, to, type) => relVal(world, from, to, type),
-			relNum: (from, to, type, dflt) => {
-				const v = relVal(world, from, to, type);
-				if (v === null) return dflt;
-				const n = Number(v);
-				return Number.isFinite(n) ? n : dflt;
-			},
 			roll: (key, sides) => rollDice(world, key, sides),
 		};
 	}

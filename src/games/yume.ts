@@ -1,5 +1,5 @@
 import type { GameDef, PropDef, Q, Step, ViewValue, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, grant, relVal } from "../core/sim.ts";
 import { reachLaw } from "./space.ts";
 import { Type } from "typebox";
 
@@ -35,7 +35,9 @@ const EFFECTS = ["knife_effect", "lamp_effect", "cat_effect", "bike_effect"] as 
 
 const hasEffect = (q: Q, id: string): boolean => entity(q.world, id)?.props.in === q.player;
 const hasAllEffects = (q: Q): boolean => EFFECTS.every((e) => hasEffect(q, e));
-const hereOf = (q: Q): string => String(q.entity(q.player)?.props["in"] ?? "");
+const hereOf = (q: Q): string => String(entity(q.world, q.player)?.props["in"] ?? "");
+/** 法则世界腔的指称解析：id → 展示名（裁决读态上的在世名字）。 */
+const nameOf = (q: Q, id: string): string => entity(q.world, id)?.name ?? id;
 
 function summarizeYume(input: { world: World; player: string; steps: Step[] }): string {
 	const { world, player, steps } = input;
@@ -83,7 +85,7 @@ const sleepVerb = defineVerb({
 		{
 			id: "sleep.dream",
 			judge: (q) => {
-				if (q.entity(q.player)?.props.awake === false) return null;
+				if (entity(q.world, q.player)?.props.awake === false) return null;
 				if (hereOf(q) !== "room") return deny("sleep.place", { reason: "这里是梦。想回去的话，得在梦里再睡一次。" });
 				return grant([D.set(q.player, "awake", false), D.set(q.player, "in", "nexus")], "你闭上眼。黑暗涌上来，退去时，你已经站在门厅里。");
 			},
@@ -109,19 +111,19 @@ const goVerb = defineVerb({
 		{
 			id: "go.dark",
 			judge: (q, p) => {
-				const d = q.entity(p.dest);
-				if (d?.props.space !== true || q.rel(hereOf(q), p.dest, "path") === null) return null;
-				if (d.props.dark === true && !hasEffect(q, "lamp_effect")) return deny("go.dark", { reason: `${q.name(p.dest)}里黑得化不开。你摸到门框，退了回来。` });
+				const d = entity(q.world, p.dest);
+				if (d?.props.space !== true || relVal(q.world, hereOf(q), p.dest, "path") === null) return null;
+				if (d.props.dark === true && !hasEffect(q, "lamp_effect")) return deny("go.dark", { reason: `${nameOf(q, p.dest)}里黑得化不开。你摸到门框，退了回来。` });
 				return null;
 			},
 		},
 		{
 			id: "go.walk",
 			judge: (q, p) => {
-				const d = q.entity(p.dest);
-				if (!d || d.props.space !== true) return deny("go.noplace", { reason: `${q.name(p.dest)}？这里没有这个地方。` });
-				if (q.rel(hereOf(q), p.dest, "path") === null) return deny("go.noway", { reason: `从这里没有路通往${q.name(p.dest)}。` });
-				return grant([D.set(q.player, "in", p.dest)], `你走进了${q.name(p.dest)}。`);
+				const d = entity(q.world, p.dest);
+				if (!d || d.props.space !== true) return deny("go.noplace", { reason: `${nameOf(q, p.dest)}？这里没有这个地方。` });
+				if (relVal(q.world, hereOf(q), p.dest, "path") === null) return deny("go.noway", { reason: `从这里没有路通往${nameOf(q, p.dest)}。` });
+				return grant([D.set(q.player, "in", p.dest)], `你走进了${nameOf(q, p.dest)}。`);
 			},
 		},
 	],
@@ -138,12 +140,12 @@ const takeVerb = defineVerb({
 		{
 			id: "take.it",
 			judge: (q, p) => {
-				const t = q.entity(p.entity);
-				if (t?.props.takable !== true) return deny("take.heavy", { reason: `${q.name(p.entity)}带不走。` });
-				if (t.props["in"] === q.player) return deny("take.held", { reason: `${q.name(p.entity)}已经收好了。` });
+				const t = entity(q.world, p.entity);
+				if (t?.props.takable !== true) return deny("take.heavy", { reason: `${nameOf(q, p.entity)}带不走。` });
+				if (t.props["in"] === q.player) return deny("take.held", { reason: `${nameOf(q, p.entity)}已经收好了。` });
 				return grant([D.set(p.entity, "in", q.player)], t.props.kind === "effect"
-					? `你收下了${q.name(p.entity)}。说不清为什么，世界的质地变了一点。`
-					: `你把${q.name(p.entity)}收好了。`);
+					? `你收下了${nameOf(q, p.entity)}。说不清为什么，世界的质地变了一点。`
+					: `你把${nameOf(q, p.entity)}收好了。`);
 			},
 		},
 	],
@@ -205,7 +207,7 @@ const interactVerb = defineVerb({
 			id: "int.machine",
 			judge: (q, p) => {
 				if (p.entity !== "machine") return null;
-				if (q.entity("machine")?.props.vended === true) return grant([], "自贩机只剩嗡嗡声。按钮全都不亮了。");
+				if (entity(q.world, "machine")?.props.vended === true) return grant([], "自贩机只剩嗡嗡声。按钮全都不亮了。");
 				return grant([
 					D.set("machine", "vended", true),
 					D.spawn({ id: "can", name: "冰凉的罐子", props: { kind: "item", "in": "neon", takable: true, desc: "找不到任何标签。" } }),
@@ -231,7 +233,7 @@ const interactVerb = defineVerb({
 				if (p.entity !== "wheel_man") return null;
 				const dests = ["forest", "neon", "desert", "snow"];
 				const dest = dests[q.roll("wheel.teleport", dests.length) - 1]!;
-				return grant([D.set(q.player, "in", dest)], `独轮车人转了半圈。你再眨眼时，脚下已经是${q.name(dest)}。`);
+				return grant([D.set(q.player, "in", dest)], `独轮车人转了半圈。你再眨眼时，脚下已经是${nameOf(q, dest)}。`);
 			},
 		},
 		{ id: "int.snowman", judge: (_q, p) => (p.entity !== "snowman" ? null : grant([], "雪人的两张脸都在笑。你又数了一遍，还是两张。")) },
@@ -239,8 +241,8 @@ const interactVerb = defineVerb({
 		{
 			id: "interact.fallback",
 			judge: (q) => {
-				const t = q.entity(String(q.params.entity));
-				return deny("interact.fallback", { reason: t ? `${q.name(t.id)}没有任何反应。` : "那里已经什么都没有了。" });
+				const t = entity(q.world, String(q.params.entity));
+				return deny("interact.fallback", { reason: t ? `${nameOf(q, t.id)}没有任何反应。` : "那里已经什么都没有了。" });
 			},
 		},
 	],
@@ -318,7 +320,7 @@ export const yume: GameDef = {
 		{
 			id: "dream.air",
 			run: (q) => {
-				if (q.entity(q.player)?.props.awake !== false) return null;
+				if (entity(q.world, q.player)?.props.awake !== false) return null;
 				if (q.roll("dream.air", 7) !== 1) return null;
 				const whispers = [
 					"很远的地方有一扇门开了，又关上。",
@@ -332,7 +334,7 @@ export const yume: GameDef = {
 			// 终局观测：收齐四枚效果后醒来待在房间，阳台上的人影出现（spawn）。世界从不解释条件。
 			id: "ending.watch",
 			run: (q) => {
-				const me = q.entity(q.player);
+				const me = entity(q.world, q.player);
 				if (me?.props.awake !== true || me.props.ended === true || hereOf(q) !== "room") return null;
 				if (!hasAllEffects(q)) return null;
 				return {
