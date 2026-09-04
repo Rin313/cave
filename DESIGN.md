@@ -76,7 +76,7 @@ core 的全部承诺分三层：**公理一**陈述世界的形状，**公理二
 
 - Delta 原语：`set / inc / relSet / relInc / rename / spawn / despawn`（relSet 值 null 即删边——拓扑收缩与生长对称，存储边永不持 null）。提交产出按基底类别同构分形的变更记录 `Change`（kind: prop/rename/rel/spawn/despawn——rel 携带完整边端点，next null 即删边；rename 携带 prev/next 名字）。生灭原语配合 relSet 建径/删径让世界拓扑生长与收缩；despawn 级联清理关系边，悬空 id 引用由完整性硬墙回滚。
 - **生长与收缩对称**：硬墙对悬空引用 fail-closed ；引用清点原语 `refsTo(def, world, id)`（按注册表 `type:"id"` 枚举指向该实体的 (entity, prop)，标量与引用数组同覆盖，语义无关的机械操作），清理策略（置空、转移、级联生灭）是游戏语义，由规则决定；容器级 despawn 同理由此表达（先迁散子女再 despawn）。
-- 关系边表 `world.relations` 表达社会 / 叙事状态（信任、记忆、派系），表达层格式化为世界腔文本。
+- 关系边表 `world.relations` 表达社会 / 叙事状态，表达层格式化为世界腔文本。
 
 ### 3.5 感知面
 

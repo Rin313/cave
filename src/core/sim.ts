@@ -21,7 +21,7 @@ export interface Rel {
 export interface World {
 	time: number;
 	entities: Entity[];
-	/** 关系边表：from→to 的 type 关系（信任/记忆/派系等）。游戏声明，规则以 deltas 变更。 */
+	/** 关系边表：from→to 的 type 关系。游戏声明，规则以 deltas 变更。 */
 	relations?: Rel[];
 }
 
