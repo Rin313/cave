@@ -33,6 +33,7 @@ export const walltest: GameDef = {
 	id: "walltest",
 	title: "结构墙夹具",
 	playerId: "player",
+	memoryLimit: 0,
 	messages: {
 		noResponse: "世界没有回应。",
 		defaultReason: "……",

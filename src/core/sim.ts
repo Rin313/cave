@@ -239,8 +239,8 @@ export interface GameDef {
 	 *  覆写用于文学化兜底：steps 是本回合事件流（动作步+刻步，按序）；钩子是世界侧代码，可读 internal
 	 *  （internal 隔离是模型面纪律，不约束世界侧文案），玩家文案的忠实自负。 */
 	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
-	/** 近况窗口的回合数（映射层的指代视野）。缺省 0。*/
-	memoryLimit?: number;
+	/** 近况窗口的回合数——映射层指代与续接锚的时间视界 */
+	memoryLimit: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见 */
 	grounding?: (world: World, player: string) => string[];
 	/** 边感知（感知推论在关系边上的闭合）：体验者知觉哪些关系边。core 只保留不可覆写的结构过滤。

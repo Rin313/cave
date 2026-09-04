@@ -155,7 +155,7 @@ const game: GameDef = {
   messages,                  // 必填：core 产出的用户可见文案
   voice,                     // 表达契约：叙述者人格/世界读法/写作纪律（世界语言，core 原样注入 system prompt，缺省裸契约）
   props: {...},              // 属性注册表：type/label/internal
-  memoryLimit,               // 近况窗口回合数
+  memoryLimit,               // 必填：近况窗口回合数
   summarize,                // 可选：回退摘要的声音覆写（缺省=引擎装配的回合骨架投影 spineLines）
 };
 ```
