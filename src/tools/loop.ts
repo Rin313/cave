@@ -209,13 +209,9 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 		for (const line of lines) {
 			if (line.startsWith("@wait")) {
 				const n = Number(line.split(/\s+/)[1] ?? 1);
-				const res = sim.apply(devWait(n));
-				// 零刻授予不入地籍（无可说后果）
-				if (res.step.ticks > 0) engine.recordElapsed([res.step, ...res.elapsed]);
-				const results = res.elapsed;
-				appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, usage: [] });
-				const lines = spineLines(sim, results);
-				console.log(`\n【wait ${n}】${lines.length ? lines.join("；") : "无事发生"}`);
+				const steps = engine.directTurn(`（时间流逝 ${n} 刻）`, [devWait(n)]);
+				appendTranscript(dir, { phase: "wait", ticks: n, steps, usage: [] });
+				console.log(`\n【wait ${n}】${spineLines(sim, steps).join("；")}`);
 			} else {
 				const outcome = await engine.act({ intent: line });
 				meta.turn += 1;
@@ -246,18 +242,14 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
-		const res = sim.apply(devWait(n));
-		// 零刻授予不入地籍（无可说后果）
-		if (res.step.ticks > 0) engine.recordElapsed([res.step, ...res.elapsed]);
-		const results = res.elapsed;
+		const steps = engine.directTurn(`（时间流逝 ${n} 刻）`, [devWait(n)]);
 		const { narration: scene, warnings, usage } = await engine.narrate(
 			"时间流逝。请用文学笔触描写当前场景发生的变化。",
-			results,
+			steps,
 		);
 		persistRun(ctx);
-		appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, scene, warnings, usage });
-		const lines = spineLines(sim, results);
-		console.log(`\n【wait ${n}】${lines.length ? lines.join("；") : "无事发生"}`);
+		appendTranscript(dir, { phase: "wait", ticks: n, steps, scene, warnings, usage });
+		console.log(`\n【wait ${n}】${spineLines(sim, steps).join("；")}`);
 		console.log(scene);
 		warnWarnings(warnings);
 		const u = usageLine(usage);
@@ -386,7 +378,7 @@ async function main() {
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
-render/wait 是研究仪器操作（不计回合）：render 调用场景呈现服务；wait 以合成研究动词过裁决落钟（tools/dev.ts），以无意志条目入地籍——完备性要求时间流逝的后果可说（零刻授予除外）。
+render/wait 是研究仪器操作（回合计数不增）：render 调用场景呈现服务；wait 以合成研究动词作直达提案过裁决落钟（tools/dev.ts），回合定稿入地籍（意志即提案者）。
 report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）

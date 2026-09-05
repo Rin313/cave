@@ -210,7 +210,7 @@ export interface GameDef {
 	/** 回退摘要覆写（缺省 = spineLines 单行连接，空步回落 noResponse）。steps 为本回合事件流（动作步+刻步，按序）；
 	 *  钩子在世界侧运行，可读 internal 属性。 */
 	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
-	/** 近况窗口的地籍条目数（意志条目与无意志条目都计入）——映射层指代与续接锚的时间视界 */
+	/** 近况窗口的地籍条目数——映射层指代与续接锚的时间视界 */
 	recentWindow: number;
 	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见 */
 	grounding?: (world: World, player: string) => string[];

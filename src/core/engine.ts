@@ -41,7 +41,7 @@ export interface ActOutcome {
 	usage: TokenUsage[];
 }
 
-/** 场景呈现（narrate）的返回：无意志、无 act 通道。 */
+/** 场景呈现（narrate）的返回：无提案通道、无 act 通道。 */
 export interface NarrationOutcome {
 	narration: string;
 	warnings: string[];
@@ -85,7 +85,7 @@ export class Engine {
 	private session: SessionHandle;
 	private readonly sessionManager: SessionManager;
 	private readonly recent: RecentEntry[];
-	/** 持久化的地籍条目（意志条目 + 无意志条目），窗口裁剪至 recentWindow；近况投影见 context.ts。 */
+	/** 持久化的地籍条目（回合定稿），窗口裁剪至 recentWindow；近况投影见 context.ts。 */
 	private readonly records: ChronicleEntry[];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
@@ -251,7 +251,15 @@ export class Engine {
 		};
 	}
 
-	/** 回合定稿：意志条目入地籍（会话 custom 条目，不入 LLM 上下文），随后更新近况窗口。 */
+	/** 直达回合：提案不经映射译码直接受理（研究仪器/作者代码）——同一裁决边界与硬墙，同一回合定稿写点。
+	 *  意志即提案者：intent 是提案者的声明，逐字入地籍与近况。无门闩——门闩封的是模型不是提案者。 */
+	directTurn(intent: string, actions: readonly Action[]): Step[] {
+		const steps = applyBatch(this.sim, actions);
+		this.recordTurn(intent, steps);
+		return steps;
+	}
+
+	/** 回合定稿（写点唯一）：条目入地籍（会话 custom 条目，不入 LLM 上下文），随后更新近况窗口。 */
 	private recordTurn(intent: string, steps: Step[]): void {
 		const record: ChronicleEntry = { time: this.sim.world.time, intent, steps };
 		this.records.push(record);
@@ -263,20 +271,8 @@ export class Engine {
 		this.updateRecent();
 	}
 
-	/** 非意志裁决的定稿写点：无意志条目入地籍（不计回合）——门的调用者不限意志，完备性要求其后果同样。 */
-	recordElapsed(steps: Step[]): void {
-		const record: ChronicleEntry = { time: this.sim.world.time, steps };
-		this.records.push(record);
-		try {
-			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
-		} catch {
-			// 持久化失败不阻断：内存窗口仍有效
-		}
-		this.updateRecent();
-	}
-
-	/** 近况窗口更新：裁剪至 recentWindow（地籍条目数，意志条目与无意志条目都计入）后整体重投影。
-	 *  投影只在窗口更新点（create/recordTurn/recordElapsed）发生——同回合的映射与续行调用共享同一近况头，
+	/** 近况窗口更新：裁剪至 recentWindow（地籍条目数）后整体重投影。
+	 *  投影只在窗口更新点（create/recordTurn）发生——同回合的映射与续行调用共享同一近况头，
 	 *  回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
 		const limit = this.sim.def.recentWindow;
@@ -285,7 +281,7 @@ export class Engine {
 		this.recent.push(...projectWindow(this.sim, this.records));
 	}
 
-	/** 场景呈现：无意志、无行动窗口——不写近况、不触门闩；运行直接进入 narration 相位，越权 act 调用被相位谓词拦截。 */
+	/** 场景呈现：无提案通道、无行动窗口——不写近况、不触门闩；运行直接进入 narration 相位，越权 act 调用被相位谓词拦截。 */
 	async narrate(instruction: string, steps: Step[] = []): Promise<NarrationOutcome> {
 		this.beginRun("narration");
 		await this.session.prompt(buildNarratePrompt(this.sim, steps, instruction));
@@ -372,7 +368,20 @@ function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string)
 	return lines.join("\n");
 }
 
-/** act 工具：本回合唯一的动作提交口（one-shot 门闩）。execute 内逐动作 apply，事件策展作为工具结果返回。 */
+/** 提案批次内核（act 与直达回合共用同一执行路径）：静态形态批次预检在首个裁决前抛出
+ *  （否则已裁决动作失去记录），逐动作落钟——后一动作在后一世界态上裁决。 */
+function applyBatch(sim: Simulation, actions: readonly Action[]): Step[] {
+	if (!actions.length) return [];
+	sim.validateBatch(actions);
+	const steps: Step[] = [];
+	for (const a of actions) {
+		const res = sim.apply(a);
+		steps.push(res.step, ...res.elapsed);
+	}
+	return steps;
+}
+
+/** act 工具：映射回合唯一的动作提交口（one-shot 门闩）。execute 经提案批次内核 apply，事件策展作为工具结果返回。 */
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
 	// internal 动词不进 act schema：越权提案由 pi 校验拒绝（错误回模型、门闩未耗）
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
@@ -409,17 +418,8 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			run.acted = true;
 			const proposed = (params.actions ?? []) as Action[];
 			run.proposals = [...proposed];
-			const steps: Step[] = [];
-			if (proposed.length) {
-				// validateBatch 是批次前置条件：静态违约须在首个裁决前抛出，否则已裁决动作失去记录
-				sim.validateBatch(proposed);
-				for (const a of proposed) {
-					// 逐动作落钟：后续动作在后一世界态上裁决
-					const res = sim.apply(a);
-					steps.push(res.step, ...res.elapsed);
-				}
-			}
-			if (proposed.length) channel.onAdjudication?.({ steps });
+			const steps = applyBatch(sim, proposed);
+			if (steps.length) channel.onAdjudication?.({ steps });
 			const revealed = [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
 			return {
 				content: [{ type: "text", text: buildResultView(sim, steps, proposed.length === 0, run.intent, revealed) }],
