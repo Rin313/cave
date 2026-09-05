@@ -379,7 +379,7 @@ export const village: GameDef = {
 				if (q.time % 4 !== 2) return null;
 				const beasts = q.world.entities.filter((e) => e.props.alive === true && e.props.aggressive === true);
 				if (!beasts.length) return null;
-				return { deltas: [], facts: [{ text: "夜色渐浓，远处隐约传来野狗的低吠。" }] };
+				return { deltas: [], facts: ["夜色渐浓，远处隐约传来野狗的低吠。"] };
 			},
 		},
 		{
@@ -393,7 +393,7 @@ export const village: GameDef = {
 				if (!beasts.length) return null;
 				return {
 					deltas: [D.set(q.player, "hp", num(me.props.hp) - beasts.length)],
-					facts: [{ text: "夜色里，野狗窜出来在你小腿上咬了一口！" }],
+					facts: ["夜色里，野狗窜出来在你小腿上咬了一口！"],
 				};
 			},
 		},

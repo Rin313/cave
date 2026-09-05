@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet, renderDenial, spineLines } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, fmtChange, propGet, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
 import type { Action, GameDef, PropValue, Q, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { GAMES, getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
@@ -69,7 +69,7 @@ function asAction(a: ScenarioAction): Action {
 
 /** 刻步的可说文本（工具显示用）：成功刻 = 事实串联，失败刻 = 拒绝的世界腔 */
 function tickText(def: GameDef, s: TickStep): string {
-	return s.ok ? (s.facts?.map((f) => f.text).join(" ") ?? "") : renderDenial(def, s.denial);
+	return s.ok ? (s.facts?.join(" ") ?? "") : renderDenial(def, s.denial);
 }
 
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
@@ -520,7 +520,7 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 			console.log("（时间流逝，什么也没发生）");
 			continue;
 		}
-		const departed = departedNames(results);
+		const departed = shownDepartedNames(results);
 		for (const r of results) {
 			console.log(`\n>>> ${actionDesc}`);
 			const ticks = r.kind === "action" && r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : "";

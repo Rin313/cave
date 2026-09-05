@@ -46,7 +46,7 @@ export type Delta =
 	| { op: "despawn"; entity: string };
 
 /** 提交产出的变更记录：prop/rename 只留 prev/next，rel 携带完整端点（next null 即删边；despawn 级联删边复用同一形状，不另立形态）。
- *  spawn/despawn 携带展示名——实体已离场，这条记录是渲染历史事件时名字的唯一来源（见 departedNames）。
+ *  spawn/despawn 携带展示名——实体已离场，这条记录是渲染历史事件时名字的唯一来源（见 shownDepartedNames）。
  *  变更记录是纯内容（what changed）；出处是提交级事实（一次提交恒一产出方），记录在步 src 与 InvariantCtx.src。 */
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue }
@@ -73,10 +73,8 @@ export interface Messages {
 	timePassed: string;
 }
 
-/** 法则产出的玩家可见事实：进结果视图，供叙述跟随。 */
-export interface Fact {
-	text: string;
-}
+/** 法则产出的玩家可见事实：进结果视图，供叙述跟随。形式即文本——与 reason 同为规则铸造的世界腔 */
+export type Fact = string;
 
 export type PropType = "string" | "number" | "boolean" | "id" | "tags" | "any";
 
@@ -342,10 +340,6 @@ export function integrityInvariant(): Invariant {
 	};
 }
 
-export function messagesFor(def: GameDef): Messages {
-	return def.messages;
-}
-
 /** 从属性注册表计算内部属性集（不进序列化/变更线性化）。 */
 export function internalPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
@@ -421,17 +415,11 @@ export function entity(world: World, id: string): Entity | undefined {
 /** 拒绝渲染为玩家文案：优先 denial.reason，缺省兜底 noResponse。 */
 export function renderDenial(def: GameDef, denial: Denial): string {
 	if (denial.reason != null) return denial.reason;
-	return messagesFor(def).noResponse;
+	return def.messages.noResponse;
 }
 
-/** 离场者名字底表：despawn 记录是离场实体名字的唯一来源——渲染历史事件须以渲染窗口内的记录兜底解析。 */
-export function departedNames(window: readonly { changes: Change[] }[]): Map<string, string> {
-	const m = new Map<string, string>();
-	for (const s of window) for (const c of s.changes) if (c.kind === "despawn") m.set(c.entity, c.name);
-	return m;
-}
-
-/** 已公开离场者底表：离场发生在自身步的可见快照内才入表——隐藏离场者不进，引用它的变更行在投影中沉默。
+/** 已公开离场者底表：despawn 记录是离场者名字的唯一来源；离场发生在自身步的可见快照内才入表（公开离场）
+ *  ——隐藏离场者不进表，名字不可解析、引用它的变更行在投影中沉默（其行恒不可说，名字无消费者）。
  *  渲染窗口由调用方传入的 steps 声明（近况投影传整个窗口，供 spineLines 的 opts.departed）。 */
 export function shownDepartedNames(steps: readonly { changes: Change[]; field: FieldSpan }[]): Map<string, string> {
 	const m = new Map<string, string>();
@@ -489,13 +477,14 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
-/** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。 */
-function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, string>): string[] {
+/** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。
+ *  指称身份（ids）与名字解析无关（renderValue 对字符串元素恒记 id），不收离场底表。 */
+function referentsOf(sim: Simulation, c: Change): string[] {
 	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity];
 	const ref = refProp(sim, c.prop);
 	return [
-		...renderValue(sim, c.prev ?? null, ref, departed).ids,
-		...renderValue(sim, c.next ?? null, ref, departed).ids,
+		...renderValue(sim, c.prev ?? null, ref).ids,
+		...renderValue(sim, c.next ?? null, ref).ids,
 	];
 }
 
@@ -506,8 +495,6 @@ function referentsOf(sim: Simulation, c: Change, departed: ReadonlyMap<string, s
  *  （动作是冲洗点，流序即回合内时序）；静默刻按授予归账为「timePassed ×n」（ActionStep.ticks 是
  *  逐裁决的权威账目）——账目单位是刻，compact 裁剪的纯变更刻不建桶、时间回落 ×n。opts.departed 覆盖离场者底表。 */
 export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean; departed?: ReadonlyMap<string, string> }): string[] {
-	// 指称匹配宇宙 = 在世实体 ∪ 窗口内离场者；隐藏离场者的引用行随之沉默
-	const departedAll = opts?.departed ?? departedNames(steps);
 	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
 	const shownDeparted = opts?.departed ?? shownDepartedNames(steps);
 	const perceivableOf = (s: Step): ((c: Change) => boolean) => {
@@ -516,10 +503,11 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		const edgeSpan = s.field.edges ? new Set([...s.field.edges.before, ...s.field.edges.after]) : undefined;
 		return (c) => {
 			if (c.kind === "rel" && edgeSpan && !edgeSpan.has(edgeKey(c))) return false;
-			return referentsOf(sim, c, departedAll).every((r) => (departedAll.has(r) ? shownDeparted.has(r) : field.has(r)));
+			// 可说判据：指称在步的参照域内（跨度权威），或属窗口内已公开离场者
+			return referentsOf(sim, c).every((r) => field.has(r) || shownDeparted.has(r));
 		};
 	};
-	const msgs = messagesFor(sim.def);
+	const msgs = sim.def.messages;
 	const compact = opts?.compact === true;
 	const lines: string[] = [];
 	// 刻桶按 at 归并并归属其前导动作的授予区间——动作是冲洗点：流序即回合内时序，
@@ -530,7 +518,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		for (const { changes, facts, denials } of said.values()) {
 			if (changes.length || facts.length) lines.push(`⏱ ${[
 				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
-				facts.length ? `〔${facts.map((f) => f.text).join("；")}〕` : "",
+				facts.length ? `〔${facts.join("；")}〕` : "",
 			].join("")}`);
 			for (const d of denials) lines.push(`⏱ ✗ ${d}`);
 		}
@@ -545,7 +533,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 			const changes = compact ? [] : narratableChanges(sim.def, s.changes).filter(perceivableOf(s));
 			const tail = [
 				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
-				s.facts?.length ? `〔${s.facts.map((f) => f.text).join("；")}〕` : "",
+				s.facts?.length ? `〔${s.facts.join("；")}〕` : "",
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}：${s.reason}${tail}`);
 		} else {
@@ -664,7 +652,7 @@ export class Simulation {
 
 	/** 前态参照域与冻结读态由调用方（apply）逐动作计算传入：同一提案内的多动作不沿用旧读态。 */
 	private adjudicateRaw(action: Action, curVis: Set<string>, world: World): RawResult {
-		const msgs = messagesFor(this.def);
+		const msgs = this.def.messages;
 		const verb = this.staticForm(action);
 		const cost = attemptCost(verb);
 		// 可见性门管辖全部引用参数：参照域（裁决读态的可见集）是「意志能点名什么」的唯一权威——
@@ -693,11 +681,11 @@ export class Simulation {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
-				return { ok: true, reason: v.reason ?? messagesFor(this.def).defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src: `rule:${r.id}`, ticks: v.ticks ?? cost };
+				return { ok: true, reason: v.reason ?? msgs.defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src: `rule:${r.id}`, ticks: v.ticks ?? cost };
 			}
 			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}
-		return { ok: false, reason: messagesFor(this.def).noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
+		return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
 	private query(world: World, params: Record<string, PropValue>): Q {
@@ -732,11 +720,12 @@ export class Simulation {
 	 *  提交过程的意外异常（坏 delta、审查者越权写）同通道兑为墙否决。 */
 	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial; reason: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
+		const msgs = this.def.messages;
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
-				return { ok: false, denial: out.refusal, reason: messagesFor(this.def).noResponse };
+				return { ok: false, denial: out.refusal, reason: msgs.noResponse };
 			}
 			const inv = this.checkInvariants(src, genesis, out.changes);
 			if (inv) {
@@ -744,13 +733,13 @@ export class Simulation {
 				const denial: Denial = inv.authored
 					? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
 					: { law: `invariant.${inv.id}`, debug: inv.message };
-				return { ok: false, denial, reason: denial.reason ?? messagesFor(this.def).noResponse };
+				return { ok: false, denial, reason: denial.reason ?? msgs.noResponse };
 			}
 			return { ok: true, changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
-			return { ok: false, denial: { law: "invariant.crash", debug }, reason: messagesFor(this.def).noResponse };
+			return { ok: false, denial: { law: "invariant.crash", debug }, reason: msgs.noResponse };
 		}
 	}
 
@@ -910,7 +899,7 @@ export class Simulation {
 			} catch { /* def 缺陷：回落文档化的缺省形态 */ }
 		}
 		const lines = spineLines(this, steps);
-		return lines.length ? lines.join("\n") : messagesFor(this.def).noResponse;
+		return lines.length ? lines.join("\n") : this.def.messages.noResponse;
 	}
 
 	/** 提交的执行校验：每条 delta 在其应用时刻必须可执行——逐条校验而非提交前预检（同一授予内 spawn 后 set

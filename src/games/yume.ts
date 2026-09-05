@@ -54,9 +54,9 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 	for (const s of steps) {
 		if (s.kind === "action") {
 			if (!s.ok) lines.push(s.reason);
-			if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
+			if (s.facts?.length) lines.push(...s.facts);
 		} else if (s.ok && s.facts?.length) {
-			lines.push(...s.facts.map((f) => f.text));
+			lines.push(...s.facts);
 		}
 	}
 	return lines.join("\n");
@@ -318,7 +318,7 @@ export const yume: GameDef = {
 					"水滴声。找不到来源。",
 					"有什么东西在你身后站了一会儿，又走了。",
 				];
-				return { deltas: [], facts: [{ text: whispers[num(q.time) % whispers.length]! }] };
+				return { deltas: [], facts: [whispers[num(q.time) % whispers.length]!] };
 			},
 		},
 		{
@@ -332,7 +332,7 @@ export const yume: GameDef = {
 						D.set(q.player, "ended", true),
 						D.spawn({ id: "shadow", name: "阳台上的人影", props: { kind: "figure", tags: [], "in": "room", desc: "隔着玻璃看不清脸。它抬起了一只手。" } }),
 					],
-					facts: [{ text: "阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。" }],
+					facts: ["阳台的玻璃上映出一个影子。它不在屋里——它在玻璃的那一面。"],
 				};
 			},
 		},
