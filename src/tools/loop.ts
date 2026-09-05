@@ -130,7 +130,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	// withDevWait 挂 internal 研究动词（wait 走同一裁决边界）；Engine 从 sim.def 取动词表
+	// withDevWait 挂 internal 研究动词：wait 走同一裁决边界
 	const sim = new Simulation(withDevWait(def), loadState(dir));
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
 	try {
@@ -152,7 +152,6 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	mkdirSync(dir, { recursive: true });
 	const sim = new Simulation(withDevWait(def));
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	// Engine 从 sim.def 取动词表（internal 研究动词不进映射层）
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(gameId), sessionManager });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
@@ -211,7 +210,7 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 			if (line.startsWith("@wait")) {
 				const n = Number(line.split(/\s+/)[1] ?? 1);
 				const res = sim.apply(devWait(n));
-				// 零刻授予无后果，无可说者不入地籍；非零刻的生灭后果必须入地籍
+				// 零刻授予不入地籍（无可说后果）
 				if (res.step.ticks > 0) engine.recordElapsed([res.step, ...res.elapsed]);
 				const results = res.elapsed;
 				appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, usage: [] });
@@ -248,7 +247,7 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined): Pr
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
 		const res = sim.apply(devWait(n));
-		// 零刻授予无后果，无可说者不入地籍；非零刻的生灭后果必须入地籍
+		// 零刻授予不入地籍（无可说后果）
 		if (res.step.ticks > 0) engine.recordElapsed([res.step, ...res.elapsed]);
 		const results = res.elapsed;
 		const { narration: scene, warnings, usage } = await engine.narrate(

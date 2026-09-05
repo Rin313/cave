@@ -4,13 +4,9 @@ import { Type } from "typebox";
 
 const num = (v: unknown): number => Number(v ?? 0);
 
-/** 结构墙夹具：
- *  裁决侧代码（规则/系统）收到的 Q.world 是裁决时读态的深冻结副本；
- *  越权写钟（q.world.time）同样被拦。
- *  审查者（不变式）同权隔离：world 与 ctx.changes 是冻结读态/冻结记录，
- *  崩溃在提交边界兑为墙否决（invariant.crash：先回滚 S0 后拒绝）。
- *  干净对照步的职责不止「无误伤」：若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），
- *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」 */
+/** 结构墙夹具：裁决侧（规则/系统）与审查者（不变式）收冻结读态/冻结记录，越权写在冻结对象上即抛，
+ *  崩溃在提交边界兑为墙否决。干净对照步区分「冻结副本」与「冻结活账本」：若回归把冻结误施于活账本
+ *  （readState 冻结 this.world 而非副本），越权步之后的干净动作/刻步即红。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -228,15 +224,13 @@ export const walltest: GameDef = {
 			},
 		},
 		{
-			// 蓄意被拦：系统产出设置封印 → vault.sealed 否决——被拦刻步（TickStep ok:false）的唯一合法来源，
-			// walltest.json 的拦截行计时/静默刻聚合契约场景在此产生
+			// 蓄意被拦：系统产出设置封印 → vault.sealed 否决（walltest.json 的被拦刻步场景由此产生）
 			id: "vault.tick",
 			run: (q) => ({ deltas: [D.set(q.player, "vault", true)] }),
 		},
 	],
-	/** 投影缺陷夹具：gaze=true 时感知快照崩溃——def 缺陷在 apply 边界原子回滚后重抛（凡不可说者不发生）。
-	 *  phantom=true 时感知谎报一个不存在的 id——门权威 = grounding ∩ 账本，谎报静默离场（不可指名）。
-	 *  其余状态透明（全见），不改变任何既有场景的跨度与投影。 */
+	/** 投影缺陷夹具：gaze=true 时感知快照崩溃（apply 原子回滚后重抛）；phantom=true 时感知谎报不存在的 id
+	 *  （门权威 = grounding ∩ 账本，谎报静默离场）。其余状态全见。 */
 	grounding: (world) => {
 		if (world.entities.some((e) => e.props.gaze === true)) throw new Error("感知在半空碎裂");
 		const ids = world.entities.map((e) => e.id);
@@ -251,8 +245,7 @@ export const walltest: GameDef = {
 		check: (_world, ctx) => (ctx.changes.some((c) => c.kind === "prop" && c.prop === "vault") ? "封印纹丝不动。" : null),
 	},
 	{
-		// 蓄意越权：审查者直改账本——审查者收冻结读态（与裁决侧同权），写入即抛；
-		// 崩溃由提交边界兑为墙否决（invariant.crash），提交回滚——崩溃可说且不洗白。
+		// 蓄意越权：审查者直改账本——审查者收冻结读态（与裁决侧同权），写入即抛，崩溃兑为墙否决（invariant.crash）
 		id: "sneaky",
 		check: (world, ctx) => {
 			if (!ctx.changes.some((c) => c.kind === "prop" && c.prop === "sneak")) return null;

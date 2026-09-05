@@ -6,9 +6,8 @@ import { shownDepartedNames, spineLines, type Simulation, type Step } from "./si
 
 export type CtxMessages = ContextEvent["messages"];
 
-/** 地籍条目（写点：回合定稿与一切非回合后果源的定稿）。名字闭合要求窗口内被引用名字的失效事件
- *  与被引用行同在地籍——凡绕过 act 进入世界的后果（当前实例：仪器时间；协议变体表上的实时流同型）
- *  必须经 elapsed 条目入地籍，只落审计的流逝会让近况旧名失解（离场名只存在于变更记录）。 */
+/** 地籍条目（写点：回合定稿与仪器时间定稿）。绕过 act 的后果必须经 elapsed 入地籍：窗口内被引用名字的
+ *  失效事件（despawn）须与被引用行同在，否则近况旧名失解（离场名只存在于变更记录）。 */
 export type ChronicleEntry =
 	| { kind: "turn"; time: number; intent: string; steps: Step[] }
 	| { kind: "elapsed"; time: number; steps: Step[] };

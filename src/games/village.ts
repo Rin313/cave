@@ -351,7 +351,6 @@ export const village: GameDef = {
 			}],
 		}),
 	},
-	// 刻数：劳作/汲水/采集/修葺/驱逐一刻，昏睡四刻，其余瞬时
 	world: {
 		time: 0,
 		entities: [
@@ -445,7 +444,7 @@ export const village: GameDef = {
 	invariants: [
 		{
 			id: "coins.conserved",
-			// 铜币总量 == 种子值（含村里散落的铜币）。种子读 genesis 而非 def.world——存档恢复/变体开局时两者不同
+			// 种子读 genesis 而非 def.world：存档恢复/变体开局时两者不同
 			check: (world, ctx) => {
 				const seed = sumProp(ctx.genesis, "coins");
 				const now = sumProp(world, "coins");

@@ -19,9 +19,8 @@ export function hashStr(s: string): number {
 	return (h >>> 0) / 4294967296;
 }
 
-/** 引用清点：按注册表 type:"id" 枚举指向该实体的 (entity, prop)，覆盖标量与引用数组
- *  （与 integrity 硬墙的管辖面一致——墙拦下的悬空，这里必须找得到）。语义无关的机械清点；
- *  清理策略（置空/转移/级联生灭）是游戏语义，由规则决定；关系边由 despawn 自动级联，不在此列。 */
+/** 引用清点：按注册表 type:"id" 枚举指向该实体的 (entity, prop)，覆盖标量与引用数组（与 integrity 管辖面一致）。
+ *  机械清点，清理策略是游戏语义；关系边由 despawn 自动级联，不在此列。 */
 export function refsTo(def: GameDef, world: World, id: string): { entity: string; prop: string }[] {
 	const idProps = Object.entries(def.props ?? {}).filter(([, p]) => p.type === "id").map(([k]) => k);
 	const out: { entity: string; prop: string }[] = [];
@@ -35,9 +34,7 @@ export function refsTo(def: GameDef, world: World, id: string): { entity: string
 	return out;
 }
 
-/** 确定性骰子：hashStr(`${world.time}#${key}`) 派生的 [1, sides] 整数
- *  随机必须是 World 的纯函数（apply/存档恢复一致）
- *  key 是命运地址的名字，引擎以出处限定，跨法则/系统重名不共享命运 */
+/** 确定性骰子 → [1, sides]：World 的纯函数，同 (t, key) 恒同值；key 由引擎以出处限定，重名不共享命运。 */
 export function roll(world: World, key: string, sides: number): number {
 	const h = hashStr(`${world.time}#${key}`);
 	return 1 + Math.floor(h * Math.max(1, Math.floor(sides)));

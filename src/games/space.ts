@@ -1,11 +1,9 @@
 import type { Entity, Rule, World } from "../core/sim.ts";
 import { entity } from "../core/sim.ts";
 
-/** 语义与理由文案内置于本构件，SpaceOpts.msgs 可逐项覆盖；
- *  关容器对实体的放行（楔住等）由游戏经 containerAccess 裁决。
- *  锚点拓扑：锚点（玩家/魂）可位于包含链任意深度——附身 = 地址的空间迁移（魂以 in 居于器皿），
- *  可达性 = 目标与锚点共享围合场景，或目标在锚点子树内（贴身必达）；关容器沿双链对称拦截。
- *  现宿主 = 链上最近器皿（hostOf，器皿布尔属性键控，缺省锚点自身）。 */
+/** 空间构件（容器包含树语义）：可达性 = 目标与锚点共享围合场景或目标在锚点子树内（贴身必达），关容器沿双链对称拦截。
+ *  锚点（玩家/魂）可位于包含链任意深度——附身 = 地址的空间迁移；现宿主 = 链上最近器皿（hostOf）。
+ *  语义与理由文案内置于本构件，SpaceOpts.msgs 可逐项覆盖；关容器对实体的放行由游戏经 containerAccess 裁决。 */
 
 const REACH_MSGS = {
 	reachMissing: "这里没有这个东西。",
@@ -110,9 +108,8 @@ export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}
 	return vis;
 }
 
-/** 可达性法则（卫语句工厂）：可达则弃权，不可达即拒绝（law "reach"）。
- *  subject 显式绑定动词 schema 的目标参数名——接线是一行可见调用，位置即优先级，例外法则插在其前。
- *  接线判据：前提的否定情形可指名而不可及时才接线；感知域 ⊆ 可达域时可见性门已独任此前提，接线即死法则。 */
+/** 可达性法则（卫语句工厂）：可达则弃权，不可达即拒绝（law "reach"）。subject 绑定动词的目标参数名，
+ *  接线位置即优先级；仅当前提的否定情形可指名而不可及时才接线（感知域 ⊆ 可达域时可见性门已独任此前提）。 */
 export const reachLaw = (subject: string, opts: SpaceOpts = {}): Rule => ({
 	id: "reach",
 	judge: (q) => {

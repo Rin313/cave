@@ -25,12 +25,11 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 const ACT_TOOL = "act";
 
-/** act 门闩拒绝（通道语言，core 自持）：门闩是裁决边界外的协议拦截——世界没有产生拒绝，
- *  文案不得带世界腔（防止模型把幻影世界事件叙述进散文）；收件人是模型，不进玩家视野。 */
+/** act 门闩拒绝文案：协议拦截而非世界拒绝，不带世界腔；收件人是模型（通道语言，不进玩家视野）。 */
 const ACT_LATCH_MSG = "行动窗口已关闭：act 每回合只能在裁决前调用一次。请忽略本次调用，基于回合内已有内容继续输出散文。";
 
 export interface ActOutcome {
-	/** 本回合事件流：动作步与其授予刻步按构造交错——回合内时序的唯一权威记录（渲染/地籍/近况共享，不得重排）。 */
+	/** 本回合事件流：动作步与刻步按构造交错，消费方不得重排。 */
 	steps: Step[];
 	/** 回合散文：模型生成，为空时回落确定性摘要。 */
 	narration: string;
@@ -56,8 +55,8 @@ export interface TokenUsage {
 	cacheWrite: number;
 }
 
-/** 流式叙述通道：只承载叙述相位的实时正文（thinking 与映射期文本不入通道），权威全文走返回值。
- *  narration_reset 在重试丢弃在途生成时发出（镜像 pi 的失败消息移除再重生成）。 */
+/** 流式叙述通道：只承载叙述相位的实时正文（thinking 与映射期文本不入通道），权威全文走返回值；
+ *  narration_reset 在重试作废在途生成时发出（镜像 pi 的重试语义）。 */
 export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
@@ -67,8 +66,8 @@ interface TurnChannel {
 	onAdjudication: ((patch: { steps?: Step[] }) => void) | null;
 }
 
-/** 单次 session.prompt 的运行状态。两相：mapping（行动窗口开放，text 丢弃）、narration（裁决已过或呈现服务，
- *  text 入账）。current 为在途生成正文，message_end 正常终结并入 settled（按生成代记账，镜像 pi 的重试语义）。 */
+/** 单次 session.prompt 的运行状态。两相：mapping（行动窗口开放，text 丢弃）与 narration（text 入账）。
+ *  settled 为已终结生成的累计正文，current 为在途生成（终结/重试的归属镜像 pi 的事件语义）。 */
 interface RunState {
 	phase: "mapping" | "narration";
 	acted: boolean;
@@ -117,7 +116,6 @@ export class Engine {
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
-					// 实时叙述只转译叙述相位的正文（映射期与 thinking 不入通道）
 					if (event.assistantMessageEvent.type === "text_delta" && this.run.phase === "narration") {
 						const delta = event.assistantMessageEvent.delta;
 						this.run.current += delta;
@@ -125,8 +123,7 @@ export class Engine {
 					}
 					break;
 				case "message_end":
-					// 生成代入账：正常终结（stop/length/toolUse/aborted）并入 settled；
-					// error 暂扣在 current——pi 将视重试与否移除（重生成）或保留（预算耗尽），分别由下方与定稿裁决
+					// 生成代入账：正常终结并入 settled；error 暂扣在 current（pi 视重试移除或保留，由 auto_retry_start 与定稿裁决）
 					if (event.message.role === "assistant" && this.run.phase === "narration" && event.message.stopReason !== "error") {
 						this.run.settled += this.run.current;
 						this.run.current = "";
@@ -254,8 +251,7 @@ export class Engine {
 		};
 	}
 
-	/** 回合定稿：意志条目持久化为会话 custom 条目（不入 LLM 上下文），随后更新近况窗口。
-	 *  投影缓存永不持久化——重启由 loadRecords + projectWindow 重建。 */
+	/** 回合定稿：意志条目入地籍（会话 custom 条目，不入 LLM 上下文），随后更新近况窗口。 */
 	private recordTurn(intent: string, steps: Step[]): void {
 		const record: ChronicleEntry = { kind: "turn", time: this.sim.world.time, intent, steps };
 		this.records.push(record);
@@ -267,8 +263,7 @@ export class Engine {
 		this.updateMemory();
 	}
 
-	/** 非回合后果源的定稿写点：elapsed 条目入地籍（不计回合）。名字闭合要求窗口内被引用名字的失效事件
-	 *  与被引用行同在地籍 */
+	/** 非回合后果源的定稿写点：elapsed 条目入地籍（不计回合）。 */
 	recordElapsed(steps: Step[]): void {
 		const record: ChronicleEntry = { kind: "elapsed", time: this.sim.world.time, steps };
 		this.records.push(record);
@@ -280,8 +275,8 @@ export class Engine {
 		this.updateMemory();
 	}
 
-	/** 近况窗口更新：裁剪至 memoryLimit 后整体重投影。投影点只在窗口更新时（create/recordTurn），不在每次
-	 *  LLM 调用时——同回合的映射与续行调用共享同一近况头，回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
+	/** 近况窗口更新：裁剪至 memoryLimit 后整体重投影。投影只在窗口更新点（create/recordTurn）发生——
+	 *  同回合的映射与续行调用共享同一近况头，回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateMemory(): void {
 		const limit = this.sim.def.memoryLimit;
 		if (this.records.length > limit) this.records.splice(0, this.records.length - limit);
@@ -352,8 +347,7 @@ ${verbs}
 	return def.voice ? `${def.voice}\n\n${protocol}` : protocol;
 }
 
-/** act 工具结果与呈现服务共用的事件策展：spineLines 骨架行（internal 恒滤）+ 未解析行 + 新见段。
- *  新见段 = 本回合新进可见集的实体，以状态视图同形的实体卡（含 id）承载——当回合即可指名，不欠下一回合的 digest。 */
+/** act 工具结果与呈现服务共用的事件策展：spineLines 骨架行 + 未解析行 + 新见段（本回合新进可见集的实体卡）。 */
 function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string[] {
 	const lines = spineLines(sim, steps);
 	if (refused) lines.unshift(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
@@ -377,8 +371,7 @@ function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string)
 	return lines.join("\n");
 }
 
-/** act 工具：本回合唯一的动作提交口（one-shot 门闩）。execute 内逐动作 apply（裁决→提交→按授予落钟），
- *  事件策展作为工具结果返回——它是散文的唯一事件源。 */
+/** act 工具：本回合唯一的动作提交口（one-shot 门闩）。execute 内逐动作 apply，事件策展作为工具结果返回。 */
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
 	// internal 动词不进 act schema：越权提案由 pi 校验拒绝（错误回模型、门闩未耗）
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
@@ -415,14 +408,12 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			run.acted = true;
 			const proposed = (params.actions ?? []) as Action[];
 			run.proposals = [...proposed];
-			// 事件流按构造交错（动作步 + 其授予刻步）
 			const steps: Step[] = [];
 			if (proposed.length) {
-				// 静态形态已由 pi 校验；内核同型检查（validateBatch）是批次入口的前置条件——
-				// 违约在首个裁决前原子抛出（pi/sim 校验偏斜即引擎 bug）
+				// validateBatch 是批次前置条件：静态违约须在首个裁决前抛出，否则已裁决动作失去记录
 				sim.validateBatch(proposed);
 				for (const a of proposed) {
-					// 逐动作落钟：后续动作与 systems 都在后一世界态上裁决/运行（世界能在行为之间反应）
+					// 逐动作落钟：后续动作在后一世界态上裁决
 					const res = sim.apply(a);
 					steps.push(res.step, ...res.elapsed);
 				}

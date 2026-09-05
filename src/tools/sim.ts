@@ -278,9 +278,9 @@ function parseActionToken(token: string, sim: Simulation): Action {
 	return { verb: verbName!, params };
 }
 
-/** 核心级不变拒绝（deniedBy=invariant 且无世界腔理由）——规则/系统 bug 信号；authored 否决有理由，不是 bug。 */
 type DenialBearer = { ok: boolean; deniedBy?: "rule" | "invariant"; denial?: Denial };
 
+/** bug 判据：deniedBy=invariant 且无世界腔理由（核心级拦截）；authored 墙否决有 reason，不算 bug。 */
 function bugOf(s: DenialBearer): string | undefined {
 	if (s.ok || s.deniedBy !== "invariant" || !s.denial || s.denial.reason != null) return undefined;
 	return s.denial.debug ?? s.denial.law;
@@ -429,7 +429,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName]!;
 		const entityParams = verb.entityParams ?? [];
-		// 必填非实体参数的探测域无法机械穷举（如「地点恒可指名」的 dest）：显式跳过而非报违约
+		// 必填非实体参数的探测域无法机械穷举：显式跳过而非报违约
 		const required = ((verb.schema as unknown as { required?: string[] }).required ?? []).filter((p) => !entityParams.includes(p));
 		if (required.length) {
 			skipped.push({ verb: verbName, params: required });

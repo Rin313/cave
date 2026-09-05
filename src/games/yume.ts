@@ -260,7 +260,7 @@ export const yume: GameDef = {
 		interact: interactVerb,
 		take: takeVerb,
 	},
-	// 梦的时刻只随 go（一刻）与醒来（一刻）推进；静止的梦命运冻结，低语伴随行走
+	// 低语伴随行走：梦的时刻只随动作授予推进（静止的梦不流逝）
 	world: {
 		time: 0,
 		entities: [
