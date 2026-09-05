@@ -54,7 +54,7 @@ export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
 }
 
 /** 近况投影：每条目以当前世界渲染其 steps（compact 骨架行，变更由状态视图承载）。
- *  名字解析随世界现值（改名连续）；离场者以窗口级离场底表兜底——含仪器时间条目的公开离场。 */
+ *  名字解析随世界现值（改名连续）；离场者以窗口级离场底表兜底——含仪器时间条目的离场。 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): MemoryTurn[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
 	return records.map((r) => ({

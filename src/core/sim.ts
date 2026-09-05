@@ -422,15 +422,12 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return def.messages.noResponse;
 }
 
-/** 已公开离场者底表：despawn 记录是离场者名字的唯一来源；离场发生在自身步的可见快照内才入表（公开离场）
- *  ——隐藏离场者不进表，名字不可解析、引用它的变更行在投影中沉默（其行恒不可说，名字无消费者）。
+/** 离场者底表（名字解析面，与行可说性分立）：despawn 记录是离场者名字的唯一来源，渲染窗口内一切
+ *  despawn 记录均入表；隐藏离场者自身的行恒沉默（可说性只认跨度），跨度可说的历史行离场后仍以离场名渲染。
  *  渲染窗口由调用方传入的 steps 声明（近况投影传整个窗口，供 spineLines 的 opts.departed）。 */
-export function shownDepartedNames(steps: readonly { changes: Change[]; field: FieldSpan }[]): Map<string, string> {
+export function shownDepartedNames(steps: readonly { changes: Change[] }[]): Map<string, string> {
 	const m = new Map<string, string>();
-	for (const s of steps) {
-		const field = new Set([...s.field.before, ...s.field.after]);
-		for (const c of s.changes) if (c.kind === "despawn" && field.has(c.entity)) m.set(c.entity, c.name);
-	}
+	for (const s of steps) for (const c of s.changes) if (c.kind === "despawn") m.set(c.entity, c.name);
 	return m;
 }
 
@@ -507,8 +504,9 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		const edgeSpan = s.field.edges ? new Set([...s.field.edges.before, ...s.field.edges.after]) : undefined;
 		return (c) => {
 			if (c.kind === "rel" && edgeSpan && !edgeSpan.has(edgeKey(c))) return false;
-			// 可说判据：指称在步的参照域内（跨度权威），或属窗口内已公开离场者
-			return referentsOf(sim, c).every((r) => field.has(r) || shownDeparted.has(r));
+			// 可说判据只认步的参照域（跨度权威、随步冻结——渲染窗口不扩权，Π 可说性不可重算）；
+			// 离场名字由底表解析，与可说性分立
+			return referentsOf(sim, c).every((r) => field.has(r));
 		};
 	};
 	const msgs = sim.def.messages;
@@ -805,7 +803,7 @@ export class Simulation {
 	/** 尝试行线性化：参数按 schema 声明序渲染；只有引用参数（entityParams）
 	 *  解析为名字，其余一律字面。名字在渲染时刻解析，与变更行/指称集消费同一解析链（renderValue）：
 	 *  域内引用取现值名（改名连续性）；域外引用不查在世名——活体名解析仅限已感知指称，
-	 *  否则尝试行成为隐藏实体的存在性 oracle；已公开离场名兜底，其余原样回显（可见性拒绝的参数必在域外——
+	 *  否则尝试行成为隐藏实体的存在性 oracle；离场名兜底，其余原样回显（可见性拒绝的参数必在域外——
 	 *  门以裁决前可见集为权威、拒绝不提交）。departed 兜底本渲染窗口内已 despawn 的参数实体。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
 		const action = step.action;
