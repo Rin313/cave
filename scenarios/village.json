@@ -7,9 +7,9 @@
 			"steps": [
 				{ "name": "歇息恢复（授予一刻在裁决边界内流逝：疲劳+2、饱腹-6）", "action": { "verb": "rest", "params": {} }, "expect": { "ok": true, "reason": "缓过劲", "state": { "player.hp": 58, "player.satiety": 49, "player.fatigue": 2 } } },
 				{ "name": "进食：浆果-1，饱腹+25，体力+5", "action": { "verb": "eat", "params": {} }, "expect": { "ok": true, "state": { "player.berries": 1, "player.satiety": 74, "player.hp": 63 } } },
-				{ "name": "连续挨饿 13 个时段：饱腹耗尽，体力开始被抽干", "tick": 13, "expect": { "ok": true, "state": { "player.satiety": 0, "player.hp": 59 } } },
+				{ "name": "连续挨饿 13 个时段：饱腹耗尽，体力被抽干（t=7/t=11 两次夜袭咬伤入账）", "tick": 13, "expect": { "ok": true, "state": { "player.satiety": 0, "player.hp": 57 } } },
 				{ "name": "再饿 15 个时段：体力见底，昏迷倒地", "tick": 15, "expect": { "ok": true, "state": { "player.down": true, "player.hp": 0 } } },
-				{ "name": "昏迷中歇息：醒来恢复（一夜的授予刻真实代谢：饥饿在睡眠中涌现）", "action": { "verb": "rest", "params": {} }, "expect": { "ok": true, "reason": "醒来", "state": { "player.down": false, "player.hp": 18, "player.fatigue": 8, "player.satiety": 0 } } }
+				{ "name": "昏迷中歇息：醒来恢复（一夜的授予刻真实代谢：饥饿在睡眠中涌现，t=31 夜袭咬伤入账）", "action": { "verb": "rest", "params": {} }, "expect": { "ok": true, "reason": "醒来", "state": { "player.down": false, "player.hp": 17, "player.fatigue": 8, "player.satiety": 0 } } }
 			]
 		},
 		{
@@ -62,10 +62,11 @@
 			]
 		},
 		{
-			"name": "随机判定：scout 骰子门槛 + 村里散落铜币有限（t0 命中 / t1 落空）",
+			"name": "随机判定：scout 骰子门槛 + 村里散落铜币有限（t0 命中 / t2 落空）",
 			"steps": [
-				{ "name": "t0 侦察：骰子=3 命中，捡到 2 铜币（守恒：村里散落的铜币扣）", "action": { "verb": "scout", "params": {} }, "expect": { "ok": true, "reason": "捡到", "state": { "player.coins": 42, "village.coins": 2 } } },
-				{ "name": "t1 侦察：骰子=1 落空——命运随上一动作授予的一刻改变（roll 是 World 纯函数）", "action": { "verb": "scout", "params": {} }, "expect": { "ok": false, "reason": "一无所获", "state": { "player.coins": 42, "village.coins": 2 } } }
+				{ "name": "t0 侦察：骰子=4 命中，捡到 2 铜币（守恒：村里散落的铜币扣）", "action": { "verb": "scout", "params": {} }, "expect": { "ok": true, "reason": "捡到", "state": { "player.coins": 42, "village.coins": 2 } } },
+				{ "name": "等待一刻（命运变化的唯一来源：时间流逝）", "action": { "verb": "wait", "params": { "span": 1 } }, "expect": { "ok": true } },
+				{ "name": "t2 侦察：骰子=1 落空——命运随流逝改变（roll 是 World 纯函数）", "action": { "verb": "scout", "params": {} }, "expect": { "ok": false, "reason": "一无所获", "state": { "player.coins": 42, "village.coins": 2 } } }
 			]
 		},
 		{

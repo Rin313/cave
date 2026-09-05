@@ -114,7 +114,8 @@ export interface Q {
 	readonly player: string;
 	readonly time: number;
 	readonly params: Record<string, PropValue>;
-	/** 确定性骰子（World 纯函数，apply/存档恢复一致）。 */
+	/** 确定性骰子（World 纯函数，apply/存档恢复一致）。key 由引擎以出处限定——命运地址 = time#src#key：
+	 *  跨法则/系统重名不共享命运。 */
 	roll(key: string, sides: number): number;
 }
 
@@ -665,8 +666,10 @@ export class Simulation {
 			const reason = msgs.invisibleEntity ?? msgs.noResponse;
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
 		}
-		const q = this.query(world, action.params);
 		for (const r of verb.rules) {
+			// Q 逐法则构造：命运地址继承出处命名空间
+			const src = `rule:${r.id}`;
+			const q = this.query(world, action.params, src);
 			// 门的全面性：法则崩溃代谢为必要性否决——fail-closed，链即终止（不落池给后继规则），时价照耗。
 			// 法则失灵无世界腔（世界无法以法则的声音叙述法则的失灵），noResponse 兜底，debug 定位（probe 报 bug）
 			let v: Verdict | null;
@@ -681,20 +684,20 @@ export class Simulation {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
-				return { ok: true, reason: v.reason ?? msgs.defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src: `rule:${r.id}`, ticks: v.ticks ?? cost };
+				return { ok: true, reason: v.reason ?? msgs.defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src, ticks: v.ticks ?? cost };
 			}
 			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}
 		return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
-	private query(world: World, params: Record<string, PropValue>): Q {
+	private query(world: World, params: Record<string, PropValue>, src: string): Q {
 		return {
 			world,
 			player: this.player,
 			time: world.time,
 			params,
-			roll: (key, sides) => rollDice(world, key, sides),
+			roll: (key, sides) => rollDice(world, `${src}#${key}`, sides),
 		};
 	}
 
@@ -842,7 +845,7 @@ export class Simulation {
 			// 门的全面性：系统崩溃代谢为失败刻步——本系统产出作废，其余系统继续，时刻照走（确定性失灵是跛行不是冻结）
 			let res: ReturnType<SystemRule["run"]> = null;
 			try {
-				res = sys.run(this.query(s0, {}));
+				res = sys.run(this.query(s0, {}, src));
 			} catch (e) {
 				emit({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
 				continue;

@@ -321,7 +321,6 @@ export const village: GameDef = {
 			rules: [
 				{
 					id: "dog.chase",
-					// 骰子键含实体 id：同刻键必须唯一，多兽各自独立判定
 					judge: (q, p) => {
 						if (entity(q.world, p.dog)?.props.aggressive !== true) return deny("subdue.notbeast", { reason: `${nameOf(q, p.dog)}不是赶得跑的野兽。` });
 						if (entity(q.world, p.dog)?.props.alive !== true) return deny("dog.gone", { reason: `${nameOf(q, p.dog)}已经被赶跑了，不在这里了。` });

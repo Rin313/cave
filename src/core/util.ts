@@ -35,9 +35,9 @@ export function refsTo(def: GameDef, world: World, id: string): { entity: string
 	return out;
 }
 
-/** 确定性骰子：hashStr(`${world.time}#${key}`) 派生的 [1, sides] 整数。
- *  随机必须是 World 的纯函数（apply/存档恢复一致），
- *  key 需在同 tick 内唯一（含实体 id 或自持计数器）。 */
+/** 确定性骰子：hashStr(`${world.time}#${key}`) 派生的 [1, sides] 整数
+ *  随机必须是 World 的纯函数（apply/存档恢复一致）
+ *  key 是命运地址的名字，引擎以出处限定，跨法则/系统重名不共享命运 */
 export function roll(world: World, key: string, sides: number): number {
 	const h = hashStr(`${world.time}#${key}`);
 	return 1 + Math.floor(h * Math.max(1, Math.floor(sides)));
