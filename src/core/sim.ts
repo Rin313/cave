@@ -230,8 +230,8 @@ export interface GameDef {
 	 *  事件投影（rel 变更行，经 FieldSpan.edges 随步快照）；端点可见过滤是 core 内核，本谓词叠加其上。 */
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
 	/** 状态视图的派生纹理（出口、随身清单等），入视图 extra 键，形态自由（ViewValue）。
-	 *  视图顶层 time/relations/entities 为 core 装配字段，纹理不可覆写；纹理不承诺实体参照域——
-	 *  携带的 id 须已入参照域（grounding）方可指名——纹理是已知引用的名字发放通道。 */
+	 *  视图顶层 time/relations/entities 为 core 装配字段，纹理不可覆写。extra 无引用声明面：
+	 * 纹理以名字分组陈述可指名者（实体卡已在视图），以字面模糊披露不可指名者（行动须先物化为已知引用）——指称的铸造面只有实体卡与关系端点。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];

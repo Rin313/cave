@@ -21,7 +21,6 @@ const YUME_PROPS: Record<string, PropDef> = {
 	takable: { type: "boolean", label: "可拾取" },
 	vended: { type: "boolean", internal: true },
 	desc: { type: "string", label: "样子" },
-	// space 构件（space.ts）的契约属性：使用该构件的游戏应注册
 	openable: { type: "boolean", label: "可开" },
 	open: { type: "boolean", label: "已开" },
 };
@@ -62,7 +61,7 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 	return lines.join("\n");
 }
 
-/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单。 */
+/** 状态视图派生纹理：清醒态、所在、出口、随身效果清单 */
 function digestExtraYume(world: World, player: string): Record<string, ViewValue> {
 	const me = entity(world, player);
 	const cur = (me?.props["in"] as string | undefined) ?? null;
@@ -71,7 +70,7 @@ function digestExtraYume(world: World, player: string): Record<string, ViewValue
 		here: cur ? (entity(world, cur)?.name ?? cur) : null,
 		exits: (world.relations ?? [])
 			.filter((r) => r.type === "path" && r.from === cur)
-			.map((r) => ({ id: r.to, name: entity(world, r.to)?.name ?? r.to })),
+			.map((r) => entity(world, r.to)?.name ?? r.to),
 		carried: world.entities.filter((e) => e.props.kind === "effect" && e.props["in"] === player).map((e) => e.name),
 	};
 }
@@ -338,8 +337,7 @@ export const yume: GameDef = {
 		},
 	],
 	props: YUME_PROPS,
-	// path 边是拓扑实现细节（出口经 digestExtra 以地点名呈现）——石猫建路的 relSet 变更行随之沉默，
-	// 揭示由小屋 spawn 卡与法则理由承载；法则层照常读全真相
+	// 石猫建路的 relSet 变更行随之沉默，揭示由小屋 spawn 卡与法则理由承载
 	edgePerception: () => (r) => r.type !== "path",
 	grounding: (world, player) => {
 		const cur = entity(world, player)?.props["in"] as string | null;
