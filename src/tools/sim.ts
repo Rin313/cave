@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet, spineLines } from "../core/sim.ts";
-import type { Action, GameDef, PropValue, Q, Step, VerbDef, Verdict } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, departedNames, fmtChange, propGet, renderDenial, spineLines } from "../core/sim.ts";
+import type { Action, GameDef, PropValue, Q, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { GAMES, getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { walltest } from "./walltest.ts";
@@ -67,6 +67,11 @@ function asAction(a: ScenarioAction): Action {
 	return { verb: a.verb, params: a.params as Record<string, PropValue> };
 }
 
+/** 刻步的可说文本（工具显示用）：成功刻 = 事实串联，失败刻 = 拒绝的世界腔 */
+function tickText(def: GameDef, s: TickStep): string {
+	return s.ok ? (s.facts?.map((f) => f.text).join(" ") ?? "") : renderDenial(def, s.denial);
+}
+
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	const failures: string[] = [];
 	for (const [path, expected] of Object.entries(checks)) {
@@ -109,16 +114,16 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 					ok = false;
 					reason = "时间流逝，什么也没有发生。";
 				} else {
-					const denied = results.filter((t) => !t.ok);
+					const denied = results.filter((t): t is Extract<TickStep, { ok: false }> => !t.ok);
 					if (step.expect.tickDenied) {
 						// 期望刻步被硬墙拦截（不变式）：拦截即通过
 						ok = denied.length > 0;
-						reason = denied.map((t) => t.denial?.debug ?? t.reason).join(" ") || "（无拦截）";
+						reason = denied.map((t) => t.denial.debug).join(" ") || "（无拦截）";
 						if (!ok) problems.push("期望刻步被硬墙拦截，未发生");
 					} else {
 						ok = true;
-						reason = results.map((r) => r.reason).join(" ");
-						for (const t of denied) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+						reason = results.map((r) => tickText(def, r)).join(" ");
+						for (const t of denied) problems.push(`刻步被硬墙拦截: ${t.denial.debug}`);
 					}
 				}
 			} catch (e) {
@@ -140,11 +145,11 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				reason = res.step.reason;
 				stepLaw = res.step.denial?.law ?? null;
 				// tickDenied 在动作步上同样成立：法则失灵代谢（rule.crash）与墙否决都落在授予刻步上——时价照耗是契约的一部分
-				const deniedTicks = res.elapsed.filter((t) => !t.ok);
+				const deniedTicks = res.elapsed.filter((t): t is Extract<TickStep, { ok: false }> => !t.ok);
 				if (step.expect.tickDenied) {
 					if (deniedTicks.length === 0) problems.push("期望刻步被必要性通道拦截，未发生");
 				} else {
-					for (const t of deniedTicks) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+					for (const t of deniedTicks) problems.push(`刻步被硬墙拦截: ${t.denial.debug}`);
 				}
 			} catch (e) {
 				// 前置条件违约是场景笔误，不得混同于世界拒绝；显式声明 expect.protocol / expect.throws 的步骤例外
@@ -402,8 +407,8 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			}
 			// 刻步只会被不变式硬墙拦截：拦截即系统 bug——授予与拒绝两条路径都要查（授予后落钟的 systems 产出同样过墙）
 			for (const t of elapsed) {
-				if (!t.ok && t.deniedBy === "invariant" && t.denial && t.denial.reason == null) {
-					rows.push({ verb: action.verb, op, law: t.denial.law ?? "invariant", reason: t.reason, bug: t.denial.debug ?? t.denial.law });
+				if (!t.ok && t.denial.reason == null) {
+					rows.push({ verb: action.verb, op, law: t.denial.law, reason: renderDenial(def, t.denial), bug: t.denial.debug ?? t.denial.law });
 				}
 			}
 		} catch (e) {
@@ -519,7 +524,9 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		for (const r of results) {
 			console.log(`\n>>> ${actionDesc}`);
 			const ticks = r.kind === "action" && r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : "";
-			console.log(`  ${r.ok ? "✓" : "✗"} ${r.reason}${ticks}${!r.ok && r.deniedBy === "invariant" && r.denial?.debug && r.denial.reason == null ? ` ⚠ ${r.denial.debug}` : ""}`);
+			const text = r.kind === "action" ? r.reason : tickText(sim.def, r);
+			const bug = !r.ok && r.deniedBy === "invariant" && r.denial && r.denial.reason == null ? (r.denial.debug ?? r.denial.law) : undefined;
+			console.log(`  ${r.ok ? "✓" : "✗"} ${text}${ticks}${bug ? ` ⚠ ${bug}` : ""}`);
 			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch, departed)}`);
 		}
 	}
@@ -529,7 +536,10 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 		console.log(sim.digest());
 	}
 	console.log("\n=== 变更日志 ===");
-	for (const s of steps) console.log(`  ${s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`} → ${s.reason}`);
+	for (const s of steps) {
+		const head = s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`;
+		console.log(`  ${head} → ${s.kind === "action" ? s.reason : tickText(sim.def, s)}`);
+	}
 }
 
 async function main(): Promise<void> {

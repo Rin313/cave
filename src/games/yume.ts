@@ -6,8 +6,6 @@ import { Type } from "typebox";
 /**
  * 梦核极研究探针：梦日记（Yume Nikki 式）。
  * 极少法则 + 极高自由：四个动词、零领域不变式、两个纯氛围系统
- * authored 形态的实证场：互动按实体逐个书写（卫语句子句 + 兜底），效果（effect）不主动起作用、只是被带着而世界因此不同；
- * 实体可生灭（spawn/despawn）、拓扑可生长（relSet 建径）、持有物改写互动结果。
  * 验证目标：core 原语能否承载「发现即玩法」的世界，而不需要任何新机制。
  */
 
@@ -54,8 +52,12 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 		else if (c.kind === "rename") lines.push(`改名：${c.prev} → ${c.next}。`);
 	}
 	for (const s of steps) {
-		if (s.kind === "action" && !s.ok) lines.push(s.reason);
-		if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
+		if (s.kind === "action") {
+			if (!s.ok) lines.push(s.reason);
+			if (s.facts?.length) lines.push(...s.facts.map((f) => f.text));
+		} else if (s.ok && s.facts?.length) {
+			lines.push(...s.facts.map((f) => f.text));
+		}
 	}
 	return lines.join("\n");
 }
@@ -146,10 +148,6 @@ const takeVerb = defineVerb({
 	],
 });
 
-/**
- * 互动：authored 形态的主动词。每条子句是一个被书写过的存在；
- * 结果取决于「它是什么」与「你带着什么」。兜底：世界沉默。
- */
 const interactVerb = defineVerb({
 	label: "互动",
 	description: "触碰、注视或摆弄一个眼前的存在。结果取决于它是什么、以及你带着什么。",

@@ -60,10 +60,9 @@ const sumProp = (world: World, prop: string): number => {
 	return total;
 };
 const isNight = (q: Q): boolean => q.time % 4 === 3;
-/** 法则世界腔的指称解析：id → 展示名（裁决读态上的在世名字；参数已过可见性门，兜底仅防御）。 */
+/** 法则世界腔的指称解析：id → 展示名 */
 const nameOf = (q: Q, id: string): string => entity(q.world, id)?.name ?? id;
-/** NPC 对玩家的信任：数值关系边，无边/非数按 0 显式参与比较——缺省与类型语义由拥有
- *  「信任」词汇的游戏命名，不经引擎强转（非数现值不可被静默改写为数值）。 */
+/** NPC 对玩家的信任：数值关系边，无边/非数按 0 显式参与比较 */
 const trust = (q: Q, from: string): number => fin(relVal(q.world, from, q.player, "信任")) ?? 0;
 /** 卖家忠诚折价：vendor 以 dealTrust/dealCut 声明「信任达标即减价」——关系边 → 经济耦合的通用形态。 */
 const loyalCut = (q: Q, vendorId: string): number => {

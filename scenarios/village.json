@@ -88,7 +88,7 @@
 			]
 		},
 		{
-			"name": "谷物经济：动态价格、守恒、兑换体力",
+			"name": "谷物经济：动态价格、守恒",
 			"steps": [
 				{ "name": "买谷物（存粮 10，价 3）", "action": { "verb": "buy", "params": { "goods": "wheatfield" } }, "expect": { "ok": true, "state": { "player.coins": 37, "farmer.coins": 63, "wheatfield.grain": 9, "player.grain": 1 } } },
 				{ "name": "买谷物（存粮 9，价 4）", "action": { "verb": "buy", "params": { "goods": "wheatfield" } }, "expect": { "ok": true, "state": { "player.coins": 33, "wheatfield.grain": 8 } } },

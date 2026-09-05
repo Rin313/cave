@@ -36,7 +36,7 @@ export interface ActOutcome {
 	narration: string;
 	/** act 工具实际收到的动作提案（审计记录）。 */
 	proposals: { verb: string; params: unknown }[];
-	/** 过程报警（未调 act / 散文为空等叙述兜底） */
+	/** 过程报警 */
 	warnings: string[];
 	/** 单次 LLM 调用用量，按调用序。 */
 	usage: TokenUsage[];
@@ -283,7 +283,7 @@ export class Engine {
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
 	}
 
-	/** 叙述收尾：正文为空 → 确定性摘要兜底。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
+	/** 叙述收尾：正文为空 → 取确定性摘要。current 若有暂扣文本（error 生成被 pi 保留），定稿时入账。 */
 	private settleNarration(steps: Step[]): string {
 		const text = this.run.settled + this.run.current;
 		if (text.trim() === "") {

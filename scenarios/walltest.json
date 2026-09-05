@@ -10,7 +10,7 @@
 				{ "name": "规则越权写钟：q.world.time 同被冻结拦下——崩溃代谢为 rule.crash（钟的唯一写者是落钟循环，按构造成立）", "action": { "verb": "clockpoke", "params": {} }, "expect": { "ok": false, "law": "rule.crash", "state": { "$world.time": 0 } } },
 				{ "name": "越权未遂后世界仍健康：时间未走、数值无漂移，干净动作照常", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.hp": 10 } } },
 				{ "name": "武装系统越权（leak.tick 平时沉默，武装后的刻步才测写入点即抛）", "action": { "verb": "arm", "params": {} }, "expect": { "ok": true } },
-				{ "name": "系统越权写属性：TypeError 兑为 system.crash 失败刻步，其余系统（vault.tick）照跑", "tick": 1, "expect": { "tickDenied": true, "lines": ["✓ 流逝(1)：时间流逝。", "⏱ ✗ ……", "⏱ ✗ 封印纹丝不动。"] } }
+				{ "name": "系统越权写属性：TypeError 兑为 system.crash 失败刻步，其余系统（vault.tick）照跑", "tick": 1, "expect": { "tickDenied": true, "lines": ["✓ 流逝(1)：时间流逝。", "⏱ ✗ 世界没有回应。", "⏱ ✗ 封印纹丝不动。"] } }
 			]
 		},
 		{
@@ -35,7 +35,7 @@
 				{ "name": "规则中途抛出：崩溃兑为 rule.crash 否决步（无世界腔理由，noResponse 兜底；链终止——兜底法则不可达），时价照耗", "action": { "verb": "boom", "params": {} }, "expect": { "ok": false, "law": "rule.crash", "reason": "世界没有回应", "tickDenied": true, "state": { "player.touched": 0, "player.hp": 10, "$world.time": 2 } } },
 				{ "name": "崩溃后世界仍健康：时价已耗（t=2），干净提交照常", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "$world.time": 2 } } },
 				{ "name": "引爆系统失灵（boom.tick 平时沉默）", "action": { "verb": "detonate", "params": {} }, "expect": { "ok": true } },
-				{ "name": "系统直接抛出：崩溃兑为 system.crash 失败刻步，其余系统（vault.tick）照跑，时刻照走", "tick": 1, "expect": { "tickDenied": true, "lines": ["✓ 流逝(1)：时间流逝。", "⏱ ✗ ……", "⏱ ✗ 封印纹丝不动。"], "state": { "$world.time": 3 } } }
+				{ "name": "系统直接抛出：崩溃兑为 system.crash 失败刻步，其余系统（vault.tick）照跑，时刻照走", "tick": 1, "expect": { "tickDenied": true, "lines": ["✓ 流逝(1)：时间流逝。", "⏱ ✗ 世界没有回应。", "⏱ ✗ 封印纹丝不动。"], "state": { "$world.time": 3 } } }
 			]
 		},
 		{

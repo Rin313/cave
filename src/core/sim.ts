@@ -132,10 +132,11 @@ export interface Rule {
 	judge: (q: Q) => Verdict | null;
 }
 
-/** 系统规则：每 tick 一次，聚合产出（空产出 = 本 tick 无事）。 */
+/** 系统规则：每 tick 一次，聚合产出（空产出 = 本 tick 无事）。
+ *  产出只以变更与事实说话（公理一：氛围与理由说为 Fact）——刻步无应答义务，无 reason 通道。 */
 export interface SystemRule {
 	id: string;
-	run: (q: Q) => { deltas: Delta[]; facts?: Fact[]; reason?: string } | null;
+	run: (q: Q) => { deltas: Delta[]; facts?: Fact[] } | null;
 }
 
 export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: number): Verdict {
@@ -406,22 +407,12 @@ export interface Resolution {
 	elapsed: TickStep[];
 }
 
-/** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻） */
-export interface TickStep {
-	kind: "tick";
-	at: number;
-	ok: boolean;
-	reason: string;
-	changes: Change[];
-	/** 本系统提交边界两侧的可见快照。 */
-	field: FieldSpan;
-	/** 刻步只会被必要性通道拦截（硬墙否决或系统代码失灵 system.crash——门的全面性代谢）。 */
-	deniedBy?: "invariant";
-	denial?: Denial;
-	facts?: Fact[];
-	/** 本提交的产出方（system:<id>）。出处记录在提交层（步与 InvariantCtx.src），变更记录是纯内容。 */
-	src?: string;
-}
+/** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻）。刻步无应答义务——应答（reason）是动作协议的
+ *  义务（凡裁决必有对尝试的回应），系统不回应任何尝试：成功刻以变更与事实说话（公理一：氛围与理由说为
+ *  Fact）；失败刻只来自必要性通道（硬墙否决或系统代码失灵 system.crash——门的全面性代谢），可说由拒绝派生 */
+export type TickStep =
+	| { kind: "tick"; at: number; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[]; src: string }
+	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; deniedBy: "invariant"; denial: Denial; src: string };
 
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
@@ -563,7 +554,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 				if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).filter(perceivableOf(s)));
 				if (s.facts?.length) held.facts.push(...s.facts);
 			} else {
-				held.denials.push(s.reason || msgs.defaultReason);
+				held.denials.push(renderDenial(sim.def, s.denial));
 			}
 			if (held.changes.length || held.facts.length || held.denials.length) said.set(s.at, held);
 		}
@@ -864,7 +855,7 @@ export class Simulation {
 			try {
 				res = sys.run(this.query(s0, {}));
 			} catch (e) {
-				emit({ kind: "tick", at: this.world.time, ok: false, reason: messagesFor(this.def).defaultReason, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
+				emit({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
 				continue;
 			}
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
@@ -876,14 +867,13 @@ export class Simulation {
 			if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
 			const at = this.world.time;
 			if (!cc.ok) {
-				emit({ kind: "tick", at, ok: false, reason: cc.reason, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
+				emit({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
 				continue;
 			}
 			emit({
 				kind: "tick",
 				at,
 				ok: true,
-				reason: res.facts?.length ? res.facts.map((f) => f.text).join(" ") : (res.reason ?? messagesFor(this.def).defaultReason),
 				changes: cc.changes,
 				...(res.facts !== undefined && { facts: res.facts }),
 				src,

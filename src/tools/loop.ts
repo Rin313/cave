@@ -216,7 +216,8 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 				const res = sim.apply(devWait(n));
 				const results = res.elapsed;
 				appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, usage: [] });
-				console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+				const lines = spineLines(sim, results);
+				console.log(`\n【wait ${n}】${lines.length ? lines.join("；") : "无事发生"}`);
 			} else {
 				const outcome = await engine.act({ intent: line });
 				meta.turn += 1;
@@ -255,7 +256,8 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined): Pr
 		);
 		persistRun(ctx);
 		appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, scene, warnings, usage });
-		console.log(`\n【wait ${n}】${results.map((r) => r.reason).join("；") || "无事发生"}`);
+		const lines = spineLines(sim, results);
+		console.log(`\n【wait ${n}】${lines.length ? lines.join("；") : "无事发生"}`);
 		console.log(scene);
 		warnWarnings(warnings);
 		const u = usageLine(usage);
