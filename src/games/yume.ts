@@ -95,15 +95,13 @@ const sleepVerb = defineVerb({
 	],
 });
 
-/** 移动：沿路径在相邻地点间走（一刻）。暗处需要光（灯效果）。
- *  dest 声明 beyondField：地点名来自出口列表与旅行史，雾外可指，存在性由法则回答。 */
+/** 移动：沿路径在相邻地点间走（一刻）。暗处需要光（灯效果） */
 const goVerb = defineVerb({
 	label: "移动",
 	description: "沿路前往相邻的地点（dest 是地点实体 id，见出口列表）。走动推进梦的时刻。",
 	schema: Type.Object({ dest: Type.String({ description: "目的地实体 id" }) }),
 	cost: 1,
 	entityParams: ["dest"],
-	beyondField: ["dest"],
 	rules: [
 		{
 			id: "go.dark",

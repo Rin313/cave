@@ -170,7 +170,6 @@ export function defineVerb<S extends TObject>(spec: {
 	schema: S;
 	cost?: number;
 	entityParams?: RefKey<S>[];
-	beyondField?: RefKey<S>[];
 	internal?: boolean;
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
@@ -181,7 +180,6 @@ export function defineVerb<S extends TObject>(spec: {
 		// 工具边界与内核前置条件同一严格度：多余参数在工具层被拒，而非到内核才触发 ProtocolViolation
 		schema: { ...spec.schema, additionalProperties: false },
 		...(spec.entityParams !== undefined && { entityParams: spec.entityParams }),
-		...(spec.beyondField !== undefined && { beyondField: spec.beyondField }),
 		...(spec.internal !== undefined && { internal: spec.internal }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
@@ -194,11 +192,9 @@ export interface VerbDef {
 	schema: TObject;
 	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。规则可在授予中以 ticks 改写实际流逝。 */
 	cost?: number;
-	/** 声明哪些参数是实体指称：机械渲染按声明解析为名字、probe 按其枚举；可见性门缺省管辖（可指名必看得见） */
+	/** 声明哪些参数是实体指称：机械渲染按声明解析为名字、probe 按其枚举；可见性门管辖全部引用参数
+	 *  （门权威 = grounding ∩ 账本，参照域即「意志能点名什么」——已知引用的历史积累由游戏经世界标记并入 grounding）。 */
 	entityParams?: string[];
-	/** ⊆ entityParams：可见性门退位的引用参数——名字来源在实体索引之外（出口列表、旅行史等场景纹理），
-	 *  存在性与可达性由法则层回答。 */
-	beyondField?: string[];
 	/** 内部动词：不进映射层（act schema 与系统提示的投影滤除），只由代码直接 apply——同一裁决边界与硬墙。 */
 	internal?: boolean;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为无条件拒绝的兜底规则。 */
@@ -230,7 +226,7 @@ export interface GameDef {
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
 	/** 状态视图的派生纹理（出口、随身清单等），入视图 extra 键，形态自由（ViewValue）。
 	 *  视图顶层 time/relations/entities 为 core 装配字段，纹理不可覆写；纹理不承诺实体参照域——
-	 *  携带可指名 id 时须配合 beyondField 引用参数消费。 */
+	 *  携带的 id 须已入参照域（grounding）方可指名——纹理是已知引用的名字发放通道。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	/** 不变式：提交后校验，违反即回滚整个提交并拒绝。core 默认恒挂引用完整性硬墙。 */
 	invariants?: Invariant[];
@@ -618,9 +614,6 @@ export class Simulation {
 				if (!node) throw new Error(`动词 ${name} 的 entityParams「${p}」不是 schema 属性——引用参数声明与动词 schema 是同一事实的两面`);
 				if (node.type !== "string") throw new Error(`动词 ${name} 的 entityParams「${p}」的 schema 须为字符串型（可省略），得到 ${String(node.type)}`);
 			}
-			for (const p of v.beyondField ?? []) {
-				if (!(v.entityParams ?? []).includes(p)) throw new Error(`动词 ${name} 的 beyondField「${p}」未声明为 entityParams——域外可指是引用参数的修饰，不是独立的参数通道`);
-			}
 		}
 		// 初始世界同样过墙（genesis = 自身，changes = 空）——def 结构错误与损坏存档在此显形，而非首次提交
 		const broken = this.checkInvariants(this.readState(), []);
@@ -635,10 +628,12 @@ export class Simulation {
 		return this.visibleIn(this.readState());
 	}
 
-	/** 可见集：grounding 收冻结读态。 */
+	/** 参照域：可见性门与状态视图实体索引的共同权威 = grounding ∩ 账本——感知声明不得为不存在的
+	 *  实体铸造指称（谎报的 id 静默离场：不进视图、不可指名）。 */
 	private visibleIn(world: World): Set<string> {
-		if (this.def.grounding) return new Set(this.def.grounding(world, this.player));
-		return new Set(world.entities.map((e) => e.id));
+		const ids = new Set(world.entities.map((e) => e.id));
+		if (!this.def.grounding) return ids;
+		return new Set(this.def.grounding(world, this.player).filter((id) => ids.has(id)));
 	}
 
 	/** 边感知快照：结构过滤（端点可见）∧ 游戏语义谓词。*/
@@ -678,10 +673,9 @@ export class Simulation {
 		const msgs = messagesFor(this.def);
 		const verb = this.staticForm(action);
 		const cost = attemptCost(verb);
-		// 可见性门管辖面 = 引用参数 − beyondField（名字来源在实体索引之外，由法则层回答）
-		const beyond = new Set(verb.beyondField ?? []);
+		// 可见性门管辖全部引用参数：参照域（裁决读态的可见集）是「意志能点名什么」的唯一权威——
+		// 已知引用的历史积累由游戏并入 grounding（世界标记），门不退位
 		const invalid = (verb.entityParams ?? [])
-			.filter((p) => !beyond.has(p))
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
 		if (invalid.length) {

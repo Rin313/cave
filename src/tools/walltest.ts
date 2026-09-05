@@ -15,7 +15,8 @@ const num = (v: unknown): number => Number(v ?? 0);
  *  声明驱动的渲染/投影（字面值不冒充指称）在 tag 场景钉住。
  *  级联删边的入账（弱引用的消散可说——变更流是后态的完整 diff）在 sever 场景钉住。
  *  法则代码失灵的门内代谢（rule.crash 链终止 / system.crash 不连坐——世界跛行而非冻结或分叉）在 boom / detonate 场景钉住；
- *  投影缺陷不产世界事件（apply 原子回滚后重抛——凡不可说者不发生）在 blindfold 场景钉住。 */
+ *  投影缺陷不产世界事件（apply 原子回滚后重抛——凡不可说者不发生）在 blindfold 场景钉住；
+ *  参照域契约（门权威 = grounding ∩ 账本：谎报的 id 不可指名且与幻觉 id 同文案）在 beckon/veil 场景钉住。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -26,6 +27,7 @@ const PROPS: Record<string, PropDef> = {
 	// 法则失灵与投影缺陷夹具的开关属性（内部 plumbing，同 armed）
 	crash: { type: "boolean", internal: true },
 	gaze: { type: "boolean", internal: true },
+	phantom: { type: "boolean", internal: true },
 	// 指称解析契约的字面/引用对照：note 是字面字符串（与实体 id 碰撞也不得解析），ref 是声明引用
 	note: { type: "string", label: "便签" },
 	ref: { type: "id", label: "指向" },
@@ -179,6 +181,19 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "blindfold.grant", judge: (q) => grant([D.set(q.player, "gaze", true)], "你蒙上了眼。") }],
 		}),
+		beckon: defineVerb({
+			label: "召唤",
+			description: "参照域契约夹具：对参照域内的实体召唤（干净授予）；域外 id 由可见性门拒绝。",
+			schema: Type.Object({ target: Type.String({ description: "目标实体 id" }) }),
+			entityParams: ["target"],
+			rules: [{ id: "beckon.ok", judge: () => grant([], "你朝那东西招了招手。") }],
+		}),
+		veil: defineVerb({
+			label: "起雾",
+			description: "研究动词：让感知谎报一个不存在的 id（参照域夹具开关）。",
+			schema: Type.Object({}),
+			rules: [{ id: "veil.ok", judge: (q) => grant([D.set(q.player, "phantom", true)], "雾里多出了一段空白。") }],
+		}),
 	},
 	world: {
 		time: 0,
@@ -214,10 +229,13 @@ export const walltest: GameDef = {
 		},
 	],
 	/** 投影缺陷夹具：gaze=true 时感知快照崩溃——def 缺陷在 apply 边界原子回滚后重抛（凡不可说者不发生）。
+	 *  phantom=true 时感知谎报一个不存在的 id——门权威 = grounding ∩ 账本，谎报静默离场（不可指名）。
 	 *  其余状态透明（全见），不改变任何既有场景的跨度与投影。 */
 	grounding: (world) => {
 		if (world.entities.some((e) => e.props.gaze === true)) throw new Error("感知在半空碎裂");
-		return world.entities.map((e) => e.id);
+		const ids = world.entities.map((e) => e.id);
+		if (world.entities.some((e) => e.props.phantom === true)) return [...ids, "ghost"];
+		return ids;
 	},
 	props: PROPS,
 	invariants: [{

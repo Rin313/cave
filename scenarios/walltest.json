@@ -80,6 +80,15 @@
 				{ "name": "despawn 级联删边：despawn 记录在前、边消散紧随（边表序），离场名经 despawn 记录兑底渲染", "action": { "verb": "sever", "params": {} }, "expect": { "ok": true, "lines": ["✓ 断绝：你斩断了那件东西。（- 那件东西；你.标记.那件东西: 甲 → null）"], "state": { "$world.relations.0": null, "thing.id": null } } },
 				{ "name": "级联后账本健康：干净提交照常（探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1 } } }
 			]
+		},
+		{
+			"name": "参照域契约：门权威 = grounding ∩ 账本——谎报的 id 不可指名，在册实体不误伤",
+			"steps": [
+				{ "name": "干净对照：召唤在册实体（参照域内，法则授予）", "action": { "verb": "beckon", "params": { "target": "thing" } }, "expect": { "ok": true, "reason": "招了招手" } },
+				{ "name": "起雾：感知谎报 ghost（phantom 经 delta 入账，internal 不进视图）", "action": { "verb": "veil", "params": {} }, "expect": { "ok": true } },
+				{ "name": "幻影不可指名：门拒绝，与幻觉 id 同一文案（无存在性 oracle）；域外指称在尝试行原样回显", "action": { "verb": "beckon", "params": { "target": "ghost" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "世界没有回应", "lines": ["✗ 召唤(ghost)：世界没有回应。"] } },
+				{ "name": "谎报不误伤：在册实体照常可指名（干净对照步）", "action": { "verb": "beckon", "params": { "target": "thing" } }, "expect": { "ok": true } }
+			]
 		}
 	]
 }

@@ -322,13 +322,7 @@ function buildSystemPrompt(def: GameDef): string {
 	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
 		.map(([name, v]) => {
 			const refs = v.entityParams ?? [];
-			const beyond = new Set(v.beyondField ?? []);
-			const gated = refs.filter((p) => !beyond.has(p));
-			const notes = [
-				gated.length ? `${gated.join("/")} 只能取可见实体 id` : "",
-				beyond.size ? `${[...beyond].join("/")} 可取视野外的实体 id（出口、地点等场景纹理给出的 id）` : "",
-			].filter(Boolean).join("；");
-			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（实体参数：${refs.join("/")}——${notes}）` : ""}`;
+			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（实体参数：${refs.join("/")}——只能取可见实体 id）` : ""}`;
 		})
 		.join("\n");
 	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
