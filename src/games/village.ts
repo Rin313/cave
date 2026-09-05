@@ -456,11 +456,12 @@ export const village: GameDef = {
 		},
 		{
 			id: "coins.provenance",
-			// coins 的每次变更必须来自合法经济规则的 src；新增移动铜币的规则时须同步扩展此白名单
+			// 铜币只许在合法经济规则的提交里移动
 			check: (_world, ctx) => {
 				const allowed = new Set(["rule:buy.goods", "rule:sell.goods", "rule:scout.luck", "rule:repair.step"]);
-				const bad = ctx.changes.filter((c) => c.kind === "prop" && c.prop === "coins" && !allowed.has(c.src));
-				return bad.length ? "铜币的来路对不上账。" : null;
+				if (allowed.has(ctx.src)) return null;
+				const moved = ctx.changes.some((c) => c.kind === "prop" && c.prop === "coins");
+				return moved ? "铜币的来路对不上账。" : null;
 			},
 		},
 	],

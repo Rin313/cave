@@ -46,13 +46,14 @@ export type Delta =
 	| { op: "despawn"; entity: string };
 
 /** 提交产出的变更记录：prop/rename 只留 prev/next，rel 携带完整端点（next null 即删边；despawn 级联删边复用同一形状，不另立形态）。
- *  spawn/despawn 携带展示名——实体已离场，这条记录是渲染历史事件时名字的唯一来源（见 departedNames）。 */
+ *  spawn/despawn 携带展示名——实体已离场，这条记录是渲染历史事件时名字的唯一来源（见 departedNames）。
+ *  变更记录是纯内容（what changed）；出处是提交级事实（一次提交恒一产出方），记录在步 src 与 InvariantCtx.src。 */
 export type Change =
-	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue; src: string }
-	| { kind: "rename"; entity: string; prev: string; next: string; src: string }
-	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue; src: string }
-	| { kind: "spawn"; entity: string; name: string; src: string }
-	| { kind: "despawn"; entity: string; name: string; src: string };
+	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue }
+	| { kind: "rename"; entity: string; prev: string; next: string }
+	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue }
+	| { kind: "spawn"; entity: string; name: string }
+	| { kind: "despawn"; entity: string; name: string };
 
 export interface Action {
 	verb: string;
@@ -236,13 +237,15 @@ export interface GameDef {
 	voice?: string;
 }
 
-/** 不变式检查上下文：起点世界快照（守恒类种子的锚点）+ 本次提交的全部变更（provenance 审计）。 */
+/** 不变式检查上下文：起点世界快照（守恒类种子的锚点）+ 本次提交的全部变更与产出方（provenance 审计）。 */
 export interface InvariantCtx {
 	def: GameDef;
 	/** 本 Simulation 起点世界的冻结副本（首提交前捕获）——存档恢复/变体开局时 ≠ def.world。 */
 	genesis: World;
-	/** 本次提交的全部变更（含 spawn/despawn 与 src 产出方标识）；每条规则/系统的提交独立过墙。 */
+	/** 本次提交的全部变更（含 spawn/despawn）；每条规则/系统的提交独立过墙。 */
 	changes: Change[];
+	/** 本次提交的产出方（rule:<id> / system:<id> / def——构造期）：出处是提交级事实，过渡不变式的粒度即单次提交。 */
+	src: string;
 }
 
 /** 不变式：每次提交后校验（null 通过），违反即整提交回滚并拒绝。状态不变式只读 world（守恒类）；
@@ -393,7 +396,7 @@ export interface ActionStep {
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
-	/** 变更来源标识（rule:<ruleId> / system:<systemId>），审计依据。 */
+	/** 本提交的产出方（rule:<ruleId> / system:<systemId>）；拒绝态无提交故缺席。出处记录在提交层（步与 InvariantCtx.src）。 */
 	src?: string;
 }
 
@@ -416,7 +419,7 @@ export interface TickStep {
 	deniedBy?: "invariant";
 	denial?: Denial;
 	facts?: Fact[];
-	/** 变更来源标识（system:<id>），审计依据。 */
+	/** 本提交的产出方（system:<id>）。出处记录在提交层（步与 InvariantCtx.src），变更记录是纯内容。 */
 	src?: string;
 }
 
@@ -615,8 +618,8 @@ export class Simulation {
 				if (node.type !== "string") throw new Error(`动词 ${name} 的 entityParams「${p}」的 schema 须为字符串型（可省略），得到 ${String(node.type)}`);
 			}
 		}
-		// 初始世界同样过墙（genesis = 自身，changes = 空）——def 结构错误与损坏存档在此显形，而非首次提交
-		const broken = this.checkInvariants(this.readState(), []);
+		// 初始世界同样过墙（genesis = 自身，changes = 空，src = def）——def 结构错误与损坏存档在此显形，而非首次提交
+		const broken = this.checkInvariants("def", this.readState(), []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
 	}
 
@@ -739,12 +742,12 @@ export class Simulation {
 	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial; reason: string } {
 		const genesis = this.genesis(); // 种子先于一切变异捕获：这里是唯一提交入口
 		try {
-			const out = this.commit(deltas, src);
+			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
 				return { ok: false, denial: out.refusal, reason: messagesFor(this.def).noResponse };
 			}
-			const inv = this.checkInvariants(genesis, out.changes);
+			const inv = this.checkInvariants(src, genesis, out.changes);
 			if (inv) {
 				this.restore(s0);
 				const denial: Denial = inv.authored
@@ -761,13 +764,13 @@ export class Simulation {
 	}
 
 	/** 运行全部不变式（先 core 引用完整性，后游戏声明），返回首个违反者。审查者收冻结读态与冻结记录。 */
-	private checkInvariants(genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
+	private checkInvariants(src: string, genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
 		const world = this.readState();
 		const frozen = deepFreeze(changes);
-		const integrity = integrityInvariant().check(world, { def: this.def, genesis, changes: frozen });
+		const integrity = integrityInvariant().check(world, { def: this.def, genesis, changes: frozen, src });
 		if (integrity) return { id: "integrity", message: integrity, authored: false };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(world, { def: this.def, genesis, changes: frozen });
+			const msg = inv.check(world, { def: this.def, genesis, changes: frozen, src });
 			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
@@ -923,7 +926,7 @@ export class Simulation {
 	/** 提交的执行校验：每条 delta 在其应用时刻必须可执行——逐条校验而非提交前预检（同一授予内 spawn 后 set
 	 *  是合法书写），不可执行即拒绝整个提交（commitChecked 原子回滚）。幂等跳过的唯一判据是目标状态已成立：
 	 *  relSet 删不存在的边成立（无边即状态）；set 同值以目标存在为前提——存在性拒绝在前，永不回落为跳过。 */
-	private commit(deltas: Delta[], src: string): { changes: Change[] } | { refusal: Denial } {
+	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
 		// 边表惰性入账；一经创建，本提交内保持同一数组引用
 		const rels = (): Rel[] => (this.world.relations ??= []);
@@ -940,7 +943,7 @@ export class Simulation {
 				if (entity(this.world, d.entity.id)) return refuse(`spawn "${d.entity.id}": entity already exists`);
 				if (!Object.values(d.entity.props).every(isLedgerValue)) return refuse(`spawn "${d.entity.id}": props contain a non-ledger value (scalar or scalar array)`);
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
-				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name, src });
+				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name });
 				continue;
 			}
 			if (d.op === "despawn") {
@@ -961,8 +964,8 @@ export class Simulation {
 						}
 					}
 				}
-				changes.push({ kind: "despawn", entity: d.entity, name: gone.name, src });
-				for (const r of dissolved) changes.push({ kind: "rel", from: r.from, to: r.to, type: r.type, prev: r.value, next: null, src });
+				changes.push({ kind: "despawn", entity: d.entity, name: gone.name });
+				for (const r of dissolved) changes.push({ kind: "rel", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				continue;
 			}
 			if (d.op === "relSet") {
@@ -978,7 +981,7 @@ export class Simulation {
 				} else {
 					upsertRel(d.from, d.to, d.type, d.value);
 				}
-				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value, src });
+				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value });
 				continue;
 			}
 			if (d.op === "rename") {
@@ -988,7 +991,7 @@ export class Simulation {
 				if (e.name === d.value) continue;
 				const prev = e.name;
 				e.name = d.value;
-				changes.push({ kind: "rename", entity: d.entity, prev, next: d.value, src });
+				changes.push({ kind: "rename", entity: d.entity, prev, next: d.value });
 				continue;
 			}
 			const e = entity(this.world, d.entity);
@@ -997,7 +1000,7 @@ export class Simulation {
 			const prev = e.props[d.prop] ?? null;
 			if (prev === d.value) continue;
 			e.props[d.prop] = d.value;
-			changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value, src });
+			changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value });
 		}
 		return { changes };
 	}
