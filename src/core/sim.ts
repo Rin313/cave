@@ -762,7 +762,7 @@ export class Simulation {
 
 	/** 历史原子性：正常返回 ⇔ 步骤流与账本互证（step + 全部授予刻步完备）；异常逃逸 ⇒ 世界恢复调用前原状再抛。
 	 *  门内法则代码的崩溃不逃逸（adjudicateRaw / runSystems 代谢为必要性否决）；能逃逸的只有投影钩子与内核 bug——
-	 *  投影不产世界事件（def 缺陷，同 malformed schema），凡不可说者不发生：先回滚后重抛。 */
+	 *  投影不产世界事件（def 缺陷），凡不可说者不发生：先回滚后重抛。 */
 	apply(action: Action): Resolution {
 		const s0 = this.readState();
 		try {
