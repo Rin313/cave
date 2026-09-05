@@ -119,7 +119,7 @@ export const walltest: GameDef = {
 		}),
 		junkspawn: defineVerb({
 			label: "夹带生灭",
-			description: "墙契约：spawn 带实体形状外的顶层键——形状封闭拒绝（公理一「此外无物」）。",
+			description: "墙契约：spawn 带实体形状外的顶层键——形状封闭拒绝（公理一）。",
 			schema: Type.Object({}),
 			rules: [{ id: "junkspawn.leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
 		}),

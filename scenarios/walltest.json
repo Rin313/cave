@@ -78,7 +78,7 @@
 			"steps": [
 				{ "name": "id 引用写空串：无哨兵——integrity 拒绝，整提交回滚（「无引用」由缺席表达，清除写 null 即删键）", "action": { "verb": "blank", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.ref": null } } },
 				{ "name": "拒绝后的干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.ref": null } } },
-				{ "name": "spawn 带实体形状外的顶层键：形状封闭拒绝（公理一「此外无物」）", "action": { "verb": "junkspawn", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.entities.2": null } } },
+				{ "name": "spawn 带实体形状外的顶层键：形状封闭拒绝（公理一）", "action": { "verb": "junkspawn", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.entities.2": null } } },
 				{ "name": "边值=账本值：标量数组合法入账（与属性值同一形状契约）", "action": { "verb": "edgearr", "params": {} }, "expect": { "ok": true, "lines": ["✓ 数组边：你系了一条带标记的边。（你.标记.那件东西: null → 甲）"] } },
 				{ "name": "对象形状不是账本值：提交翼拒绝（宽读契约的边界）", "action": { "verb": "edgeobj", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应" } }
 			]
