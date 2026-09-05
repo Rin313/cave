@@ -40,7 +40,7 @@ const nameOf = (q: Q, id: string): string => entity(q.world, id)?.name ?? id;
 function summarizeYume(input: { world: World; player: string; steps: Step[] }): string {
 	const { world, player, steps } = input;
 	const me = entity(world, player);
-	const cur = me?.props["in"] as string | null;
+	const cur = (me?.props["in"] as string | undefined) ?? null;
 	const lines = [`你在${entity(world, cur ?? "")?.name ?? "一片空白"}。`];
 	const around = world.entities.filter((e) => e.id !== player && e.props.space !== true && e.props["in"] === cur);
 	if (around.length) lines.push(`附近有：${around.map((e) => e.name).join("、")}。`);
@@ -65,7 +65,7 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 /** 状态视图派生纹理：清醒态、所在、出口、随身效果清单。 */
 function digestExtraYume(world: World, player: string): Record<string, ViewValue> {
 	const me = entity(world, player);
-	const cur = me?.props["in"] as string | null;
+	const cur = (me?.props["in"] as string | undefined) ?? null;
 	return {
 		awake: me?.props.awake !== false,
 		here: cur ? (entity(world, cur)?.name ?? cur) : null,

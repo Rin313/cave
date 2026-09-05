@@ -1,4 +1,4 @@
-import type { Entity, GameDef, PropDef, PropValue, Q, RelValue } from "../core/sim.ts";
+import type { Entity, GameDef, LedgerValue, PropDef, PropValue, Q } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
@@ -9,14 +9,8 @@ const num = (v: unknown): number => Number(v ?? 0);
  *  越权写钟（q.world.time）同样被拦。
  *  审查者（不变式）同权隔离：world 与 ctx.changes 是冻结读态/冻结记录，
  *  崩溃在提交边界兑为墙否决（invariant.crash：先回滚 S0 后拒绝）。
- *  良序游戏永不过墙边界，探测不到回归——本夹具是唯一断言墙契约的仪器。
  *  干净对照步的职责不止「无误伤」：若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），
- *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」。
- *  声明驱动的渲染/投影（字面值不冒充指称）在 tag 场景钉住。
- *  级联删边的入账（弱引用的消散可说——变更流是后态的完整 diff）在 sever 场景钉住。
- *  法则代码失灵的门内代谢（rule.crash 链终止 / system.crash 不连坐——世界跛行而非冻结或分叉）在 boom / detonate 场景钉住；
- *  投影缺陷不产世界事件（apply 原子回滚后重抛——凡不可说者不发生）在 blindfold 场景钉住；
- *  参照域契约（门权威 = grounding ∩ 账本：谎报的 id 不可指名且与幻觉 id 同文案）在 beckon/veil 场景钉住。 */
+ *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -123,17 +117,29 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "tag.ok", judge: (q) => grant([D.set(q.player, "note", "thing"), D.set(q.player, "ref", "thing")], "你写下了标记。") }],
 		}),
-		blank: defineVerb({
-			label: "置空引用",
-			description: "墙契约：id 引用写空串——无哨兵惯例（「无引用」由 null/缺席表达），integrity 拒绝。",
-			schema: Type.Object({}),
-			rules: [{ id: "blank.leak", judge: (q) => grant([D.set(q.player, "ref", "")], "你写下了一段空白。") }],
-		}),
 		junkspawn: defineVerb({
 			label: "夹带生灭",
 			description: "墙契约：spawn 带实体形状外的顶层键——形状封闭拒绝（公理一「此外无物」）。",
 			schema: Type.Object({}),
 			rules: [{ id: "junkspawn.leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
+		}),
+		nullspawn: defineVerb({
+			label: "空壳生灭",
+			description: "墙契约：spawn 的属性含 null——账本值不含 null（缺席是键不在场），提交翼拒绝。",
+			schema: Type.Object({}),
+			rules: [{ id: "nullspawn.leak", judge: () => grant([D.spawn({ id: "hollow", name: "空壳", props: { hp: null } } as unknown as Entity)], "你召唤了空壳。") }],
+		}),
+		clear: defineVerb({
+			label: "抹除",
+			description: "缺席契约：set null 即清（删键）——账本不存 null，缺席读为 null。",
+			schema: Type.Object({}),
+			rules: [{ id: "clear.ok", judge: (q) => grant([D.set(q.player, "note", null), D.set(q.player, "ref", null)], "你抹去了字迹。") }],
+		}),
+		blank: defineVerb({
+			label: "置空引用",
+			description: "墙契约：id 引用写空串——无哨兵惯例（「无引用」由缺席表达，清除写 null 即删键），integrity 拒绝。",
+			schema: Type.Object({}),
+			rules: [{ id: "blank.leak", judge: (q) => grant([D.set(q.player, "ref", "")], "你写下了一段空白。") }],
 		}),
 		edgearr: defineVerb({
 			label: "数组边",
@@ -145,7 +151,7 @@ export const walltest: GameDef = {
 			label: "对象边",
 			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（边值与属性值同一账本形状）。",
 			schema: Type.Object({}),
-			rules: [{ id: "edgeobj.leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as RelValue)], "你夹带了。") }],
+			rules: [{ id: "edgeobj.leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as LedgerValue)], "你夹带了。") }],
 		}),
 		bond: defineVerb({
 			label: "缔结",

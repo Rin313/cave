@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, fmtChange, propGet, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
-import type { Action, GameDef, PropValue, Q, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
+import type { Action, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { GAMES, getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { walltest } from "./walltest.ts";
@@ -64,12 +64,25 @@ interface ScenarioReport {
 
 /** 场景文件为手写 JSON：参数原样传入，动词/schema 错写触发 ProtocolViolation（内核前置条件违约） */
 function asAction(a: ScenarioAction): Action {
-	return { verb: a.verb, params: a.params as Record<string, PropValue> };
+	return { verb: a.verb, params: a.params as Record<string, Scalar> };
 }
 
 /** 刻步的可说文本（工具显示用）：成功刻 = 事实串联，失败刻 = 拒绝的世界腔 */
 function tickText(def: GameDef, s: TickStep): string {
 	return s.ok ? (s.facts?.join(" ") ?? "") : renderDenial(def, s.denial);
+}
+
+/** 结构等值：对象按键集递归、数组按位——账本形状探针（如 $world.entities.0.props 的精确键集断言）所需；
+ *  标量路径行为与 === 一致。 */
+function deepEq(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => deepEq(v, b[i]));
+	if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
+		const ka = Object.keys(a);
+		const kb = Object.keys(b);
+		return ka.length === kb.length && ka.every((k) => deepEq((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+	}
+	return false;
 }
 
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
@@ -88,7 +101,7 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 			const e = sim.world.entities.find((x) => x.id === id);
 			actual = e ? (propGet(e, rest.join(".")) ?? null) : null;
 		}
-		if (actual !== expected) {
+		if (!deepEq(actual, expected)) {
 			failures.push(`${path}: expected ${JSON.stringify(expected)} got ${JSON.stringify(actual)}`);
 		}
 	}
@@ -281,11 +294,9 @@ async function cmdVerify(): Promise<void> {
 	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
-/** 标量参数解析：true/false/null/数字/字符串（实体参数不走这里）。 */
-function parseScalar(s: string): PropValue {
+function parseScalar(s: string): Scalar {
 	if (s === "true") return true;
 	if (s === "false") return false;
-	if (s === "null") return null;
 	if (s.trim() !== "" && !Number.isNaN(Number(s))) return Number(s);
 	return s;
 }
@@ -310,7 +321,7 @@ function parseActionToken(token: string, sim: Simulation): Action {
 		throw new Error(`动词「${verbName}」最多接受 ${paramOrder.length} 个参数（${paramOrder.join(" ")}），得到 ${rest.length} 个`);
 	}
 	const entityParams = verb.entityParams ?? [];
-	const params: Record<string, PropValue> = {};
+	const params: Record<string, Scalar> = {};
 	rest.forEach((raw, i) => {
 		const p = paramOrder[i];
 		if (p === undefined) return;
@@ -434,7 +445,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			skipped.push({ verb: verbName, params: required });
 			continue;
 		}
-		const generate = (idx: number, acc: Record<string, PropValue>) => {
+		const generate = (idx: number, acc: Record<string, Scalar>) => {
 			if (truncated) return;
 			if (idx === entityParams.length) {
 				probeAction({ verb: verbName, params: { ...acc } });

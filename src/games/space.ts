@@ -36,7 +36,7 @@ function chainTop(
 	const start = entity(world, from);
 	if (!start) return { ok: false, reason: msgs.reachNotHere };
 	if (start.props.space === true) return { ok: true, top: from };
-	let cur = start.props["in"] as string | null;
+	let cur = (start.props["in"] as string | undefined) ?? null;
 	const seen = new Set<string>([from]);
 	while (cur != null) {
 		if (seen.has(cur)) return { ok: false, reason: msgs.reachCycle };
@@ -48,7 +48,7 @@ function chainTop(
 		if (parent.props.openable === true && parent.props.open !== true && !opts.containerAccess?.(world, parent, from)) {
 			return { ok: false, reason: msgs.reachClosed(parent.name) };
 		}
-		cur = parent.props["in"] as string | null;
+		cur = (parent.props["in"] as string | undefined) ?? null;
 	}
 	return { ok: true, top: null };
 }
@@ -72,14 +72,14 @@ export function enclosingSpace(world: World, id: string): string | null {
 	const start = entity(world, id);
 	if (!start) return null;
 	if (start.props.space === true) return id;
-	let cur = start.props["in"] as string | null;
+	let cur = (start.props["in"] as string | undefined) ?? null;
 	const seen = new Set<string>([id]);
 	while (cur != null && !seen.has(cur)) {
 		seen.add(cur);
 		const parent = entity(world, cur);
 		if (!parent) return null;
 		if (parent.props.space === true) return cur;
-		cur = parent.props["in"] as string | null;
+		cur = (parent.props["in"] as string | undefined) ?? null;
 	}
 	return null;
 }
@@ -95,7 +95,7 @@ export function hostOf(world: World, anchor: string, opts: SpaceOpts = {}): stri
 		const e = entity(world, cur);
 		if (!e) break;
 		if (e.props[key] === true) return cur;
-		cur = (e.props["in"] as string | null) ?? null;
+		cur = (e.props["in"] as string | undefined) ?? null;
 	}
 	return anchor;
 }

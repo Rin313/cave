@@ -2,15 +2,17 @@ import { Compile } from "typebox/compile";
 import { Type, type Static, type TObject, type TString } from "typebox";
 import { deepFreeze, roll as rollDice } from "./util.ts";
 
-/** 标量：账本值的原子形态（NaN/Infinity 非标量）。 */
-export type Scalar = string | number | boolean | null;
+/** 存储标量：账本值的原子形态（null 不是值——缺席的唯一形态是键不在场；NaN/Infinity 非标量）。 */
+export type Scalar = string | number | boolean;
 
-/** 账本值：标量或标量数组——变更行做单行渲染，对象形状会退化为 [object Object]，由硬墙拒绝。
+/** 账本值：标量或标量数组。变更行做单行渲染：对象形状退化为
+ *  [object Object]、数组中的 null 洞既非缺席也非值，皆由硬墙拒绝。
  *  结构化状态放实体与平键；呈现投影的形态自由走 ViewValue。 */
-export type PropValue = Scalar | Scalar[];
+export type LedgerValue = Scalar | Scalar[];
 
-/** 非空边值：null 只作为 relSet 的删边信号存在，不入账。 */
-export type RelValue = Exclude<PropValue, null>;
+/** 值语言：账本值 ∪ null。null 是缺席的记号，永不入存储——只出现在读数（propGet/relVal）、
+ *  清除写入（set/relSet 的 value: null）与变更记录（prev/next: null）。 */
+export type PropValue = LedgerValue | null;
 
 /** 视图载荷：形态自由的 JSON 值，仅供呈现——不进账本、不进变更线性化。用户：digestExtra。 */
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
@@ -18,7 +20,7 @@ export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: s
 export interface Entity {
 	id: string;
 	name: string;
-	props: Record<string, PropValue>;
+	props: Record<string, LedgerValue>;
 }
 
 /** 关系边：社会/叙事状态的原子原语。存储边永不持 null——「无边」由边表缺席表达（relVal 以 null 回答） */
@@ -26,7 +28,7 @@ export interface Rel {
 	from: string;
 	to: string;
 	type: string;
-	value: RelValue;
+	value: LedgerValue;
 }
 
 export interface World {
@@ -36,11 +38,12 @@ export interface World {
 }
 
 /** 变更原语：全为绝对写（后态自含，不做相对增减）——变更记录与回滚都按绝对值对账。只由规则/系统产出，经硬墙提交。
- *  relSet 值 null 即删边；despawn 级联清理关系边且逐条入账（rel Change，next null——弱引用随主消散，消散可说），
- *  id 型属性引用不清扫——悬空由完整性硬墙回滚（强引用挡 despawn，盘点原语见 refsTo）。 */
+ *  set 值 null 即清（删键）、relSet 值 null 即删边
+ *  despawn 级联清理关系边且逐条入账（rel Change，next null——弱引用随主消散，消散可说），
+ *  id 型属性引用不清扫——悬空由完整性硬墙回滚（强引用挡 despawn）。 */
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
-	| { op: "relSet"; from: string; to: string; type: string; value: RelValue | null }
+	| { op: "relSet"; from: string; to: string; type: string; value: LedgerValue | null }
 	| { op: "rename"; entity: string; value: string }
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
@@ -57,7 +60,8 @@ export type Change =
 
 export interface Action {
 	verb: string;
-	params: Record<string, PropValue>;
+	/** 参数恒为存储标量（schema 门）：参数不是值语言，缺席即缺参。 */
+	params: Record<string, Scalar>;
 }
 
 /** core 产出的用户可见文案：由游戏必填注入，core 不内嵌文案、不在文案里解析实体名（指称由规则在自家理由里解决）；
@@ -113,7 +117,7 @@ export interface Q {
 	/** def.playerId 的现值。语义主语与视角的推导（无主语动词缺省、附身经空间构件 hostOf）是 games 层职责。 */
 	readonly player: string;
 	readonly time: number;
-	readonly params: Record<string, PropValue>;
+	readonly params: Record<string, Scalar>;
 	/** 确定性骰子（World 纯函数，apply/存档恢复一致）。key 由引擎以出处限定——命运地址 = time#src#key：
 	 *  跨法则/系统重名不共享命运。 */
 	roll(key: string, sides: number): number;
@@ -153,7 +157,7 @@ export function deny(law: string, o: { reason?: string } = {}): Verdict {
 
 export const D = {
 	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
-	relSet: (from: string, to: string, type: string, value: RelValue | null): Delta => ({ op: "relSet", from, to, type, value }),
+	relSet: (from: string, to: string, type: string, value: LedgerValue | null): Delta => ({ op: "relSet", from, to, type, value }),
 	rename: (entity: string, value: string): Delta => ({ op: "rename", entity, value }),
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
@@ -256,19 +260,18 @@ export interface Invariant {
 	check: (world: World, ctx: InvariantCtx) => string | null;
 }
 
-/** 标量判定：NaN/Infinity 非标量。 */
-function isScalarValue(v: unknown): boolean {
-	return v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
+/** 存储标量判定：null 不是值（缺席的唯一形态是键不在场）；NaN/Infinity 非标量。 */
+function isScalarValue(v: unknown): v is Scalar {
+	return typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 账本值形状的运行时判定：PropValue 类型挡不住 as 通道（存档恢复、场景 JSON、probe），
- *  形状在提交翼（commit）与 integrity 两道边界同拒。 */
-function isLedgerValue(v: unknown): boolean {
+/** 账本值形状的运行时判定：类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状不含 null */
+function isLedgerValue(v: unknown): v is LedgerValue {
 	return isScalarValue(v) || (Array.isArray(v) && v.every(isScalarValue));
 }
 
 /** core 默认硬墙：引用完整性、注册表类型契约与词汇闭合（属性键 ⊆ 注册表）。世界全域扫描——
- *  spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug（悬空引用、类型错写、未声明词汇）。 */
+ *  spawn 整包与 t=0 构造期自动覆盖，检测规则把世界改坏的 bug */
 export function integrityInvariant(): Invariant {
 	const got = (v: PropValue): string => {
 		if (v === null) return "null";
@@ -309,12 +312,12 @@ export function integrityInvariant(): Invariant {
 				}
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
-					if (v === null || v === undefined) continue;
-					// any 豁免标量类型检查，不豁免账本值形状
-					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (scalar or scalar array)`;
+					if (v === undefined) continue;
+					// any 豁免标量类型检查，不豁免账本值形状；null 不是值（缺席是键不在场）
+					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (non-null scalar or scalar array; absence is a missing key)`;
 					if (pd.type === "any") continue;
 					if (pd.type === "id") {
-						// 「无引用」由 null/缺席表达（无哨兵空串）
+						// 「无引用」由缺席表达（清除写 null 即删键）
 						for (const ref of Array.isArray(v) ? v : [v]) {
 							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
 							if (!ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
@@ -341,7 +344,7 @@ export function integrityInvariant(): Invariant {
 	};
 }
 
-/** 从属性注册表计算内部属性集（不进序列化/变更线性化）。 */
+/** 从属性注册表计算内部属性集。 */
 export function internalPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
 	for (const [k, p] of Object.entries(def.props ?? {})) if (p.internal) s.add(k);
@@ -349,7 +352,7 @@ export function internalPropsOf(def: GameDef): Set<string> {
 }
 
 /** 实体视图卡（状态视图与新见段共用的唯一形状）：id + 名字 + 注册表过滤后的属性包。 */
-export function viewCard(def: GameDef, e: Entity): { id: string; name: string; props: Record<string, PropValue> } {
+export function viewCard(def: GameDef, e: Entity): { id: string; name: string; props: Record<string, LedgerValue> } {
 	const internal = internalPropsOf(def);
 	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))) };
 }
@@ -358,7 +361,7 @@ export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
-/** 一次提交边界两侧的可见实体集快照（edges 为边感知快照）。裁决时取定，提交后不重算——历史渲染只读记录。 */
+/** 一次提交边界两侧的可见实体集快照（edges 为边感知快照）。裁决时取定，提交后不重算。 */
 export interface FieldSpan {
 	before: string[];
 	after: string[];
@@ -556,7 +559,7 @@ export function propGet(e: Entity, prop: string): PropValue {
 	return e.props[prop] ?? null;
 }
 
-export function relVal(world: World, from: string, to: string, type: string): RelValue | null {
+export function relVal(world: World, from: string, to: string, type: string): LedgerValue | null {
 	return world.relations?.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
@@ -691,7 +694,7 @@ export class Simulation {
 		return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
-	private query(world: World, params: Record<string, PropValue>, src: string): Q {
+	private query(world: World, params: Record<string, Scalar>, src: string): Q {
 		return {
 			world,
 			player: this.player,
@@ -912,7 +915,7 @@ export class Simulation {
 		const changes: Change[] = [];
 		// 边表惰性入账；一经创建，本提交内保持同一数组引用
 		const rels = (): Rel[] => (this.world.relations ??= []);
-		const upsertRel = (from: string, to: string, type: string, value: RelValue) => {
+		const upsertRel = (from: string, to: string, type: string, value: LedgerValue) => {
 			const rs = rels();
 			const hit = rs.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
@@ -923,7 +926,7 @@ export class Simulation {
 		for (const d of deltas) {
 			if (d.op === "spawn") {
 				if (entity(this.world, d.entity.id)) return refuse(`spawn "${d.entity.id}": entity already exists`);
-				if (!Object.values(d.entity.props).every(isLedgerValue)) return refuse(`spawn "${d.entity.id}": props contain a non-ledger value (scalar or scalar array)`);
+				if (!Object.values(d.entity.props).every(isLedgerValue)) return refuse(`spawn "${d.entity.id}": props contain a non-ledger value (non-null scalar or scalar array; absence is a missing key)`);
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
 				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name });
 				continue;
@@ -954,7 +957,7 @@ export class Simulation {
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (prev === d.value) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
-				if (!isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
+				if (d.value !== null && !isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
 				if (d.value === null) {
 					// 能走到此处则边必已存在（prev !== null）；原地删——边表是本提交共享的数组，不可整体替换
 					const rs = rels();
@@ -978,10 +981,11 @@ export class Simulation {
 			}
 			const e = entity(this.world, d.entity);
 			if (!e) return refuse(`set "${d.entity}.${d.prop}": target entity missing`);
-			if (!isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (scalar or scalar array)`);
+			if (d.value !== null && !isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (non-null scalar or scalar array)`);
 			const prev = e.props[d.prop] ?? null;
 			if (prev === d.value) continue;
-			e.props[d.prop] = d.value;
+			if (d.value === null) delete e.props[d.prop];
+			else e.props[d.prop] = d.value;
 			changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value });
 		}
 		return { changes };
