@@ -2,9 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, fmtChange, propGet, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
 import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
-import { GAMES } from "../games/registry.ts";
+import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
-import { walltest } from "./walltest.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 // —— 场景运行器（契约锁） ——
@@ -174,18 +173,10 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	return { name: scenario.name, passed: reports.filter((r) => r.pass).length, total: reports.length, steps: reports };
 }
 
-const FIXTURES: Record<string, GameDef> = { [walltest.id]: walltest };
-
-function resolveGame(id: string): GameDef {
-	const hit = GAMES[id] ?? FIXTURES[id];
-	if (!hit) throw new Error(`未知游戏：${id}（可用：${Object.keys(GAMES).concat(Object.keys(FIXTURES)).join("、")}）`);
-	return hit;
-}
-
 function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
 	// dev.wait 挂 internal 研究动词：tick 步经同一裁决边界落钟
-	const def = withDevWait(resolveGame(file.game));
+	const def = withDevWait(getGame(file.game));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	return {
 		file,
@@ -301,7 +292,7 @@ function tickText(def: GameDef, s: TickStep): string {
 }
 
 async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
-	const def = resolveGame(gameId);
+	const def = getGame(gameId);
 	const sim = new Simulation(withDevWait(def));
 	const steps: Step[] = [];
 	for (const token of tokens) {
@@ -475,7 +466,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
-	const def = resolveGame(gameId);
+	const def = getGame(gameId);
 	const { rows, grants, skipped, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");

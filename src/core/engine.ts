@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type MemoryTurn, type TurnRecord } from "./context.ts";
+import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type ChronicleEntry, type MemoryTurn } from "./context.ts";
 import { Simulation, entity, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
 
 export interface EngineOptions {
@@ -86,8 +86,8 @@ export class Engine {
 	private session: SessionHandle;
 	private readonly sessionManager: SessionManager;
 	private readonly memory: MemoryTurn[];
-	/** 持久化的回合条目（intent + steps 原样），窗口裁剪至 memoryLimit；近况投影见 context.ts。 */
-	private readonly records: TurnRecord[];
+	/** 持久化的地籍条目（意志回合 + 仪器时间），窗口裁剪至 memoryLimit；近况投影见 context.ts。 */
+	private readonly records: ChronicleEntry[];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
 	/** 本回合事件流（act 工具经 channel 直通回写，按构造交错）。 */
@@ -99,7 +99,7 @@ export class Engine {
 		session: SessionHandle,
 		sessionManager: SessionManager,
 		memory: MemoryTurn[],
-		records: TurnRecord[],
+		records: ChronicleEntry[],
 		run: RunState,
 		channel: TurnChannel,
 	) {
@@ -254,15 +254,28 @@ export class Engine {
 		};
 	}
 
-	/** 回合定稿：条目持久化为会话 custom 条目（不入 LLM 上下文），随后更新近况窗口。
+	/** 回合定稿：意志条目持久化为会话 custom 条目（不入 LLM 上下文），随后更新近况窗口。
 	 *  投影缓存永不持久化——重启由 loadRecords + projectWindow 重建。 */
 	private recordTurn(intent: string, steps: Step[]): void {
-		const record: TurnRecord = { time: this.sim.world.time, intent, steps };
+		const record: ChronicleEntry = { kind: "turn", time: this.sim.world.time, intent, steps };
 		this.records.push(record);
 		try {
 			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
 		} catch {
 			// 持久化失败不阻断回合：内存窗口仍有效
+		}
+		this.updateMemory();
+	}
+
+	/** 非回合后果源的定稿写点：elapsed 条目入地籍（不计回合）。名字闭合要求窗口内被引用名字的失效事件
+	 *  与被引用行同在地籍 */
+	recordElapsed(steps: Step[]): void {
+		const record: ChronicleEntry = { kind: "elapsed", time: this.sim.world.time, steps };
+		this.records.push(record);
+		try {
+			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
+		} catch {
+			// 持久化失败不阻断：内存窗口仍有效
 		}
 		this.updateMemory();
 	}

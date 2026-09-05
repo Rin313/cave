@@ -211,6 +211,8 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 			if (line.startsWith("@wait")) {
 				const n = Number(line.split(/\s+/)[1] ?? 1);
 				const res = sim.apply(devWait(n));
+				// 零刻授予无后果，无可说者不入地籍；非零刻的生灭后果必须入地籍
+				if (res.step.ticks > 0) engine.recordElapsed([res.step, ...res.elapsed]);
 				const results = res.elapsed;
 				appendTranscript(dir, { phase: "wait", ticks: n, step: res.step, events: results, usage: [] });
 				const lines = spineLines(sim, results);
@@ -246,6 +248,8 @@ async function cmdWait(runId: string, n: number, gameId: string | undefined): Pr
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
 		const res = sim.apply(devWait(n));
+		// 零刻授予无后果，无可说者不入地籍；非零刻的生灭后果必须入地籍
+		if (res.step.ticks > 0) engine.recordElapsed([res.step, ...res.elapsed]);
 		const results = res.elapsed;
 		const { narration: scene, warnings, usage } = await engine.narrate(
 			"时间流逝。请用文学笔触描写当前场景发生的变化。",
@@ -383,7 +387,7 @@ async function main() {
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
-render/wait 是研究仪器操作（不计回合、不进近况）：render 调用场景呈现服务；wait 以合成研究动词过裁决落钟（tools/dev.ts）。
+render/wait 是研究仪器操作（不计回合）：render 调用场景呈现服务；wait 以合成研究动词过裁决落钟（tools/dev.ts），以 elapsed 条目入地籍——近况的名字闭合要求时间流逝的生灭可说（零刻授予除外）。
 report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
 --game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
