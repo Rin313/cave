@@ -456,7 +456,7 @@ function refProp(sim: Simulation, prop: string): boolean {
 }
 
 /** 变更线性化（core 只做符号连接，name/label 取自游戏声明，缺 label 回退原 prop 名）。
- *  指称解析走 renderValue：关系端点是引用，关系值与未声明属性值是字面；窗口内 despawn 的实体以 departed 兜底。 */
+ *  指称解析走 renderValue：关系端点是引用，关系值、关系类型与未声明属性值是字面（键即词——开口 token 层无卡，世界腔由表达层承担）；窗口内 despawn 的实体以 departed 兜底。 */
 export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
 	if (c.kind === "spawn") return `+ ${c.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
@@ -489,7 +489,7 @@ function referentsOf(sim: Simulation, c: Change): string[] {
 	];
 }
 
-/** 事件流的规范单行渲染（符号承担结构，语言词全部来自 messages/label/规则文案）。
+/** 事件流的规范单行渲染（符号承担结构，语言词全部来自 messages/label/规则文案；开口 token 层按字面键即词）。
  *  消费者：act 结果视图、近况投影（compact）、loop 控制台、回退摘要。
  *  契约：变更行按该步的可见快照投影——任一指称（主语/端点/引用值）不在快照内整行沉默；理由与 Fact 不过投影；
  *  internal 变更恒滤（覆写者仍可从 steps 原样读取）。刻桶按 at 归并并归属其前导动作的授予区间
