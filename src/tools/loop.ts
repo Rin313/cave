@@ -21,36 +21,33 @@ interface RunMeta {
 
 const RUNS_ROOT = "runs";
 
-function runDir(game: string, runId: string): string {
-	return join(RUNS_ROOT, game, runId);
+const runDir = (game: string, runId: string): string => join(RUNS_ROOT, game, runId);
+const metaPath = (dir: string): string => join(dir, "meta.json");
+const statePath = (dir: string): string => join(dir, "state.json");
+const transcriptPath = (dir: string): string => join(dir, "transcript.jsonl");
+
+function readJson<T>(path: string): T {
+	return JSON.parse(readFileSync(path, "utf8")) as T;
 }
 
-function metaPath(dir: string): string {
-	return join(dir, "meta.json");
-}
-
-function statePath(dir: string): string {
-	return join(dir, "state.json");
-}
-
-function transcriptPath(dir: string): string {
-	return join(dir, "transcript.jsonl");
+function writeJson(path: string, value: unknown): void {
+	writeFileSync(path, JSON.stringify(value, null, 2), "utf8");
 }
 
 function loadMeta(dir: string): RunMeta {
-	return JSON.parse(readFileSync(metaPath(dir), "utf8")) as RunMeta;
+	return readJson(metaPath(dir));
 }
 
 function saveMeta(dir: string, meta: RunMeta): void {
-	writeFileSync(metaPath(dir), JSON.stringify(meta, null, 2), "utf8");
+	writeJson(metaPath(dir), meta);
 }
 
 function loadState(dir: string): World {
-	return JSON.parse(readFileSync(statePath(dir), "utf8")) as World;
+	return readJson(statePath(dir));
 }
 
 function saveState(dir: string, sim: Simulation): void {
-	writeFileSync(statePath(dir), JSON.stringify(sim.snapshot(), null, 2), "utf8");
+	writeJson(statePath(dir), sim.snapshot());
 }
 
 function appendTranscript(dir: string, entry: unknown): void {
@@ -310,7 +307,7 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 			if (!existsSync(tp)) continue;
 			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, waits: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
 			try {
-				const meta = JSON.parse(readFileSync(metaPath(dir), "utf8")) as Partial<RunMeta>;
+				const meta = readJson<Partial<RunMeta>>(metaPath(dir));
 				if (meta.provider !== undefined) row.provider = meta.provider;
 				if (meta.model !== undefined) row.model = meta.model;
 			} catch {

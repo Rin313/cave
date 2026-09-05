@@ -45,10 +45,6 @@ export function flagBool(a: ParsedArgs, name: string): boolean {
 	return a.flags.get(name) !== undefined;
 }
 
-export function out(obj: unknown): void {
-	process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
-}
-
 export function runMain(main: () => Promise<void>): void {
 	main().catch((err) => {
 		console.error(err);
