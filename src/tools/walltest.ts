@@ -1,5 +1,5 @@
 import type { Entity, GameDef, PropDef, PropValue, Q, RelValue } from "../core/sim.ts";
-import { D, defineVerb, entity, grant } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
 import { Type } from "typebox";
 
 const num = (v: unknown): number => Number(v ?? 0);
@@ -13,7 +13,9 @@ const num = (v: unknown): number => Number(v ?? 0);
  *  干净对照步的职责不止「无误伤」：若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），
  *  提交会在冻结账本上抛错，越权步之后的干净动作/干净刻步即红——对照步区分「冻结副本」与「冻结活账本」。
  *  声明驱动的渲染/投影（字面值不冒充指称）在 tag 场景钉住。
- *  级联删边的入账（弱引用的消散可说——变更流是后态的完整 diff）在 sever 场景钉住。 */
+ *  级联删边的入账（弱引用的消散可说——变更流是后态的完整 diff）在 sever 场景钉住。
+ *  法则代码失灵的门内代谢（rule.crash 链终止 / system.crash 不连坐——世界跛行而非冻结或分叉）在 boom / detonate 场景钉住；
+ *  投影缺陷不产世界事件（apply 原子回滚后重抛——凡不可说者不发生）在 blindfold 场景钉住。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -21,6 +23,9 @@ const PROPS: Record<string, PropDef> = {
 	vault: { type: "boolean", label: "封印" },
 	sneak: { type: "number", label: "潜标" },
 	armed: { type: "boolean", internal: true },
+	// 法则失灵与投影缺陷夹具的开关属性（内部 plumbing，同 armed）
+	crash: { type: "boolean", internal: true },
+	gaze: { type: "boolean", internal: true },
 	// 指称解析契约的字面/引用对照：note 是字面字符串（与实体 id 碰撞也不得解析），ref 是声明引用
 	note: { type: "string", label: "便签" },
 	ref: { type: "id", label: "指向" },
@@ -152,6 +157,28 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "sever.ok", judge: () => grant([D.despawn("thing")], "你斩断了那件东西。") }],
 		}),
+		boom: defineVerb({
+			label: "崩坏",
+			description: "法则失灵夹具：规则中途抛出——门的全面性代谢为必要性否决（rule.crash，链终止，时价照耗）。",
+			schema: Type.Object({}),
+			cost: 2,
+			rules: [
+				{ id: "boom.first", judge: () => { throw new Error("法则在半空碎裂"); } },
+				{ id: "boom.fallback", judge: () => deny("boom.fallback", { reason: "兜底法则不应被触及——崩溃链即终止。" }) },
+			],
+		}),
+		detonate: defineVerb({
+			label: "引爆",
+			description: "研究动词：武装 boom.tick 的系统失灵（未引爆时该系统沉默）。",
+			schema: Type.Object({}),
+			rules: [{ id: "detonate.ok", judge: (q) => grant([D.set(q.player, "crash", true)], "系统失灵已布下。") }],
+		}),
+		blindfold: defineVerb({
+			label: "蒙眼",
+			description: "投影缺陷夹具：授予 gaze=true——提交后感知快照崩溃，apply 原子回滚后重抛。",
+			schema: Type.Object({}),
+			rules: [{ id: "blindfold.grant", judge: (q) => grant([D.set(q.player, "gaze", true)], "你蒙上了眼。") }],
+		}),
 	},
 	world: {
 		time: 0,
@@ -172,12 +199,26 @@ export const walltest: GameDef = {
 			},
 		},
 		{
+			// 蓄意失灵：引爆（detonate）后系统直接抛出——崩溃兑为失败刻步（system.crash），其余系统照跑，时刻照走
+			id: "boom.tick",
+			run: (q) => {
+				if (entity(q.world, q.player)?.props.crash !== true) return null;
+				throw new Error("系统在半空碎裂");
+			},
+		},
+		{
 			// 蓄意被拦：系统产出设置封印 → vault.sealed 否决——被拦刻步（TickStep ok:false）的唯一合法来源，
 			// walltest.json 的拦截行计时/静默刻聚合契约场景在此产生
 			id: "vault.tick",
 			run: (q) => ({ deltas: [D.set(q.player, "vault", true)] }),
 		},
 	],
+	/** 投影缺陷夹具：gaze=true 时感知快照崩溃——def 缺陷在 apply 边界原子回滚后重抛（凡不可说者不发生）。
+	 *  其余状态透明（全见），不改变任何既有场景的跨度与投影。 */
+	grounding: (world) => {
+		if (world.entities.some((e) => e.props.gaze === true)) throw new Error("感知在半空碎裂");
+		return world.entities.map((e) => e.id);
+	},
 	props: PROPS,
 	invariants: [{
 		// 墙契约的另一半：否决路径的原子回滚。回滚若把冻结引用留在账本上，此场景后的任何提交即抛——

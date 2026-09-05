@@ -391,7 +391,8 @@ export interface ActionStep {
 	action: Action;
 	/** 本动作授予的刻数（成功取规则 ticks 或动词 cost，失败取动词 cost）；apply 据此逐刻落钟。 */
 	ticks: number;
-	/** 否决来源：rule＝卫语句链或可见性门（全部未表态的引擎闭合为 law "action.unanswered"）；invariant＝硬墙拦截。 */
+	/** 否决来源：rule＝卫语句链或可见性门（全部未表态的引擎闭合为 law "action.unanswered"）；
+	 *  invariant＝必要性拦截（硬墙否决、授予形状违约、法则代码失灵 *.crash）。 */
 	deniedBy?: "rule" | "invariant";
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
@@ -415,7 +416,7 @@ export interface TickStep {
 	changes: Change[];
 	/** 本系统提交边界两侧的可见快照。 */
 	field: FieldSpan;
-	/** 刻步只会被不变式硬墙拦截（系统产出没有其他否决路径）。 */
+	/** 刻步只会被必要性通道拦截（硬墙否决或系统代码失灵 system.crash——门的全面性代谢）。 */
 	deniedBy?: "invariant";
 	denial?: Denial;
 	facts?: Fact[];
@@ -585,7 +586,7 @@ export function relAll(world: World, from: string, type?: string): Rel[] {
 }
 
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离：apply 裁决后再经硬墙提交）；跨度由 apply 在提交边界闭合。
- *  授予态 src 必填（后果的出处标识）；拒绝态 deniedBy/denial 必填（否决必有来源与世界腔）。 */
+ *  授予态 src 必填（后果的出处标识）；拒绝态 deniedBy/denial 必填（否决必有来源；世界腔理由除法则失灵外必有——*.crash 无世界腔，noResponse 兜底）。 */
 type RawResult =
 	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "src" | "deniedBy" | "denial">)
 	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">);
@@ -690,7 +691,14 @@ export class Simulation {
 		}
 		const q = this.query(world, action.params);
 		for (const r of verb.rules) {
-			const v = r.judge(q);
+			// 门的全面性：法则崩溃代谢为必要性否决——fail-closed，链即终止（不落池给后继规则），时价照耗。
+			// 法则失灵无世界腔（世界无法以法则的声音叙述法则的失灵），noResponse 兜底，debug 定位（probe 报 bug）
+			let v: Verdict | null;
+			try {
+				v = r.judge(q);
+			} catch (e) {
+				return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${r.id}: ${e instanceof Error ? e.message : String(e)}` }, ticks: cost };
+			}
 			if (!v) continue;
 			if (v.ok) {
 				// 刻数违约走不变式通道拒绝（probe 据此报 bug），尝试仍耗动词时价
@@ -771,9 +779,21 @@ export class Simulation {
 		return null;
 	}
 
+	/** 历史原子性：正常返回 ⇔ 步骤流与账本互证（step + 全部授予刻步完备）；异常逃逸 ⇒ 世界恢复调用前原状再抛。
+	 *  门内法则代码的崩溃不逃逸（adjudicateRaw / runSystems 代谢为必要性否决）；能逃逸的只有投影钩子与内核 bug——
+	 *  投影不产世界事件（def 缺陷，同 malformed schema），凡不可说者不发生：先回滚后重抛。 */
 	apply(action: Action): Resolution {
-		// s0 = 裁决读态，硬墙的回滚基线
 		const s0 = this.readState();
+		try {
+			return this.applyInner(action, s0);
+		} catch (e) {
+			this.restore(s0);
+			throw e;
+		}
+	}
+
+	private applyInner(action: Action, s0: World): Resolution {
+		// s0 = 裁决读态，硬墙的回滚基线
 		const at = s0.time;
 		const before = this.visibleIn(s0);
 		const edgesBefore = this.edgeField(s0, before);
@@ -799,7 +819,7 @@ export class Simulation {
 		return { step: { ...step, field }, elapsed };
 	}
 
-	/** 尝试行线性化：参数按 schema 声明序渲染（不随提案 JSON 键序漂移）；只有引用参数（entityParams）
+	/** 尝试行线性化：参数按 schema 声明序渲染；只有引用参数（entityParams）
 	 *  解析为名字，其余一律字面。名字在渲染时刻解析，与变更行/指称集消费同一解析链（renderValue）：
 	 *  域内引用取现值名（改名连续性）；域外引用不查在世名——活体名解析仅限已感知指称，
 	 *  否则尝试行成为隐藏实体的存在性 oracle；已公开离场名兜底，其余原样回显（可见性拒绝的参数必在域外——
@@ -839,11 +859,19 @@ export class Simulation {
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
 			const s0 = this.readState();
-			const res = sys.run(this.query(s0, {}));
-			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
-			// 每系统独立过墙；回滚即边界未跨越，after 即 before
+			// 快照先于运行：失败刻步与提交刻步携带同一形状的真实跨度
 			const before = this.visibleIn(s0);
 			const edgesBefore = this.edgeField(s0, before);
+			// 门的全面性：系统崩溃代谢为失败刻步——本系统产出作废，其余系统继续，时刻照走（确定性失灵是跛行不是冻结）
+			let res: ReturnType<SystemRule["run"]> = null;
+			try {
+				res = sys.run(this.query(s0, {}));
+			} catch (e) {
+				emit({ kind: "tick", at: this.world.time, ok: false, reason: messagesFor(this.def).defaultReason, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
+				continue;
+			}
+			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
+			// 每系统独立过墙；回滚即边界未跨越，after 即 before
 			const cc = this.commitChecked(s0, res.deltas, src);
 			const afterVis = cc.ok ? this.visible() : before;
 			const afterEdges = cc.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
@@ -886,9 +914,14 @@ export class Simulation {
 		return JSON.stringify(view);
 	}
 
-	/** 回退摘要，缺省 = 回合骨架投影（空步回落 noResponse）。 */
+	/** 回退摘要，缺省 = 回合骨架投影（空步回落 noResponse）。声音钩子崩溃回落骨架投影——
+	 *  崩溃点在回合定稿（后果已提交、地籍将写），呈现缺陷不得丢弃已发生的账目。 */
 	summarize(steps: Step[]): string {
-		if (this.def.summarize) return this.def.summarize({ world: this.readState(), player: this.player, steps: deepFreeze(steps) });
+		if (this.def.summarize) {
+			try {
+				return this.def.summarize({ world: this.readState(), player: this.player, steps: deepFreeze(steps) });
+			} catch { /* def 缺陷：回落文档化的缺省形态 */ }
+		}
 		const lines = spineLines(this, steps);
 		return lines.length ? lines.join("\n") : messagesFor(this.def).noResponse;
 	}

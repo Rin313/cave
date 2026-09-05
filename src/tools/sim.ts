@@ -18,8 +18,10 @@ interface StepExpect {
 	state?: Record<string, unknown>;
 	/** 内核契约断言（结构性墙）：期望本步骤触发前置条件违约（未知动词/schema 不符）*/
 	protocol?: "action.unknown" | "action.schema";
-	/** 期望本步骤的刻步被硬墙拦截（不变式——系统产出的必要拦截），拦截即通过 */
+	/** 期望本步骤的刻步被必要性通道拦截（墙否决或法则失灵代谢），拦截即通过 */
 	tickDenied?: boolean;
+	/** 期望动作步的否决律（Denial.law）：否决来源的结构判据（rule.crash 与 action.unanswered 同文案，唯 law 可辨） */
+	law?: string;
 	/** 期望本步骤在裁决中抛错（结构墙拦截：越权写在冻结读态上即抛）；值为错误信息子串 */
 	throws?: string;
 	/** 回合骨架渲染的精确行集（spineLines 于本步骤的 [动作步, ...刻步]）：线级机械的契约锁（拦截行计时/静默刻聚合） */
@@ -97,6 +99,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		let threw: string | null = null;
 		const problems: string[] = [];
 		let stepSteps: Step[] | null = null; // 本步骤产生的 [动作步, ...刻步]（spineLines 渲染输入）
+		let stepLaw: string | null = null; // 动作步的否决律（expect.law 断言输入）
 		if (step.tick != null) {
 			try {
 				const res = sim.apply(devWait(step.tick));
@@ -135,7 +138,14 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 				stepSteps = [res.step, ...res.elapsed];
 				ok = res.step.ok;
 				reason = res.step.reason;
-				for (const t of res.elapsed) if (!t.ok) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+				stepLaw = res.step.denial?.law ?? null;
+				// tickDenied 在动作步上同样成立：法则失灵代谢（rule.crash）与墙否决都落在授予刻步上——时价照耗是契约的一部分
+				const deniedTicks = res.elapsed.filter((t) => !t.ok);
+				if (step.expect.tickDenied) {
+					if (deniedTicks.length === 0) problems.push("期望刻步被必要性通道拦截，未发生");
+				} else {
+					for (const t of deniedTicks) problems.push(`刻步被硬墙拦截: ${t.denial?.debug ?? t.reason}`);
+				}
 			} catch (e) {
 				// 前置条件违约是场景笔误，不得混同于世界拒绝；显式声明 expect.protocol / expect.throws 的步骤例外
 				ok = false;
@@ -163,6 +173,9 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		if (step.expect.reason && !reason.includes(step.expect.reason)) {
 			problems.push(`reason: 期望包含「${step.expect.reason}」，实际「${reason}」`);
 		}
+		if (step.expect.law !== undefined && stepLaw !== step.expect.law) {
+			problems.push(`law: expected ${step.expect.law} got ${stepLaw}`);
+		}
 		const stateCheck = step.expect.state ? checkState(sim, step.expect.state) : "ok";
 		if (stateCheck !== "ok") problems.push(`state: ${stateCheck}`);
 		const expectedLines = step.expect.lines;
@@ -176,7 +189,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
-			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.throws ? ` throws≈${step.expect.throws}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.lines ? ` lines=${JSON.stringify(step.expect.lines)}` : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
+			expected: `ok=${step.expect.ok ?? "-"}${step.expect.reason ? ` reason≈${step.expect.reason}` : ""}${step.expect.law ? ` law=${step.expect.law}` : ""}${step.expect.protocol ? ` protocol=${step.expect.protocol}` : ""}${step.expect.throws ? ` throws≈${step.expect.throws}` : ""}${step.expect.tickDenied ? " tickDenied" : ""}${step.expect.lines ? ` lines=${JSON.stringify(step.expect.lines)}` : ""}${step.expect.state ? ` state[${Object.entries(step.expect.state).map(([k, v]) => `${k}==${JSON.stringify(v)}`).join(" && ")}]` : ""}`,
 			actual: threw !== null ? `throws（${ok ? "命中" : "未命中"}）: "${threw}"` : `ok=${ok} reason="${reason}"`,
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
