@@ -46,9 +46,9 @@
 			]
 		},
 		{
-			"name": "账本形状：零边授予不得在账本外添形（公理一：凡后果必可说）",
+			"name": "账本形状：零边世界边表保持空表，零边授予不添形（公理一：凡后果必可说）",
 			"steps": [
-				{ "name": "无关系世界的授予提交后，relations 键仍缺席", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": null, "player.touched": 1 } } }
+				{ "name": "无关系世界的授予提交后，边表仍是空表（缺席不是边表的形态，空表即无边）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": [], "player.touched": 1 } } }
 			]
 		},
 		{
@@ -86,7 +86,7 @@
 		{
 			"name": "级联删边入账：despawn 的机械后果逐条入账——变更流是后态的完整 diff（公理一）",
 			"steps": [
-				{ "name": "先结一条带值的边（弱引用的建立，relations 惰性入账）", "action": { "verb": "bond", "params": {} }, "expect": { "ok": true, "lines": ["✓ 缔结：你与那件东西结下纽带。（你.标记.那件东西: null → 甲）"], "state": { "$world.relations.0.value": "甲" } } },
+				{ "name": "先结一条带值的边（弱引用的建立）", "action": { "verb": "bond", "params": {} }, "expect": { "ok": true, "lines": ["✓ 缔结：你与那件东西结下纽带。（你.标记.那件东西: null → 甲）"], "state": { "$world.relations.0.value": "甲" } } },
 				{ "name": "despawn 级联删边：despawn 记录在前、边消散紧随（边表序），离场名经 despawn 记录兜底渲染", "action": { "verb": "sever", "params": {} }, "expect": { "ok": true, "lines": ["✓ 断绝：你斩断了那件东西。（- 那件东西；你.标记.那件东西: 甲 → null）"], "state": { "$world.relations.0": null, "thing.id": null } } },
 				{ "name": "级联后账本健康：干净提交照常（探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1 } } }
 			]

@@ -203,6 +203,7 @@ export const walltest: GameDef = {
 			{ id: "player", name: "你", props: { hp: 10, touched: 0 } },
 			{ id: "thing", name: "那件东西", props: {} },
 		],
+		relations: [],
 	},
 	systems: [
 		{

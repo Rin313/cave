@@ -31,7 +31,7 @@ export interface Rel {
 export interface World {
 	time: number;
 	entities: Entity[];
-	relations?: Rel[];
+	relations: Rel[];
 }
 
 /** 变更原语：全为绝对写（后态自含），只由规则/系统产出、经硬墙提交。set null 即删键、relSet null 即删边；
@@ -43,13 +43,14 @@ export type Delta =
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-/** 提交产出的变更记录（后态完整 diff）：prop/rename 只留 prev/next，rel 携带完整端点；spawn/despawn 携带展示名——
- *  离场者名字只存在于记录（见 shownDepartedNames）。出处是提交级事实，记录在步 src 与 InvariantCtx.src。 */
+/** 提交产出的变更记录（后态完整 diff）：prop/rename 只留 prev/next，rel 携带完整端点，spawn 携带完整后态实体
+ *  （事件流自足于重放），despawn 携带展示名——离场者名字只存在于记录（见 shownDepartedNames）。
+ *  出处是提交级事实，记录在步 src 与 InvariantCtx.src。 */
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue }
 	| { kind: "rename"; entity: string; prev: string; next: string }
 	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue }
-	| { kind: "spawn"; entity: string; name: string }
+	| { kind: "spawn"; entity: Entity }
 	| { kind: "despawn"; entity: string; name: string };
 
 export interface Action {
@@ -269,7 +270,7 @@ export function integrityInvariant(): Invariant {
 		id: "integrity",
 		check: (world, ctx) => {
 			if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
-			if (world.relations != null && !Array.isArray(world.relations)) return "integrity: world.relations must be an array";
+			if (!Array.isArray(world.relations)) return "integrity: world.relations must be an array";
 			for (const k of Object.keys(world)) {
 				if (k !== "time" && k !== "entities" && k !== "relations") return `integrity: world.${k} is not part of the ledger shape`;
 			}
@@ -440,7 +441,7 @@ function refProp(sim: Simulation, prop: string): boolean {
 /** 变更线性化（core 只做符号连接，name/label 取自游戏声明）。
  *  指称解析走 renderValue：关系端点是引用，关系值、关系类型与未声明属性值一律字面；窗口内 despawn 的实体以 departed 兜底。 */
 export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
-	if (c.kind === "spawn") return `+ ${c.name}`;
+	if (c.kind === "spawn") return `+ ${c.entity.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
 	if (c.kind === "rename") return `~ ${c.prev} → ${c.next}`;
 	if (c.kind === "rel") {
@@ -463,7 +464,7 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 /** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。
  *  指称身份（ids）与名字解析无关（renderValue 对字符串元素恒记 id），不收离场底表。 */
 function referentsOf(sim: Simulation, c: Change): string[] {
-	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity];
+	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : c.kind === "spawn" ? [c.entity.id] : [c.entity];
 	const ref = refProp(sim, c.prop);
 	return [
 		...renderValue(sim, c.prev ?? null, ref).ids,
@@ -537,11 +538,7 @@ export function propGet(e: Entity, prop: string): PropValue {
 }
 
 export function relVal(world: World, from: string, to: string, type: string): LedgerValue | null {
-	return world.relations?.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
-}
-
-export function relAll(world: World, from: string, type?: string): Rel[] {
-	return (world.relations ?? []).filter((r) => r.from === from && (type === undefined || r.type === type));
+	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离）；跨度由 apply 在提交边界闭合。
@@ -603,7 +600,7 @@ export class Simulation {
 		const perceive = this.def.edgePerception?.(world, this.player);
 		if (!perceive) return undefined;
 		const out: string[] = [];
-		for (const r of world.relations ?? []) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(edgeKey(r));
+		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(edgeKey(r));
 		return out;
 	}
 
@@ -860,7 +857,7 @@ export class Simulation {
 		const vis = this.visibleIn(w);
 		const perceiveEdge = this.def.edgePerception?.(w, this.player);
 		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
-		const relations = (w.relations ?? []).filter((r) => vis.has(r.from) && vis.has(r.to) && (!perceiveEdge || perceiveEdge(r)));
+		const relations = w.relations.filter((r) => vis.has(r.from) && vis.has(r.to) && (!perceiveEdge || perceiveEdge(r)));
 		const view: Record<string, unknown> = { time: w.time, relations, entities };
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
 		if (Object.keys(extra).length) view.extra = extra;
@@ -882,8 +879,8 @@ export class Simulation {
 	 *  幂等跳过的唯一判据是目标状态已成立；set 同值以目标存在为前提——存在性拒绝在前，永不回落为跳过。 */
 	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
-		// 边表惰性入账；一经创建，本提交内保持同一数组引用
-		const rels = (): Rel[] => (this.world.relations ??= []);
+		// 边表全程同一数组引用（原地增删，不可整体替换）
+		const rels = (): Rel[] => this.world.relations;
 		const upsertRel = (from: string, to: string, type: string, value: LedgerValue) => {
 			const rs = rels();
 			const hit = rs.find((r) => r.from === from && r.to === to && r.type === type);
@@ -897,7 +894,8 @@ export class Simulation {
 				if (entity(this.world, d.entity.id)) return refuse(`spawn "${d.entity.id}": entity already exists`);
 				if (!Object.values(d.entity.props).every(isLedgerValue)) return refuse(`spawn "${d.entity.id}": props contain a non-ledger value (non-null scalar or scalar array; absence is a missing key)`);
 				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
-				changes.push({ kind: "spawn", entity: d.entity.id, name: d.entity.name });
+				// 记录自含独立克隆：不与活账本共享引用（后续变异不得改写已入账的记录）
+				changes.push({ kind: "spawn", entity: JSON.parse(JSON.stringify(d.entity)) as Entity });
 				continue;
 			}
 			if (d.op === "despawn") {
@@ -908,13 +906,11 @@ export class Simulation {
 				// 原地级联删边并逐条入账；逆序遍历 + unshift 保边表序（确定性），同提交内后续边写入共享同一数组
 				const existing = this.world.relations;
 				const dissolved: Rel[] = [];
-				if (existing) {
-					for (let j = existing.length - 1; j >= 0; j--) {
-						const r = existing[j]!;
-						if (r.from === d.entity || r.to === d.entity) {
-							dissolved.unshift(r);
-							existing.splice(j, 1);
-						}
+				for (let j = existing.length - 1; j >= 0; j--) {
+					const r = existing[j]!;
+					if (r.from === d.entity || r.to === d.entity) {
+						dissolved.unshift(r);
+						existing.splice(j, 1);
 					}
 				}
 				changes.push({ kind: "despawn", entity: d.entity, name: gone.name });

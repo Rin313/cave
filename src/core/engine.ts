@@ -252,10 +252,15 @@ export class Engine {
 	}
 
 	/** 直达回合：提案不经映射译码直接受理（研究仪器/作者代码）——同一裁决边界与硬墙，同一回合定稿写点。
-	 *  意志即提案者：intent 是提案者的声明，逐字入地籍与近况。无门闩——门闩封的是模型不是提案者。 */
+	 *  意志即提案者：intent 是提案者的声明，逐字入地籍与近况。无门闩——门闩封的是模型不是提案者。
+	 *  投影/内核缺陷抛出时，已裁决步照常入账（与世界互证），异常原样传给调用方。 */
 	directTurn(intent: string, actions: readonly Action[]): Step[] {
-		const steps = applyBatch(this.sim, actions);
-		this.recordTurn(intent, steps);
+		const steps: Step[] = [];
+		try {
+			applyBatch(this.sim, actions, steps);
+		} finally {
+			if (steps.length) this.recordTurn(intent, steps);
+		}
 		return steps;
 	}
 
@@ -369,16 +374,15 @@ function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string)
 }
 
 /** 提案批次内核（act 与直达回合共用同一执行路径）：静态形态批次预检在首个裁决前抛出
- *  （否则已裁决动作失去记录），逐动作落钟——后一动作在后一世界态上裁决。 */
-function applyBatch(sim: Simulation, actions: readonly Action[]): Step[] {
-	if (!actions.length) return [];
+ *  （否则已裁决动作失去记录），逐动作落钟——后一动作在后一世界态上裁决。
+ *  已裁决步实时入 sink：投影/内核缺陷中途抛出时，先于中断动作的步已在册。 */
+function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): void {
+	if (!actions.length) return;
 	sim.validateBatch(actions);
-	const steps: Step[] = [];
 	for (const a of actions) {
 		const res = sim.apply(a);
-		steps.push(res.step, ...res.elapsed);
+		sink.push(res.step, ...res.elapsed);
 	}
-	return steps;
 }
 
 /** act 工具：映射回合唯一的动作提交口（one-shot 门闩）。execute 经提案批次内核 apply，事件策展作为工具结果返回。 */
@@ -418,11 +422,22 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			run.acted = true;
 			const proposed = (params.actions ?? []) as Action[];
 			run.proposals = [...proposed];
-			const steps = applyBatch(sim, proposed);
+			const steps: Step[] = [];
+			let crashed: string | null = null;
+			try {
+				applyBatch(sim, proposed, steps);
+			} catch (e) {
+				// core 契约：投影/内核缺陷在 apply 边界原子回滚后原样重抛。此处代谢为可审计的回合：
+				// 已裁决步照常入账（世界停在最后成功提交），中断点之后的后果不得被叙述虚构
+				crashed = e instanceof Error ? e.message : String(e);
+				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
+			}
 			if (steps.length) channel.onAdjudication?.({ steps });
-			const revealed = [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
+			// 投影已失灵时不重入 visible()（同款缺陷只会再抛一次）：新见段缺席，警告已记
+			const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
+			const text = buildResultView(sim, steps, proposed.length === 0, run.intent, revealed);
 			return {
-				content: [{ type: "text", text: buildResultView(sim, steps, proposed.length === 0, run.intent, revealed) }],
+				content: [{ type: "text", text: crashed ? `${text}\n内部缺陷：以上是中断前已发生的后果；中断的提案已整体回滚，其余不得虚构。` : text }],
 				details: {},
 			};
 		},

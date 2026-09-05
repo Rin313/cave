@@ -46,7 +46,7 @@ function summarizeYume(input: { world: World; player: string; steps: Step[] }): 
 	const carried = world.entities.filter((e) => e.id !== player && e.props["in"] === player);
 	if (carried.length) lines.push(`带着：${carried.map((e) => e.name).join("、")}。`);
 	for (const c of steps.flatMap((s) => s.changes)) {
-		if (c.kind === "spawn") lines.push(`出现了：${c.name}。`);
+		if (c.kind === "spawn") lines.push(`出现了：${c.entity.name}。`);
 		else if (c.kind === "despawn") lines.push(`消失了：${c.name}。`);
 		else if (c.kind === "rename") lines.push(`改名：${c.prev} → ${c.next}。`);
 	}
@@ -68,7 +68,7 @@ function digestExtraYume(world: World, player: string): Record<string, ViewValue
 	return {
 		awake: me?.props.awake !== false,
 		here: cur ? (entity(world, cur)?.name ?? cur) : null,
-		exits: (world.relations ?? [])
+		exits: world.relations
 			.filter((r) => r.type === "path" && r.from === cur)
 			.map((r) => entity(world, r.to)?.name ?? r.to),
 		carried: world.entities.filter((e) => e.props.kind === "effect" && e.props["in"] === player).map((e) => e.name),
@@ -346,7 +346,7 @@ export const yume: GameDef = {
 		for (const e of world.entities) {
 			if (e.props["in"] === cur || e.props["in"] === player) out.add(e.id);
 			if (e.props.space === true) {
-				for (const r of world.relations ?? []) {
+				for (const r of world.relations) {
 					if (r.type === "path" && r.from === cur && r.to === e.id) {
 						out.add(e.id);
 						break;
