@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type ChronicleEntry, type MemoryTurn } from "./context.ts";
+import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { Simulation, entity, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
 
 export interface EngineOptions {
@@ -84,8 +84,8 @@ export class Engine {
 	readonly sim: Simulation;
 	private session: SessionHandle;
 	private readonly sessionManager: SessionManager;
-	private readonly memory: MemoryTurn[];
-	/** 持久化的地籍条目（意志回合 + 仪器时间），窗口裁剪至 memoryLimit；近况投影见 context.ts。 */
+	private readonly recent: RecentEntry[];
+	/** 持久化的地籍条目（意志条目 + 无意志条目），窗口裁剪至 recentWindow；近况投影见 context.ts。 */
 	private readonly records: ChronicleEntry[];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
@@ -97,7 +97,7 @@ export class Engine {
 		sim: Simulation,
 		session: SessionHandle,
 		sessionManager: SessionManager,
-		memory: MemoryTurn[],
+		recent: RecentEntry[],
 		records: ChronicleEntry[],
 		run: RunState,
 		channel: TurnChannel,
@@ -105,9 +105,9 @@ export class Engine {
 		this.sim = sim;
 		this.session = session;
 		this.sessionManager = sessionManager;
-		this.memory = memory;
+		this.recent = recent;
 		this.records = records;
-		this.updateMemory();
+		this.updateRecent();
 		this.run = run;
 		this.channel = channel;
 		channel.onAdjudication = (patch) => {
@@ -170,18 +170,18 @@ export class Engine {
 			// 自动重试只针对传输类可重试错误；重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
 			retry: { enabled: true, maxRetries: 2 },
 		});
-		if (def.memoryLimit === undefined) throw new Error("GameDef.memoryLimit 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
-		if (!Number.isInteger(def.memoryLimit) || def.memoryLimit < 0) throw new Error(`GameDef.memoryLimit 须为非负整数，得到 ${String(def.memoryLimit)}`);
+		if (def.recentWindow === undefined) throw new Error("GameDef.recentWindow 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
+		if (!Number.isInteger(def.recentWindow) || def.recentWindow < 0) throw new Error(`GameDef.recentWindow 须为非负整数（地籍条目数），得到 ${String(def.recentWindow)}`);
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const records = loadRecords(sessionManager.getEntries());
-		const memory: MemoryTurn[] = [];
+		const recent: RecentEntry[] = [];
 		// no* 全关宿主资源发现（cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt）；extensionFactories 只挂上下文策略
 		const loader = new DefaultResourceLoader({
 			cwd: process.cwd(),
 			agentDir: getAgentDir(),
 			settingsManager,
 			systemPrompt: buildSystemPrompt(def),
-			extensionFactories: [buildContextExtension(() => memory)],
+			extensionFactories: [buildContextExtension(() => recent)],
 			noExtensions: true,
 			noSkills: true,
 			noPromptTemplates: true,
@@ -205,7 +205,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(sim, session, sessionManager, memory, records, run, channel);
+		return new Engine(sim, session, sessionManager, recent, records, run, channel);
 	}
 
 	get sessionFile(): string | undefined {
@@ -253,35 +253,36 @@ export class Engine {
 
 	/** 回合定稿：意志条目入地籍（会话 custom 条目，不入 LLM 上下文），随后更新近况窗口。 */
 	private recordTurn(intent: string, steps: Step[]): void {
-		const record: ChronicleEntry = { kind: "turn", time: this.sim.world.time, intent, steps };
+		const record: ChronicleEntry = { time: this.sim.world.time, intent, steps };
 		this.records.push(record);
 		try {
 			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
 		} catch {
 			// 持久化失败不阻断回合：内存窗口仍有效
 		}
-		this.updateMemory();
+		this.updateRecent();
 	}
 
-	/** 非回合后果源的定稿写点：elapsed 条目入地籍（不计回合）。 */
+	/** 非意志裁决的定稿写点：无意志条目入地籍（不计回合）——门的调用者不限意志，完备性要求其后果同样。 */
 	recordElapsed(steps: Step[]): void {
-		const record: ChronicleEntry = { kind: "elapsed", time: this.sim.world.time, steps };
+		const record: ChronicleEntry = { time: this.sim.world.time, steps };
 		this.records.push(record);
 		try {
 			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
 		} catch {
 			// 持久化失败不阻断：内存窗口仍有效
 		}
-		this.updateMemory();
+		this.updateRecent();
 	}
 
-	/** 近况窗口更新：裁剪至 memoryLimit 后整体重投影。投影只在窗口更新点（create/recordTurn）发生——
-	 *  同回合的映射与续行调用共享同一近况头，回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
-	private updateMemory(): void {
-		const limit = this.sim.def.memoryLimit;
+	/** 近况窗口更新：裁剪至 recentWindow（地籍条目数，意志条目与无意志条目都计入）后整体重投影。
+	 *  投影只在窗口更新点（create/recordTurn/recordElapsed）发生——同回合的映射与续行调用共享同一近况头，
+	 *  回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
+	private updateRecent(): void {
+		const limit = this.sim.def.recentWindow;
 		if (this.records.length > limit) this.records.splice(0, this.records.length - limit);
-		this.memory.length = 0;
-		this.memory.push(...projectWindow(this.sim, this.records));
+		this.recent.length = 0;
+		this.recent.push(...projectWindow(this.sim, this.records));
 	}
 
 	/** 场景呈现：无意志、无行动窗口——不写近况、不触门闩；运行直接进入 narration 相位，越权 act 调用被相位谓词拦截。 */
@@ -308,11 +309,11 @@ export class Engine {
 }
 
 /** 上下文策略扩展：每次 LLM 调用前把消息裁剪为「近况 + 当前运行后缀」（core/context.ts），会话文件不受影响。 */
-function buildContextExtension(memory: () => readonly MemoryTurn[]): InlineExtension {
+function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExtension {
 	return {
 		name: "cave-context",
 		factory: (pi) => {
-			pi.on("context", async (event) => ({ messages: pruneContext(event.messages, memory()) }));
+			pi.on("context", async (event) => ({ messages: pruneContext(event.messages, recent()) }));
 		},
 	};
 }

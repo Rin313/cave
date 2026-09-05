@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { defineVerb, grant, type GameDef } from "../core/sim.ts";
 
-/** 研究动词：工具合成的时间通道。仪器时间同样是规则授予的刻数，过同一裁决边界与硬墙 */
+/** 研究动词：工具合成的时间通道。仪器摇出的刻同样是规则授予的，过同一裁决边界与硬墙 */
 export const DEV_WAIT = "dev.wait";
 
 export function withDevWait(def: GameDef): GameDef {

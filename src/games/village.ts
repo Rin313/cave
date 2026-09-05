@@ -80,7 +80,7 @@ export const village: GameDef = {
 	id: "village",
 	title: "河畔村（era/DoL 极探针）",
 	playerId: "player",
-	memoryLimit: 6,
+	recentWindow: 6,
 	messages: {
 		noResponse: "世界没有以这种方式回应。",
 		invisibleEntity: "你看不到那样东西在哪里。",

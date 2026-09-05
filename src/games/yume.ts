@@ -244,7 +244,7 @@ export const yume: GameDef = {
 	id: "yume",
 	title: "梦日记（极少法则，极高自由）",
 	playerId: "player",
-	memoryLimit: 6,
+	recentWindow: 6,
 	messages: {
 		noResponse: "什么也没有发生。",
 		invisibleEntity: "你的视野里没有那样的东西。",
