@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type ChronicleEntry, type RecentEntry } from "./context.ts";
+import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
 import { Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step, type World } from "./sim.ts";
 
@@ -26,8 +26,19 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 const ACT_TOOL = "act";
 
+/** 映射契约单源：系统协议块、act 工具描述、回合提示与门闩文案四方消费同一措辞，不得分叉。 */
+const CONTRACT = {
+	once: "act 每回合只能在裁决前调用一次",
+	commit: "能构造出合法提案（动词承载意图、指称参数都取自可见实体的 id）就提交 actions，预计被世界拒绝也照常提交——意图是否合理由世界法则裁决，不由你判断",
+	empty: "构造不出合法提案就提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体",
+	follow: "act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文",
+} as const;
+
 /** act 门闩拒绝文案：协议拦截而非世界拒绝，不带世界腔；收件人是模型（通道语言，不进玩家视野）。 */
-const ACT_LATCH_MSG = "行动窗口已关闭：act 每回合只能在裁决前调用一次。请忽略本次调用，基于回合内已有内容继续输出散文。";
+const ACT_LATCH_MSG = `行动窗口已关闭：${CONTRACT.once}。请忽略本次调用，基于回合内已有内容继续输出散文。`;
+
+/** 状态头协议锚：digest 是世界真相，act 裁决结果在回合内携带其更新。 */
+const STATE_HEADER = "[当前状态]（世界真相）：";
 
 export interface ActOutcome {
 	/** 本回合事件流：动作步与刻步按构造交错，消费方不得重排。 */
@@ -322,9 +333,9 @@ function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExte
 
 function buildTurnPrompt(state: string, intent: string, selection: string | undefined): string {
 	const intentLine = selection
-		? `玩家意图：「${intent}」（玩家选中的场景文字：「${selection}」）`
-		: `玩家意图：「${intent}」`;
-	return `[当前状态]（唯一真相源）：\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（构造不出合法提案则提交空提案）；世界裁决后基于返回的结果描写本回合。`;
+		? `玩家意图：${verbatim(intent)}（玩家选中的场景文字：${verbatim(selection)}）`
+		: `玩家意图：${verbatim(intent)}`;
+	return `${STATE_HEADER}\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（${CONTRACT.empty}）；${CONTRACT.follow}。`;
 }
 
 /** 系统提示 = def.voice（原样注入）+ 协议块（core 生成：one-shot 门闩、拒绝契约、表达纪律）。 */
@@ -336,9 +347,9 @@ function buildSystemPrompt(def: GameDef): string {
 			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（指称参数：${refs.join("/")}——只能取可见实体 id）` : ""}`;
 		})
 		.join("\n");
-	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且指称参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
+	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（${CONTRACT.once}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.follow}。
 呈现调用（开场、时间流逝后的场景描写）没有行动窗口：prompt 顶部标注「呈现服务」，此时不要调用 act，直接输出散文正文。
-世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名。extra（存在时）是游戏派生的场景纹理。
+世界说明：entities 是当前所有可见实体，relations 是可见的关系边（from/to 为实体 id，type 为关系名）。id 是唯一标识，name 是展示名。extra（存在时）是游戏派生的场景纹理。
 可用动词（模拟层强制执行）：
 ${verbs}
 
@@ -353,7 +364,7 @@ ${verbs}
 /** act 工具结果与呈现服务共用的事件策展：spineLines 骨架行 + 未解析行 + 新见段（本回合新进可见集的实体卡）。 */
 function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string[] {
 	const lines = spineLines(sim, steps);
-	if (refused) lines.unshift(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
+	if (refused) lines.unshift(`玩家的意图 ${verbatim(intent ?? "")} 未被解析为可执行的操作，世界没有回应。`);
 	if (revealed.length) {
 		// 新见卡与状态视图同一装配线：投影钩子收冻结读态（快照克隆，冻结不落活账本）
 		const w = deepFreeze(JSON.parse(JSON.stringify(sim.world)) as World);
@@ -372,7 +383,7 @@ function buildResultView(sim: Simulation, steps: Step[], refused: boolean, inten
 }
 
 function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string): string {
-	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", `[当前状态]（唯一真相源）：`, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
+	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", STATE_HEADER, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
 	lines.push("", instruction);
 	return lines.join("\n");
 }
@@ -407,7 +418,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。能构造出合法动作（动词承载意图、指称参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 省略 actions（空提案即拒绝，不写任何理由）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
+		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.once}；世界法则按顺序裁决每个动作并返回结果。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
 				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" }),

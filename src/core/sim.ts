@@ -111,7 +111,7 @@ export interface Q {
 	readonly player: string;
 	readonly time: number;
 	readonly params: Record<string, Scalar>;
-	/** 确定性骰子（World 纯函数）。key 由引擎以出处限定（命运地址 = time#src#key），重名不共享命运。 */
+	/** 确定性骰子（World 纯函数）。key 由引擎以出处元组编码限定，重名不共享命运；sides 形状违约即抛（*.crash 代谢）。 */
 	roll(key: string, sides: number): number;
 }
 
@@ -355,7 +355,7 @@ export function integrityInvariant(): Invariant {
 				if (typeof r.type !== "string" || r.type === "") return "integrity: relation.type must be non-empty string";
 				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
 				// 三元组唯一：边身份是感知快照与可说性的键，影子边让读写静默分叉
-				const eid = spanKey([r.from, r.to, r.type]);
+				const eid = tupleKey([r.from, r.to, r.type]);
 				if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
 				edgeIds.add(eid);
 				if (r.value === null || !isLedgerValue(r.value)) return `integrity: relation ${r.type} -> value is not a ledger value (stored edges never hold null)`;
@@ -391,8 +391,8 @@ export interface FieldSpan {
 	props?: { before: string[]; after: string[] };
 }
 
-/** 跨度键：元组的 JSON 编码——id/type/属性键的字符集不受 integrity 约束，分隔符拼接有碰撞面（`a|b`+`c` ≡ `a`+`b|c`）。 */
-function spanKey(parts: readonly string[]): string {
+/** 元组编码键：id/type/属性键的字符集不受 integrity 约束，分隔符拼接有碰撞面（`a|b`+`c` ≡ `a`+`b|c`）——感知截面与命运地址共用同一教训。 */
+function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
@@ -525,11 +525,11 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		const propSides = s.field.props && { before: new Set(s.field.props.before), after: new Set(s.field.props.after) };
 		const sidesOf = (c: Change): { prev: boolean; next: boolean } | null => {
 			if (c.kind === "rel" && edgeSides) {
-				const k = spanKey([c.from, c.to, c.type]);
+				const k = tupleKey([c.from, c.to, c.type]);
 				return { prev: edgeSides.before.has(k), next: edgeSides.after.has(k) };
 			}
 			if (c.kind === "prop" && propSides) {
-				const k = spanKey([c.entity, c.prop]);
+				const k = tupleKey([c.entity, c.prop]);
 				return { prev: propSides.before.has(k), next: propSides.after.has(k) };
 			}
 			return null;
@@ -654,11 +654,11 @@ export class Simulation {
 		const perceive = this.def.edgePerception?.(world, this.player);
 		if (!perceive) return undefined;
 		const out: string[] = [];
-		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(spanKey([r.from, r.to, r.type]));
+		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(tupleKey([r.from, r.to, r.type]));
 		return out;
 	}
 
-	/** 属性感知快照：全部在册实体 × 注册表属性键经谓词过滤（键为 spanKey 元组编码；缺省恒真 → undefined，零成本）。
+	/** 属性感知快照：全部在册实体 × 注册表属性键经谓词过滤（键为 tupleKey 元组编码；缺省恒真 → undefined，零成本）。
 	 *  枚举注册表而非在场键：槽知觉覆盖缺席（缺席即状态——清空后的清单仍须可说「→ null」）。
 	 *  槽知觉与宿主知觉正交：prop 行的指称集只含值（居所迁移行的可说性系于值指称，不系于魂的自见性），
 	 *  故宿主可见性不是截面的维度，槽谓词是唯一的体验者相对门。 */
@@ -668,7 +668,7 @@ export class Simulation {
 		const keys = Object.keys(this.def.props ?? {});
 		const out: string[] = [];
 		for (const e of world.entities) {
-			for (const k of keys) if (perceive(e, k)) out.push(spanKey([e.id, k]));
+			for (const k of keys) if (perceive(e, k)) out.push(tupleKey([e.id, k]));
 		}
 		return out;
 	}
@@ -740,7 +740,7 @@ export class Simulation {
 			player: this.player,
 			time: world.time,
 			params,
-			roll: (key, sides) => rollDice(world, `${src}#${key}`, sides),
+			roll: (key, sides) => rollDice(world, tupleKey([src, key]), sides),
 		};
 	}
 

@@ -55,9 +55,14 @@ export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { compact: true, departed }) }));
 }
 
+/** 玩家-authored 文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性（不可制造行边界或伪造条目形状）；记录侧仍逐字原样。 */
+export function verbatim(s: string): string {
+	return JSON.stringify(s).replace(/[\u2028\u2029]/g, "\\n");
+}
+
 export function renderRecent(recent: readonly RecentEntry[]): string {
 	if (!recent.length) return "";
-	const lines = recent.map((m) => `- t${m.time} 「${m.intent}」→ ${m.moves.length ? m.moves.join("；") : "未解析"}`);
+	const lines = recent.map((m) => `- t${m.time} ${verbatim(m.intent)} → ${m.moves.length ? m.moves.join("；") : "未解析"}`);
 	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");
 }
 

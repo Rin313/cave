@@ -19,8 +19,10 @@ export function hashStr(s: string): number {
 	return (h >>> 0) / 4294967296;
 }
 
-/** 确定性骰子 → [1, sides]：World 的纯函数，同 (t, key) 恒同值；key 由引擎以出处限定，重名不共享命运。 */
+/** 确定性骰子 → [1, sides]：World 的纯函数，同地址恒同值（地址 = (t, key) 元组编码——分隔符拼接有碰撞面）。
+ *  sides 形状违约即抛：Q.roll 只在裁决侧可达，由 *.crash 通道代谢为必要性否决。 */
 export function roll(world: World, key: string, sides: number): number {
-	const h = hashStr(`${world.time}#${key}`);
-	return 1 + Math.floor(h * Math.max(1, Math.floor(sides)));
+	if (!Number.isInteger(sides) || sides < 1) throw new Error(`roll: sides 须为 ≥1 的整数，得到 ${String(sides)}`);
+	const h = hashStr(JSON.stringify([world.time, key]));
+	return 1 + Math.floor(h * sides);
 }
