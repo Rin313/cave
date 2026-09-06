@@ -39,6 +39,13 @@
 			]
 		},
 		{
+			"name": "拒绝分支时价恒等：门与墙的拒绝照耗尝试价（时价的定义域是尝试，法则不可改写）",
+			"steps": [
+				{ "name": "域外指称：可见性门拒绝，尝试价照耗（一刻；vault.tick 照拦）", "action": { "verb": "knock", "params": { "target": "nowhere" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "世界没有回应", "tickDenied": true, "lines": ["✗ 叩问(nowhere)：世界没有回应。", "⏱ ✗ 封印纹丝不动。"], "state": { "$world.time": 1, "player.vault": null } } },
+				{ "name": "域内指称：法则授予封印，硬墙否决，尝试价照耗（一刻）", "action": { "verb": "knock", "params": { "target": "thing" } }, "expect": { "ok": false, "law": "invariant.vault.sealed", "reason": "封印", "tickDenied": true, "lines": ["✗ 叩问(那件东西)：封印纹丝不动。", "⏱ ✗ 封印纹丝不动。"], "state": { "$world.time": 2, "player.vault": null } } }
+			]
+		},
+		{
 			"name": "投影缺陷不产世界事件：感知崩溃在 apply 边界原子回滚后重抛——凡不可说者不发生",
 			"steps": [
 				{ "name": "提交后感知快照崩溃：grant 已提交但步骤不可建——整 apply 回滚（gaze 不入账、时间不走）后响亮重抛", "action": { "verb": "blindfold", "params": {} }, "expect": { "throws": "感知在半空碎裂", "state": { "player.gaze": null, "player.touched": 0, "$world.time": 0 } } },

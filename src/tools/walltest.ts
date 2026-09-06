@@ -84,6 +84,13 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "grant", judge: (q) => grant([D.set(q.player, "vault", true)], "你碰了封印。") }],
 		}),
+		knock: defineVerb({
+			label: "叩问",
+			description: "拒绝分支时价夹具：尝试价一刻——可见性门与硬墙的拒绝同样耗尝试价。",
+			schema: Type.Object({ target: ref("目标实体 id") }),
+			cost: 1,
+			rules: [{ id: "knock.vault", judge: (q) => grant([D.set(q.player, "vault", true)], "你叩了叩封印。") }],
+		}),
 		sneakpoke: defineVerb({
 			label: "触潜标",
 			description: "越权动词：授予后触发审查者（sneaky 不变式）直改账本——冻结读态上写入即抛，崩溃在提交边界兑为墙否决。",

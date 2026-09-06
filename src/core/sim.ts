@@ -116,7 +116,7 @@ export interface Q {
 }
 
 /** 规则表态：授予（deltas + 玩家文案理由 + facts + ticks）或结构化拒绝；null = 不表态，交由后续规则。
- *  ticks 改写本动作的实际流逝刻数（缺省回落动词 cost）。 */
+ *  ticks 只改写授予分支的流逝（缺省回落动词 cost）；拒绝分支恒为尝试价。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; reason?: string; facts?: Fact[]; ticks?: number }
 	| { ok: false; denial: Denial };
@@ -137,7 +137,7 @@ export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: 
 	return { ok: true, deltas, ...(reason !== undefined && { reason }), ...(facts !== undefined && { facts }), ...(ticks !== undefined && { ticks }) };
 }
 
-/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。 */
+/** 尝试时价（刻，缺省 0）：凡入裁决即尝试。拒绝分支恒等此值（四面同价，法则不可改写），ticks 只改写授予分支。 */
 function attemptCost(verb: VerbDef | undefined): number {
 	return verb?.cost ?? 0;
 }
@@ -206,7 +206,7 @@ export interface VerbDef {
 	description: string;
 	/** TypeBox object schema，引擎据此生成 act 工具参数校验。 */
 	schema: TObject;
-	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。规则可在授予中以 ticks 改写实际流逝。 */
+	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试。拒绝分支恒价（法则不可改写），ticks 只改写授予分支。 */
 	cost?: number;
 	/** 内部动词：不进映射层（act schema 与系统提示的投影滤除），只由代码直接 apply——同一裁决边界与硬墙。 */
 	internal?: boolean;
