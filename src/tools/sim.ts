@@ -4,6 +4,10 @@ import { ProtocolViolation, Simulation, fmtChange, propGet, renderDenial, shownD
 import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
+import { walltest } from "./walltest.ts";
+
+/** 游戏解析：探针走注册表；结构墙夹具（core 契约锁）住工具层，不入探针馆。 */
+const gameOf = (id: string): GameDef => (id === walltest.id ? walltest : getGame(id));
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 // —— 场景运行器（契约锁） ——
@@ -186,7 +190,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
 	// dev.wait 挂 internal 研究动词：tick 步经同一裁决边界落钟
-	const def = withDevWait(getGame(file.game));
+	const def = withDevWait(gameOf(file.game));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	return {
 		file,
@@ -302,7 +306,7 @@ function tickText(def: GameDef, s: TickStep): string {
 }
 
 async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
-	const def = getGame(gameId);
+	const def = gameOf(gameId);
 	const sim = new Simulation(withDevWait(def));
 	const steps: Step[] = [];
 	for (const token of tokens) {
@@ -424,7 +428,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			}
 		} catch (e) {
 			if (e instanceof ProtocolViolation) rows.push({ verb: action.verb, op, law: e.law, reason: "协议违约：探测组合越过动词 schema" });
-			else throw e;
+			else rows.push({ verb: action.verb, op, law: "apply.crash", reason: "apply 抛错（原子回滚后重抛——投影钩子或内核缺陷）", bug: e instanceof Error ? e.message : String(e) });
 		}
 		for (const t of trace) {
 			const key = `${t.verb}|${t.rule}`;
@@ -476,7 +480,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
-	const def = getGame(gameId);
+	const def = gameOf(gameId);
 	const { rows, grants, skipped, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");

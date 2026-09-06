@@ -1,11 +1,11 @@
 import type { Delta, Fact, GameDef, PropDef, Q, ViewValue, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant, relVal } from "../core/sim.ts";
-import { hostOf, inTreeVisible } from "./space.ts";
+import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
 /** 探针章程：统一探针「封缄·宅邸夜」——陈列馆式最小探针，展品→格子清单见 DESIGN.md。
  *  判定单位是格子，隔离由场景锁承载（每场景独立起跑）；世界只提供通道共存的基质，使复合格可实例化。
- *  仪器约束：grounding 锚定 hostOf（魂不可自见）、全部边经 edgePerception 隐藏、
+ *  仪器约束：grounding 锚定 hostOf（魂不可自见）、社会边经 edgePerception 隐藏（path 通路可感）、
  *  全部秘密走 internal＋digestExtra 重露（状态面）＋法则理由代笔（事件面）。 */
 
 const SEALS_PROPS: Record<string, PropDef> = {
@@ -203,6 +203,25 @@ export const seals: GameDef = {
 				},
 			}],
 		}),
+		go: defineVerb({
+			label: "走动",
+			description: "沿廊走向另一个房间（dest 为地点 id，见关系路径）。走动耗一刻。",
+			schema: Type.Object({ dest: Type.String({ description: "目的地 id" }) }),
+			cost: 1,
+			entityParams: ["dest"],
+			rules: [{
+				id: "go.path",
+				judge: (q, p) => {
+					const d = entity(q.world, p.dest);
+					if (!d || d.props.space !== true) return deny("go.noplace", { reason: "那里不是能去的地方。" });
+					const here = enclosingSpace(q.world, host(q));
+					if (here === null) return deny("go.noway", { reason: "你无处可去。" });
+					if (here === p.dest) return deny("go.here", { reason: `你已经身在${nameOf(q.world, p.dest)}。` });
+					if (relVal(q.world, here, p.dest, "path") === null) return deny("go.noway", { reason: `从这里没有路通往${nameOf(q.world, p.dest)}。` });
+					return grant([D.set(host(q), "in", p.dest)], `你走向${nameOf(q.world, p.dest)}。`);
+				},
+			}],
+		}),
 		channel: defineVerb({
 			label: "附身",
 			description: "把神魂迁入一件能容魂的器皿（占据＝居所的迁移，一条 delta 过门）。",
@@ -234,6 +253,15 @@ export const seals: GameDef = {
 				},
 			}],
 		}),
+		divine: defineVerb({
+			label: "占问",
+			description: "把一枚铜钱掷进火盆，看这一问的吉凶。",
+			schema: Type.Object({}),
+			rules: [{
+				id: "divine.lot",
+				judge: (q) => grant([], `铜钱落进灰里：${q.roll("lot", 2) === 1 ? "吉" : "凶"}。`),
+			}],
+		}),
 		wait: defineVerb({
 			label: "等候",
 			description: "在廊下站着：说等多久（span 为刻数，1–12，缺省一刻）。",
@@ -259,11 +287,14 @@ export const seals: GameDef = {
 			{ id: "mask", name: "白瓷面具", props: { kind: "thing", vessel: true, in: "parlor" } },
 			{ id: "parlor", name: "正厅", props: { kind: "room", space: true } },
 			{ id: "study", name: "书房", props: { kind: "room", space: true } },
+			{ id: "court", name: "庭院", props: { kind: "room", space: true } },
 			{ id: "desk", name: "书案", props: { kind: "desk", manifest: ["letter_salt", "letter_grain"], in: "parlor" } },
 			{ id: "letter_salt", name: "火漆信·盐引", props: { kind: "letter", in: "desk", seal: true, sender: "merchant", recipient: "magistrate", content: "盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。" } },
 			{ id: "letter_grain", name: "火漆信·粮价", props: { kind: "letter", in: "desk", seal: true, sender: "magistrate", recipient: "merchant", content: "秋粮定价每石四百钱，勿为流言所动。" } },
 		],
 		relations: [
+			{ from: "parlor", to: "study", type: "path", value: true },
+			{ from: "study", to: "parlor", type: "path", value: true },
 			{ from: "magistrate", to: "merchant", type: "信任", value: 2 },
 			{ from: "magistrate", to: "steward", type: "信任", value: 3 },
 			{ from: "merchant", to: "steward", type: "信任", value: 1 },
@@ -301,6 +332,19 @@ export const seals: GameDef = {
 			},
 		},
 		{
+			id: "post.arrive",
+			run: (q) => {
+				if (q.time !== 5 || entity(q.world, "letter_night")) return null;
+				return {
+					deltas: [
+						D.spawn({ id: "letter_night", name: "夜笺", props: { kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } }),
+						D.set("desk", "manifest", [...manifestOf(q), "letter_night"]),
+					],
+					facts: ["又有一封夜笺送到，搁在书案上。"],
+				};
+			},
+		},
+		{
 			id: "salon.gossip",
 			run: (q) => {
 				if (q.time % 4 !== 2) return null;
@@ -333,6 +377,7 @@ export const seals: GameDef = {
 		},
 	],
 	props: SEALS_PROPS,
+	voice: `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。`,
 	// 一切边对体验者隐藏：社会真相只经 extra 的桶级披露与法则代笔流动（被测通道）
 	edgePerception: () => (r) => r.type !== "信任" && r.type !== "猜疑" && r.type !== "知晓",
 	// 视角锚＝居所链最近器皿；魂不可自见（意志能点名的域里没有意志自身）

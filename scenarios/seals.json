@@ -32,10 +32,10 @@
 			"name": "言语与指称：known 生命周期×改名连续性（复合格）",
 			"steps": [
 				{ "name": "向书房里的灰衣人攀谈：不可指名（门答，原样回显）", "action": { "verb": "talk", "params": { "target": "guest", "words": "借个火。" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 攀谈(guest,借个火。)：眼前没有那样的东西。"] } },
-				{ "name": "六刻：流言＋交割＋灰衣人漂移入厅（离屏因果）", "tick": 6, "expect": { "ok": true, "lines": ["✓ 流逝(6)：时间流逝。", "⏱ 〔你瞥见太守与管家在廊下低语，谈了许久。〕", "⏱ （火漆信·盐引.持者: 书案 → 太守；火漆信·盐引.火漆: true → false；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·粮价；火漆信·粮价.持者: 书案 → 盐商；火漆信·粮价.火漆: true → false；书案.收发清单: 火漆信·粮价 → null）〔太守收了火漆信·盐引，拆封读毕。；盐商收了火漆信·粮价，拆封读毕。〕", "⏱ （灰衣人.持者: 书房 → 正厅）〔你瞥见太守与管家在廊下低语，谈了许久。；灰衣人踱进了正厅，与管家寒暄。〕", "⏱ 光阴虚度 ×3"], "viewIncludes": ["灰衣人"], "state": { "guest.in": "parlor" } } },
+				{ "name": "六刻：流言＋交割＋夜笺入案（离屏生灭入账）＋灰衣人漂移入厅", "tick": 6, "expect": { "ok": true, "lines": ["✓ 流逝(6)：时间流逝。", "⏱ 〔你瞥见太守与管家在廊下低语，谈了许久。〕", "⏱ （火漆信·盐引.持者: 书案 → 太守；火漆信·盐引.火漆: true → false；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·粮价；火漆信·粮价.持者: 书案 → 盐商；火漆信·粮价.火漆: true → false；书案.收发清单: 火漆信·粮价 → null）〔太守收了火漆信·盐引，拆封读毕。；盐商收了火漆信·粮价，拆封读毕。〕", "⏱ （+ 夜笺；书案.收发清单: null → 夜笺）〔又有一封夜笺送到，搁在书案上。〕", "⏱ （灰衣人.持者: 书房 → 正厅）〔你瞥见太守与管家在廊下低语，谈了许久。；灰衣人踱进了正厅，与管家寒暄。〕", "⏱ 光阴虚度 ×2"], "viewIncludes": ["灰衣人", "夜笺"], "state": { "guest.in": "parlor", "letter_night.in": "desk" } } },
 				{ "name": "攀谈：原话物化为惰性记录（heard），introduced 标记对模型不可见", "action": { "verb": "talk", "params": { "target": "guest", "words": "面具下的眼睛像是认得我。" } }, "expect": { "ok": true, "lines": ["✓ 攀谈(灰衣人,面具下的眼睛像是认得我。)：你与灰衣人攀谈了一句。（灰衣人.闻言: null → 面具下的眼睛像是认得我。）"], "state": { "guest.heard": "面具下的眼睛像是认得我。", "guest.introduced": true } } },
 				{ "name": "揭面：rename 可说", "action": { "verb": "unmask", "params": { "target": "guest" } }, "expect": { "ok": true, "lines": ["✓ 揭面(沈青)：你揭下了面具。（~ 灰衣人 → 沈青；沈青.面具: true → false）"], "viewIncludes": ["沈青"], "state": { "guest.mask": false } } },
-				{ "name": "四刻：沈青携盏归书房（离场）＋流言同刻归桶", "tick": 4, "expect": { "ok": true, "lines": ["✓ 流逝(4)：时间流逝。", "⏱ （沈青.持者: 正厅 → 书房）〔你瞥见太守与管家在廊下低语，谈了许久。；沈青携着酒盏，踱回了书房。〕", "⏱ 光阴虚度 ×3"] } },
+				{ "name": "四刻：夜笺交割（次轮入账）＋沈青携盏归书房（离场）＋流言同刻归桶", "tick": 4, "expect": { "ok": true, "lines": ["✓ 流逝(4)：时间流逝。", "⏱ （夜笺.持者: 书案 → 管家；夜笺.火漆: true → false；书案.收发清单: 夜笺 → null）〔管家收了夜笺，拆封读毕。〕", "⏱ （沈青.持者: 正厅 → 书房）〔你瞥见太守与管家在廊下低语，谈了许久。；沈青携着酒盏，踱回了书房。〕", "⏱ 光阴虚度 ×2"], "state": { "guest.mask": false, "letter_night.in": "steward", "desk.manifest": null } } },
 				{ "name": "跨室再攀谈：known 并入参照域（门放行）＋改名后名字连续（复合格证词）", "action": { "verb": "talk", "params": { "target": "guest", "words": "下一封信走老渠道。" } }, "expect": { "ok": true, "lines": ["✓ 攀谈(沈青,下一封信走老渠道。)：你与沈青攀谈了一句。（沈青.闻言: 面具下的眼睛像是认得我。 → 下一封信走老渠道。）"] } }
 			]
 		},
@@ -51,6 +51,22 @@
 				{ "name": "掷火空出的器皿：器皿可生灭", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": true, "lines": ["✓ 掷火(信使)：你把信使掷进了火盆。（- 信使）"], "viewExcludes": ["信使"] } },
 				{ "name": "掷火魂自身：意志能点名的域里没有意志自身（门答）", "action": { "verb": "burn", "params": { "entity": "player" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 掷火(player)：眼前没有那样的东西。"] } },
 				{ "name": "面具持信：无主语动词的缺省主语＝居所链最近器皿", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。（火漆信·粮价.持者: 书案 → 白瓷面具；书案.收发清单: 火漆信·粮价 → null）"], "state": { "letter_grain.in": "mask" } } }
+			]
+		},
+		{
+			"name": "走动：邻接前提接线法则、时价成败皆耗、视角随居所翻转（grounding 是注入的投影）",
+			"steps": [
+				{ "name": "去庭院：正厅无路——邻接前提由法则拒绝，尝试时价照耗（一刻）", "action": { "verb": "go", "params": { "dest": "court" } }, "expect": { "ok": false, "law": "go.noway", "reason": "没有路", "lines": ["✗ 走动(庭院)：从这里没有路通往庭院。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
+				{ "name": "去书案：非地点——地点性前提拒绝，时价照耗；流言刻照常产出（刻是世界的因）", "action": { "verb": "go", "params": { "dest": "desk" } }, "expect": { "ok": false, "law": "go.noplace", "reason": "不是能去的地方", "lines": ["✗ 走动(书案)：那里不是能去的地方。", "⏱ 〔你瞥见太守与管家在廊下低语，谈了许久。〕"], "state": { "$world.time": 2 } } },
+				{ "name": "去书房：一刻流逝，视角翻转入书房——正厅内容物退出参照域", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true, "lines": ["✓ 走动(书房)：你走向书房。（信使.持者: 正厅 → 书房）", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 3, "courier.in": "study" }, "viewIncludes": ["灰衣人"], "viewExcludes": ["火漆信·盐引", "书案"] } },
+				{ "name": "回正厅：视角翻回，交割刻在回廊后照常发生", "action": { "verb": "go", "params": { "dest": "parlor" } }, "expect": { "ok": true, "lines": ["✓ 走动(正厅)：你走向正厅。（信使.持者: 书房 → 正厅）", "⏱ （火漆信·盐引.持者: 书案 → 太守；火漆信·盐引.火漆: true → false；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·粮价；火漆信·粮价.持者: 书案 → 盐商；火漆信·粮价.火漆: true → false；书案.收发清单: 火漆信·粮价 → null）〔太守收了火漆信·盐引，拆封读毕。；盐商收了火漆信·粮价，拆封读毕。〕"], "state": { "$world.time": 4, "courier.in": "parlor" }, "viewIncludes": ["火漆信·盐引"], "viewExcludes": ["灰衣人"] } }
+			]
+		},
+		{
+			"name": "占问：命运地址——同刻同源同键恒同签（随机是世界纯函数）",
+			"steps": [
+				{ "name": "零刻动词不推钟：首掷落定命运地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"], "state": { "$world.time": 0 } } },
+				{ "name": "同刻再掷：地址未变，同签（确定性骰子）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } }
 			]
 		}
 	]
