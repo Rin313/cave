@@ -119,12 +119,12 @@ export class Engine {
 		this.sessionManager = sessionManager;
 		this.recent = recent;
 		this.records = records;
-		this.updateRecent();
 		this.run = run;
 		this.channel = channel;
 		channel.onAdjudication = (patch) => {
 			if (patch.steps) this.outcome.steps = patch.steps;
 		};
+		this.updateRecent();
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
@@ -174,7 +174,7 @@ export class Engine {
 		const modelDef = modelRuntime.getModel(options.provider, options.model);
 		if (!modelDef) throw new Error(`模型 ${options.provider}/${options.model} 不可用`);
 
-		const thinkingLevel = (options.thinkingLevel as never) ?? "high";
+		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping 是失效安全：首个运行前的杂散事件文本会被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", acted: false, visibleBefore: new Set(), settled: "", current: "", proposals: [], warnings: [], usage: [] };
 		const settingsManager = SettingsManager.inMemory({
@@ -208,7 +208,7 @@ export class Engine {
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
 			modelRuntime,
-			thinkingLevel: (thinkingLevel as never),
+			thinkingLevel: thinkingLevel as never,
 			resourceLoader: loader,
 			settingsManager,
 			sessionManager,
@@ -365,10 +365,6 @@ function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, inte
 	return lines;
 }
 
-function buildResultView(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string {
-	return formatTurnEvents(sim, steps, refused, intent, revealed).join("\n");
-}
-
 function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string): string {
 	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", STATE_HEADER, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
 	lines.push("", instruction);
@@ -437,7 +433,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 			if (steps.length) channel.onAdjudication?.({ steps });
 			// 投影已失灵时不重入 visible()（同款缺陷只会再抛一次）：新见段缺席，警告已记
 			const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
-			const text = buildResultView(sim, steps, proposed.length === 0, run.intent, revealed);
+			const text = formatTurnEvents(sim, steps, proposed.length === 0, run.intent, revealed).join("\n");
 			return {
 				content: [{ type: "text", text: crashed ? `${text}\n内部缺陷：以上是中断前已发生的后果；中断的提案已整体回滚，其余不得虚构。` : text }],
 				details: {},

@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { defineVerb, grant, type GameDef } from "../core/sim.ts";
 
 /** 研究动词：工具合成的时间通道。仪器摇出的刻同样是规则授予的，过同一裁决边界与硬墙 */
-export const DEV_WAIT = "dev.wait";
+const DEV_WAIT = "dev.wait";
 
 export function withDevWait(def: GameDef): GameDef {
 	if (def.verbs[DEV_WAIT]) throw new Error(`动词 ${DEV_WAIT} 已由游戏声明——仪器动词与游戏动词的冲突必须显性拒绝，不可静默覆盖`);

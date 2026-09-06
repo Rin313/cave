@@ -5,10 +5,10 @@ import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdi
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { walltest } from "./walltest.ts";
+import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 /** 游戏解析：探针走注册表；结构墙夹具（core 契约锁）住工具层，不入探针馆。 */
 const gameOf = (id: string): GameDef => (id === walltest.id ? walltest : getGame(id));
-import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 // —— 场景运行器（契约锁） ——
 

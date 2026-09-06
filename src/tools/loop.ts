@@ -94,7 +94,7 @@ function warnWarnings(ws: string[]): void {
 }
 
 function printAct(sim: Simulation, o: {
-	turn: number; intent: string; selection?: string | null;
+	turn: number; intent: string; selection?: string | undefined;
 	outcome: ActOutcome; brief?: boolean;
 }): void {
 	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
@@ -192,7 +192,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 			warnings: outcome.warnings,
 			usage: outcome.usage,
 		});
-		printAct(sim, { turn: meta.turn, intent, selection: selection ?? null, outcome });
+		printAct(sim, { turn: meta.turn, intent, selection, outcome });
 	});
 }
 

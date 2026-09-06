@@ -60,7 +60,7 @@ export function verbatim(s: string): string {
 	return JSON.stringify(s).replace(/[\u2028\u2029]/g, "\\n");
 }
 
-export function renderRecent(recent: readonly RecentEntry[]): string {
+function renderRecent(recent: readonly RecentEntry[]): string {
 	if (!recent.length) return "";
 	const lines = recent.map((m) => `- t${m.time} ${verbatim(m.intent)} → ${m.moves.length ? m.moves.join("；") : "未解析"}`);
 	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");

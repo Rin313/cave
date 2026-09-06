@@ -278,6 +278,12 @@ function isLedgerValue(v: unknown): v is LedgerValue {
 	return isScalarValue(v) || (Array.isArray(v) && v.every(isScalarValue));
 }
 
+/** 账本值等值：幂等跳过的判据是「目标状态已成立」（执行翼契约），标量数组逐位恒等而非引用同一。 */
+function sameLedger(a: PropValue, b: PropValue): boolean {
+	if (a === b) return true;
+	return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 /** core 默认硬墙：引用完整性、注册表类型契约与词汇闭合。世界全域扫描
  *  spawn 整包与 t=0 构造期自动覆盖 */
 export function integrityInvariant(): Invariant {
@@ -876,9 +882,6 @@ export class Simulation {
 	/** 按注册顺序运行全部系统一次，产出并提交 deltas。 */
 	private runSystems(): TickStep[] {
 		const out: TickStep[] = [];
-		const emit = (sr: TickStep): void => {
-			out.push(sr);
-		};
 		for (const sys of this.def.systems ?? []) {
 			const src = `system:${sys.id}`;
 			const s0 = this.readState();
@@ -891,7 +894,7 @@ export class Simulation {
 			try {
 				res = sys.run(this.query(s0, {}, src));
 			} catch (e) {
-				emit({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
+				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
 				continue;
 			}
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
@@ -905,10 +908,10 @@ export class Simulation {
 			if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
 			const at = this.world.time;
 			if (!cc.ok) {
-				emit({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
+				out.push({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
 				continue;
 			}
-			emit({
+			out.push({
 				kind: "tick",
 				at,
 				ok: true,
@@ -997,7 +1000,7 @@ export class Simulation {
 				// 执行翼：type 是边身份的组成，非字符串/空串即身份退化（同一严格度：integrity 对存储边同查）
 				if (typeof d.type !== "string" || d.type === "") return refuse(`relSet ${String(d.from)}->${String(d.to)}: relation type must be non-empty string`);
 				const prev = relVal(this.world, d.from, d.to, d.type);
-				if (prev === d.value) continue;
+				if (sameLedger(prev, d.value)) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
 				if (d.value !== null && !isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
 				if (d.value === null) {
@@ -1025,7 +1028,7 @@ export class Simulation {
 			if (!e) return refuse(`set "${d.entity}.${d.prop}": target entity missing`);
 			if (d.value !== null && !isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (non-null scalar or scalar array)`);
 			const prev = e.props[d.prop] ?? null;
-			if (prev === d.value) continue;
+			if (sameLedger(prev, d.value)) continue;
 			if (d.value === null) delete e.props[d.prop];
 			else e.props[d.prop] = d.value;
 			changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value });
