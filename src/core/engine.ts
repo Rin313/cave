@@ -11,7 +11,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type ChronicleEntry, type RecentEntry } from "./context.ts";
-import { Simulation, entity, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
+import { deepFreeze } from "./util.ts";
+import { Simulation, entity, spineLines, viewCard, type Action, type GameDef, type Step, type World } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -354,10 +355,13 @@ function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, inte
 	const lines = spineLines(sim, steps);
 	if (refused) lines.unshift(`玩家的意图「${intent ?? ""}」未被解析为可执行的操作，世界没有回应。`);
 	if (revealed.length) {
+		// 新见卡与状态视图同一装配线：投影钩子收冻结读态（快照克隆，冻结不落活账本）
+		const w = deepFreeze(JSON.parse(JSON.stringify(sim.world)) as World);
+		const perceiveProp = sim.def.propPerception?.(w, sim.player);
 		lines.push("本回合新见：");
 		for (const id of revealed) {
-			const e = entity(sim.world, id);
-			if (e) lines.push(`  ${JSON.stringify(viewCard(sim.def, e))}`);
+			const e = entity(w, id);
+			if (e) lines.push(`  ${JSON.stringify(viewCard(sim.def, e, perceiveProp))}`);
 		}
 	}
 	return lines;

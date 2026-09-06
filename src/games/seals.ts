@@ -6,7 +6,7 @@ import { Type } from "typebox";
 /** 探针章程：统一探针「封缄·宅邸夜」——陈列馆式最小探针，展品→格子清单见 DESIGN.md。
  *  判定单位是格子，隔离由场景锁承载（每场景独立起跑）；世界只提供通道共存的基质，使复合格可实例化。
  *  仪器约束：grounding 锚定 hostOf（魂不可自见）、社会边经 edgePerception 隐藏（path 通路可感）、
- *  全部秘密走 internal＋digestExtra 重露（状态面）＋法则理由代笔（事件面）。 */
+ *  信文经 propPerception 隐藏、聚合纹理走 digestExtra（无引用面）。 */
 
 const SEALS_PROPS: Record<string, PropDef> = {
 	kind: { type: "string", label: "类别" },
@@ -15,8 +15,8 @@ const SEALS_PROPS: Record<string, PropDef> = {
 	seal: { type: "boolean", label: "火漆" },
 	sender: { type: "id", label: "寄信人" },
 	recipient: { type: "id", label: "收信人" },
-	// 存活格 1：信文全局隐藏，只经 digestExtra 对知晓者重露；变更无机械行
-	content: { type: "string", label: "信文", internal: true },
+	// 信文：propPerception 展品——只对知晓者可感，机械变更行随之可说（双写税废除）
+	content: { type: "string", label: "信文" },
 	// known 标记：对模型不可见，grounding 并入参照域（对话获名的引用生命周期）
 	introduced: { type: "boolean", internal: true },
 	// 主体性机：hostOf 键控的器皿标记；魂不可自见
@@ -52,12 +52,9 @@ const referenced = (q: Q, id: string): string | null => {
 	return null;
 };
 
-/** 状态面重露＋桶级披露：知晓的信文按体验者显形；亲和与疑心只报点名不报值。 */
+/** 桶级披露（digestExtra 的残余职责：非账本的聚合纹理）；信文的重露已由 propPerception 承载。 */
 function extraOf(world: World, player: string): Record<string, ViewValue> {
 	const name = (id: string): string => nameOf(world, id);
-	const known = world.entities
-		.filter((l) => l.props.kind === "letter" && relVal(world, player, l.id, "知晓") !== null)
-		.map((l) => ({ 信: l.name, 信文: String(l.props.content ?? "") }));
 	const affinity: string[] = [];
 	const seen = new Set<string>();
 	for (const r of world.relations) {
@@ -71,7 +68,6 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 		.filter((r) => r.type === "猜疑" && r.to === hostOf(world, player) && Number(r.value ?? 0) >= 1)
 		.map((r) => name(r.from));
 	const out: Record<string, ViewValue> = {};
-	if (known.length) out["读过的信"] = known;
 	if (affinity.length) out["交际"] = affinity;
 	if (suspicion.length) out["对你的疑心"] = suspicion;
 	return out;
@@ -380,6 +376,8 @@ export const seals: GameDef = {
 	voice: `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。`,
 	// 一切边对体验者隐藏：社会真相只经 extra 的桶级披露与法则代笔流动（被测通道）
 	edgePerception: () => (r) => r.type !== "信任" && r.type !== "猜疑" && r.type !== "知晓",
+	// 属性感知：信文只对知晓者可感（判据读物化真相——知晓边；键控非 id 特判）
+	propPerception: (world, player) => (e, prop) => prop !== "content" || relVal(world, player, e.id, "知晓") !== null,
 	// 视角锚＝居所链最近器皿；魂不可自见（意志能点名的域里没有意志自身）
 	grounding: (world, player) => {
 		const vis = inTreeVisible(world, hostOf(world, player));

@@ -143,6 +143,12 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "edgearr.ok", judge: () => grant([D.relSet("player", "thing", "标记", ["甲"])], "你系了一条带标记的边。") }],
 		}),
+		mistype: defineVerb({
+			label: "误型",
+			description: "墙契约：relSet 的关系类型为数字——type 是边身份的组成，非字符串 token 执行翼拒绝。",
+			schema: Type.Object({}),
+			rules: [{ id: "mistype.leak", judge: () => grant([D.relSet("player", "thing", 123 as unknown as string, "甲")], "你系了一条无名边。") }],
+		}),
 		edgeobj: defineVerb({
 			label: "对象边",
 			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（边值与属性值同一账本形状）。",

@@ -80,7 +80,7 @@ export interface PropDef {
 	type: PropType;
 	/** 世界化说法（变更线性化文本里的属性名）。 */
 	label?: string;
-	/** 内部属性：不进 LLM 序列化与变更线性化。 */
+	/** 机械词汇旗标：对一切呈现面（视图/变更行）永不渲染；与感知正交——规则/系统/不变式照常读世界真相。 */
 	internal?: boolean;
 }
 
@@ -217,6 +217,10 @@ export interface GameDef {
 	grounding?: (world: World, player: string) => string[];
 	/** 边感知（缺省恒真）：同一谓词约束状态视图的 relations 与事件投影的 rel 变更行；端点可见过滤是 core 内核，本谓词叠加其上。 */
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
+	/** 属性感知（缺省恒真）：同一谓词约束状态视图的 props 块与事件投影的 prop 变更行。谓词收意志锚与槽
+	 *  （实体×注册表键，含缺席槽——缺席即状态），读物化真相（「知其有不知其值」的知识居所仍是账本——感知
+	 *  不物化为内容）；按构造不铸造指称（只对在册槽求值），可感 id 值在变更行中仍受 referents 门控。 */
+	propPerception?: (world: World, player: string) => (e: Entity, prop: string) => boolean;
 	/** 状态视图的派生纹理，入 extra 键（形态自由 ViewValue）。视图顶层 time/relations/entities 为 core 装配字段，不可覆写；
 	 *  extra 无引用声明面：指称的铸造面只有实体卡与关系端点，纹理以名字陈述可指名者、以字面披露其余。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
@@ -320,9 +324,22 @@ export function integrityInvariant(): Invariant {
 					if (pd.type === "string" && typeof v !== "string") return `integrity: ${e.id}.${p} expects string, got ${got(v)}`;
 				}
 			}
+			const edgeIds = new Set<string>();
 			for (const r of world.relations ?? []) {
 				if (r === null || typeof r !== "object" || Array.isArray(r)) return "integrity: relation must be a record";
+				// 形状封闭：边顶层键 ⊆ {from, to, type, value}
+				for (const k of Object.keys(r)) {
+					if (k !== "from" && k !== "to" && k !== "type" && k !== "value") return `integrity: relation.${k} is not part of the relation shape`;
+				}
+				if (typeof r.from !== "string" || r.from === "") return "integrity: relation.from must be non-empty string";
+				if (typeof r.to !== "string" || r.to === "") return "integrity: relation.to must be non-empty string";
+				// type 是边身份的组成（开口 token）：非字符串/空串即身份退化
+				if (typeof r.type !== "string" || r.type === "") return "integrity: relation.type must be non-empty string";
 				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
+				// 三元组唯一：边身份是感知快照与可说性的键，影子边让读写静默分叉
+				const eid = spanKey([r.from, r.to, r.type]);
+				if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
+				edgeIds.add(eid);
 				if (r.value === null || !isLedgerValue(r.value)) return `integrity: relation ${r.type} -> value is not a ledger value (stored edges never hold null)`;
 			}
 			return null;
@@ -337,26 +354,28 @@ export function internalPropsOf(def: GameDef): Set<string> {
 	return s;
 }
 
-/** 实体视图卡（状态视图与新见段共用的唯一形状）：id + 名字 + 注册表过滤后的属性包。 */
-export function viewCard(def: GameDef, e: Entity): { id: string; name: string; props: Record<string, LedgerValue> } {
+/** 实体视图卡（状态视图与新见段共用的唯一形状）：id + 名字 + internal 滤 ∧ 属性感知滤后的属性包。 */
+export function viewCard(def: GameDef, e: Entity, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name: string; props: Record<string, LedgerValue> } {
 	const internal = internalPropsOf(def);
-	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k))) };
+	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k) && (!perceiveProp || perceiveProp(e, k)))) };
 }
 
 export function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
-/** 一次提交边界两侧的可见实体集快照（edges 为边感知快照）。裁决时取定，提交后不重算。 */
+/** 一次提交边界两侧的感知截面：可见实体集、边键、属性键。感知分辨率继承提交边界的离散化；
+ *  裁决时取定，提交后不可重算；值不随截面入账（Change.prev/next 自含）。 */
 export interface FieldSpan {
 	before: string[];
 	after: string[];
 	edges?: { before: string[]; after: string[] };
+	props?: { before: string[]; after: string[] };
 }
 
-/** 边键：跨度内边感知快照的形态（from|to|type——知觉判定只需边的身份，值随变更行携带）。 */
-function edgeKey(r: Pick<Rel, "from" | "to" | "type">): string {
-	return `${r.from}|${r.to}|${r.type}`;
+/** 跨度键：元组的 JSON 编码——id/type/属性键的字符集不受 integrity 约束，分隔符拼接有碰撞面（`a|b`+`c` ≡ `a`+`b|c`）。 */
+function spanKey(parts: readonly string[]): string {
+	return JSON.stringify(parts);
 }
 
 /** 事件流条目：动作步（ActionStep）与世界刻步（TickStep）——一个按构造保序的序列，两种条目均携带钟坐标 at。 */
@@ -440,19 +459,18 @@ function refProp(sim: Simulation, prop: string): boolean {
 
 /** 变更线性化（core 只做符号连接，name/label 取自游戏声明）。
  *  指称解析走 renderValue：关系端点是引用，关系值、关系类型与未声明属性值一律字面；窗口内 despawn 的实体以 departed 兜底。 */
-export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>): string {
+export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>, sides?: { prev: boolean; next: boolean }): string {
+	const val = (v: PropValue, ok: boolean, ref: boolean): string => (ok ? renderValue(sim, v, ref, departed).text : "?");
 	if (c.kind === "spawn") return `+ ${c.entity.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
 	if (c.kind === "rename") return `~ ${c.prev} → ${c.next}`;
 	if (c.kind === "rel") {
-		const val = (v: PropValue): string => renderValue(sim, v, false, departed).text;
-		return `${renderValue(sim, c.from, true, departed).text}.${c.type}.${renderValue(sim, c.to, true, departed).text}: ${val(c.prev)} → ${val(c.next)}`;
+		return `${renderValue(sim, c.from, true, departed).text}.${c.type}.${renderValue(sim, c.to, true, departed).text}: ${val(c.prev, sides?.prev ?? true, false)} → ${val(c.next, sides?.next ?? true, false)}`;
 	}
 	const e = sim.world.entities.find((x) => x.id === c.entity);
 	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	const ref = refProp(sim, c.prop);
-	return `${name}.${label}: ${renderValue(sim, c.prev, ref, departed).text} → ${renderValue(sim, c.next, ref, departed).text}`;
+	return `${name}.${label}: ${val(c.prev, sides?.prev ?? true, refProp(sim, c.prop))} → ${val(c.next, sides?.next ?? true, refProp(sim, c.prop))}`;
 }
 
 /** internal 属性变更过滤（internal 隔离的机械缺省）：internal 不进表达输入的变更线性化。 */
@@ -462,44 +480,60 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 }
 
 /** 变更行的指称集：与渲染器消费同一解析（renderValue）——渲染会说出名字之处，投影即数指称。
- *  指称身份（ids）与名字解析无关（renderValue 对字符串元素恒记 id），不收离场底表。 */
-function referentsOf(sim: Simulation, c: Change): string[] {
+ *  值侧分侧披露下，未披露侧的值不数指称（不渲染即不门控）。指称身份（ids）与名字解析无关
+ *  （renderValue 对字符串元素恒记 id），不收离场底表。 */
+function referentsOf(sim: Simulation, c: Change, sides?: { prev: boolean; next: boolean }): string[] {
 	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : c.kind === "spawn" ? [c.entity.id] : [c.entity];
 	const ref = refProp(sim, c.prop);
-	return [
-		...renderValue(sim, c.prev ?? null, ref).ids,
-		...renderValue(sim, c.next ?? null, ref).ids,
-	];
+	const out: string[] = [];
+	if (sides?.prev ?? true) out.push(...renderValue(sim, c.prev ?? null, ref).ids);
+	if (sides?.next ?? true) out.push(...renderValue(sim, c.next ?? null, ref).ids);
+	return out;
 }
 
 /** 事件流的规范单行渲染（符号承担结构，语言词来自 messages/label/规则文案）。
  *  消费者：act 结果视图、近况投影（compact）、loop 控制台、回退摘要。
- *  契约：变更行按该步的可见快照投影——任一指称不在快照内整行沉默；理由与 Fact 不过投影；
- *  internal 变更恒滤。刻桶按 at 归并并归属前导动作的授予区间（ActionStep.ticks 为权威账目），
- *  静默刻归账为「timePassed ×n」。 */
+ *  契约：变更行按该步的感知截面投影——rel/prop 行的存在性要求键在两侧知觉的并集内（原型知觉：
+ *  进入/离开即目睹转变），值侧披露分侧门控（未采样侧以「?」占位）；任一渲染指称不在参照域内
+ *  整行沉默；理由与 Fact 不过投影；internal 变更恒滤。刻桶按 at 归并并归属前导动作的授予区间
+ *  （ActionStep.ticks 为权威账目），静默刻归账为「timePassed ×n」。 */
 export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean; departed?: ReadonlyMap<string, string> }): string[] {
 	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
 	const shownDeparted = opts?.departed ?? shownDepartedNames(steps);
-	const perceivableOf = (s: Step): ((c: Change) => boolean) => {
+	/** 步内可说变更的渲染：存在性（感知并集）＋值侧披露（分侧采样）＋指称门（参照域并集）共一判定。 */
+	const speakableOf = (s: Step): ((c: Change) => string | null) => {
 		const field = spanOf(s);
-		// rel 变更行要求边在跨度两侧知觉的并集内
-		const edgeSpan = s.field.edges ? new Set([...s.field.edges.before, ...s.field.edges.after]) : undefined;
+		const edgeSides = s.field.edges && { before: new Set(s.field.edges.before), after: new Set(s.field.edges.after) };
+		const propSides = s.field.props && { before: new Set(s.field.props.before), after: new Set(s.field.props.after) };
+		const sidesOf = (c: Change): { prev: boolean; next: boolean } | null => {
+			if (c.kind === "rel" && edgeSides) {
+				const k = spanKey([c.from, c.to, c.type]);
+				return { prev: edgeSides.before.has(k), next: edgeSides.after.has(k) };
+			}
+			if (c.kind === "prop" && propSides) {
+				const k = spanKey([c.entity, c.prop]);
+				return { prev: propSides.before.has(k), next: propSides.after.has(k) };
+			}
+			return null;
+		};
 		return (c) => {
-			if (c.kind === "rel" && edgeSpan && !edgeSpan.has(edgeKey(c))) return false;
+			const sides = sidesOf(c);
+			if (sides && !sides.prev && !sides.next) return null;
 			// 可说判据只认步的参照域（随步冻结，渲染不扩权）；离场名由底表解析，与可说性分立
-			return referentsOf(sim, c).every((r) => field.has(r));
+			if (!referentsOf(sim, c, sides ?? undefined).every((r) => field.has(r))) return null;
+			return fmtChange(sim, c, shownDeparted, sides ?? undefined);
 		};
 	};
 	const msgs = sim.def.messages;
 	const compact = opts?.compact === true;
 	const lines: string[] = [];
 	// 静默刻归账：granted − 有桶行的刻
-	const said = new Map<number, { changes: Change[]; facts: Fact[]; denials: string[] }>();
+	const said = new Map<number, { changes: string[]; facts: Fact[]; denials: string[] }>();
 	let granted = 0;
 	const flush = (): void => {
 		for (const { changes, facts, denials } of said.values()) {
 			if (changes.length || facts.length) lines.push(`⏱ ${[
-				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
+				changes.length ? `（${changes.join("；")}）` : "",
 				facts.length ? `〔${facts.join("；")}〕` : "",
 			].join("")}`);
 			for (const d of denials) lines.push(`⏱ ✗ ${d}`);
@@ -512,16 +546,16 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		if (s.kind === "action") {
 			flush();
 			granted = s.ticks;
-			const changes = compact ? [] : narratableChanges(sim.def, s.changes).filter(perceivableOf(s));
+			const changes = compact ? [] : narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
-				changes.length ? `（${changes.map((c) => fmtChange(sim, c, shownDeparted)).join("；")}）` : "",
+				changes.length ? `（${changes.join("；")}）` : "",
 				s.facts?.length ? `〔${s.facts.join("；")}〕` : "",
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}：${s.reason}${tail}`);
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [], denials: [] };
 			if (s.ok) {
-				if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).filter(perceivableOf(s)));
+				if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null));
 				if (s.facts?.length) held.facts.push(...s.facts);
 			} else {
 				held.denials.push(renderDenial(sim.def, s.denial));
@@ -600,7 +634,22 @@ export class Simulation {
 		const perceive = this.def.edgePerception?.(world, this.player);
 		if (!perceive) return undefined;
 		const out: string[] = [];
-		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(edgeKey(r));
+		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(spanKey([r.from, r.to, r.type]));
+		return out;
+	}
+
+	/** 属性感知快照：全部在册实体 × 注册表属性键经谓词过滤（键为 spanKey 元组编码；缺省恒真 → undefined，零成本）。
+	 *  枚举注册表而非在场键：槽知觉覆盖缺席（缺席即状态——清空后的清单仍须可说「→ null」）。
+	 *  槽知觉与宿主知觉正交：prop 行的指称集只含值（居所迁移行的可说性系于值指称，不系于魂的自见性），
+	 *  故宿主可见性不是截面的维度，槽谓词是唯一的体验者相对门。 */
+	private propField(world: World): string[] | undefined {
+		const perceive = this.def.propPerception?.(world, this.player);
+		if (!perceive) return undefined;
+		const keys = Object.keys(this.def.props ?? {});
+		const out: string[] = [];
+		for (const e of world.entities) {
+			for (const k of keys) if (perceive(e, k)) out.push(spanKey([e.id, k]));
+		}
 		return out;
 	}
 
@@ -750,6 +799,7 @@ export class Simulation {
 		const at = s0.time;
 		const before = this.visibleIn(s0);
 		const edgesBefore = this.edgeField(s0, before);
+		const propsBefore = this.propField(s0);
 		const r = this.adjudicateRaw(action, before, s0);
 		let step: Omit<ActionStep, "field">;
 		if (r.ok) {
@@ -766,8 +816,10 @@ export class Simulation {
 		// 可见快照在落钟前闭合；无提交（法则拒绝或硬墙回滚）则边界未跨越，after 即 before
 		const afterVis = step.ok ? this.visible() : before;
 		const afterEdges = step.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
+		const afterProps = step.ok ? this.propField(this.world) : propsBefore;
 		const field: FieldSpan = { before: [...before], after: [...afterVis] };
 		if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
+		if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
 		const elapsed = step.ticks > 0 ? this.tick(step.ticks) : [];
 		return { step: { ...step, field }, elapsed };
 	}
@@ -813,6 +865,7 @@ export class Simulation {
 			// 快照先于运行：失败刻步与提交刻步携带同一形状的真实跨度
 			const before = this.visibleIn(s0);
 			const edgesBefore = this.edgeField(s0, before);
+			const propsBefore = this.propField(s0);
 			// 系统崩溃代谢为失败刻步：本系统产出作废，其余系统继续，时刻照走
 			let res: ReturnType<SystemRule["run"]> = null;
 			try {
@@ -826,8 +879,10 @@ export class Simulation {
 			const cc = this.commitChecked(s0, res.deltas, src);
 			const afterVis = cc.ok ? this.visible() : before;
 			const afterEdges = cc.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
+			const afterProps = cc.ok ? this.propField(this.world) : propsBefore;
 			const field: FieldSpan = { before: [...before], after: [...afterVis] };
 			if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
+			if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
 			const at = this.world.time;
 			if (!cc.ok) {
 				emit({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
@@ -850,13 +905,14 @@ export class Simulation {
 		return JSON.parse(JSON.stringify(this.world)) as World;
 	}
 
-	/** 状态视图：可见实体（grounding）× 注册表过滤 × 关系（端点可见 ∧ edgePerception）；digestExtra 入 extra 键。
-	 *  实体集与可见性门同源（同一 visibleIn）——模型可指名的必出现在视图。 */
+	/** 状态视图：可见实体（grounding）× internal 滤 ∧ 属性感知 × 关系（端点可见 ∧ edgePerception）；digestExtra 入 extra 键。
+	 *  实体集与可见性门同源（同一 visibleIn）——模型可指名的必出现在视图；卡上属性包同理：可感的值必在卡上，卡上的必可感。 */
 	digest(): string {
 		const w = this.readState();
 		const vis = this.visibleIn(w);
 		const perceiveEdge = this.def.edgePerception?.(w, this.player);
-		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e));
+		const perceiveProp = this.def.propPerception?.(w, this.player);
+		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e, perceiveProp));
 		const relations = w.relations.filter((r) => vis.has(r.from) && vis.has(r.to) && (!perceiveEdge || perceiveEdge(r)));
 		const view: Record<string, unknown> = { time: w.time, relations, entities };
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
@@ -918,6 +974,8 @@ export class Simulation {
 				continue;
 			}
 			if (d.op === "relSet") {
+				// 执行翼：type 是边身份的组成，非字符串/空串即身份退化（同一严格度：integrity 对存储边同查）
+				if (typeof d.type !== "string" || d.type === "") return refuse(`relSet ${String(d.from)}->${String(d.to)}: relation type must be non-empty string`);
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (prev === d.value) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);

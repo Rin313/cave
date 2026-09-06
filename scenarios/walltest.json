@@ -84,6 +84,13 @@
 			]
 		},
 		{
+			"name": "边身份契约：type 是边的身份组成（感知快照与可说性的键）——执行翼拒误型，存储边同查（状态翼）",
+			"steps": [
+				{ "name": "relSet 的 type 为数字：执行翼拒绝（身份退化不入账）", "action": { "verb": "mistype", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.relations": [] } } },
+				{ "name": "拒绝后的干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": [] } } }
+			]
+		},
+		{
 			"name": "级联删边入账：despawn 的机械后果逐条入账——变更流是后态的完整 diff（公理一）",
 			"steps": [
 				{ "name": "先结一条带值的边（弱引用的建立）", "action": { "verb": "bond", "params": {} }, "expect": { "ok": true, "lines": ["✓ 缔结：你与那件东西结下纽带。（你.标记.那件东西: null → 甲）"], "state": { "$world.relations.0.value": "甲" } } },

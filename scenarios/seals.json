@@ -3,19 +3,20 @@
 	"name": "封缄·宅邸夜：统一探针（展品→格子见 DESIGN.md 章程清单）",
 	"scenarios": [
 		{
-			"name": "拆读：信文经 digestExtra 重露（状态面闭合）；未知信文与隐藏边不泄漏",
+			"name": "拆读：信文经 propPerception 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
 			"steps": [
 				{ "name": "未持信而读：拒绝", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "read.notheld", "reason": "拿到手里", "lines": ["✗ 拆读(火漆信·盐引)：你得先把信拿到手里。"] } },
 				{ "name": "取信：持者与清单双变更可说（公共故事走机械行）；信文尚未入视野", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。（火漆信·盐引.持者: 书案 → 信使；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·粮价）"], "viewExcludes": ["盐引批文已托江苏会馆代办"] } },
-				{ "name": "拆读：断口可说（机械行），信文入法则理由（作者代笔特权）；状态面重露信文与亲和桶，未知信文与隐藏边零泄漏", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。（火漆信·盐引.火漆: true → false）"], "viewIncludes": ["盐引批文已托江苏会馆代办", "过从甚密"], "viewExcludes": ["秋粮定价每石四百钱", "信任", "知晓"] } }
+				{ "name": "拆读：断口可说（机械行），信文入法则理由；知晓立而信文入卡（propPerception），未知信文与隐藏边零泄漏", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。（火漆信·盐引.火漆: true → false）"], "viewIncludes": ["盐引批文已托江苏会馆代办", "过从甚密"], "viewExcludes": ["秋粮定价每石四百钱", "信任", "知晓"] } }
 			]
 		},
 		{
-			"name": "誊写：信文变更无机械行（存活格 1 的机械事件面判定）——精确行集即格子证词",
+			"name": "誊写：信文机械行随知晓立而可说、值侧分侧披露——精确行集即格子证词",
 			"steps": [
 				{ "name": "取信", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。（火漆信·粮价.持者: 书案 → 信使；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·盐引）"] } },
-				{ "name": "誊写：自由字符串参数（许愿径）入裁；变更行只有断口，信文 prev→next 对任何人不可说", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改为每石四百五十钱，事宜速办。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改为每石四百五十钱，事宜速办。)：你借着拆封的工夫，重新誊写了信文。（火漆信·粮价.火漆: true → false）"], "viewIncludes": ["每石四百五十钱"], "viewExcludes": ["勿为流言所动"], "state": { "letter_grain.content": "秋粮定价改为每石四百五十钱，事宜速办。" } } },
-				{ "name": "重读：知识已立（知晓边在案），零 delta 授予", "action": { "verb": "read", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "reason": "又读了一遍", "lines": ["✓ 拆读(火漆信·粮价)：你把火漆信·粮价又读了一遍，字句没有变。"] } }
+				{ "name": "誊写：自由字符串参数（许愿径）入裁；断口全披露，信文只披露采样侧（未读而誊——旧文不可知）", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改为每石四百五十钱，事宜速办。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改为每石四百五十钱，事宜速办。)：你借着拆封的工夫，重新誊写了信文。（火漆信·粮价.火漆: true → false；火漆信·粮价.信文: ? → 秋粮定价改为每石四百五十钱，事宜速办。）"], "viewIncludes": ["每石四百五十钱"], "viewExcludes": ["勿为流言所动"], "state": { "letter_grain.content": "秋粮定价改为每石四百五十钱，事宜速办。" } } },
+				{ "name": "重读：知识已立（知晓边在案），零 delta 授予", "action": { "verb": "read", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "reason": "又读了一遍", "lines": ["✓ 拆读(火漆信·粮价)：你把火漆信·粮价又读了一遍，字句没有变。"] } },
+				{ "name": "重誊（已知晓）：两侧采样齐备，值全披露——分侧披露的对照面", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改走漕运，每石四百五十钱。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改走漕运，每石四百五十钱。)：你借着拆封的工夫，重新誊写了信文。（火漆信·粮价.信文: 秋粮定价改为每石四百五十钱，事宜速办。 → 秋粮定价改走漕运，每石四百五十钱。）"], "state": { "letter_grain.content": "秋粮定价改走漕运，每石四百五十钱。" } } }
 			]
 		},
 		{
