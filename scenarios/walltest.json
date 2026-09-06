@@ -46,6 +46,14 @@
 			]
 		},
 		{
+			"name": "感知钩子的冻结契约：跨度两侧（裁决读态与提交后采样）都收冻结读态——武装钩子在未冻结读态上写账本即被状态断言捕获",
+			"steps": [
+				{ "name": "缔结（边值入账，供零污染断言）", "action": { "verb": "bond", "params": {} }, "expect": { "ok": true } },
+				{ "name": "武装感知越权：本步自身的提交后采样已在冻结读态上运行——hp 零污染", "action": { "verb": "spy", "params": {} }, "expect": { "ok": true, "state": { "player.spy": true, "player.hp": 10 } } },
+				{ "name": "干净提交照常：跨度两侧全程冻结，账本零污染（回归探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.hp": 10, "player.touched": 1, "$world.relations": [{ "from": "player", "to": "thing", "type": "标记", "value": "甲" }] } } }
+			]
+		},
+		{
 			"name": "账本形状：零边世界边表保持空表，零边授予不添形（公理一：凡后果必可说）",
 			"steps": [
 				{ "name": "无关系世界的授予提交后，边表仍是空表（缺席不是边表的形态，空表即无边）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": [], "player.touched": 1 } } }

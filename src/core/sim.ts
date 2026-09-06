@@ -673,8 +673,9 @@ export class Simulation {
 		return out;
 	}
 
-	/** 裁决读态：快照 + 深冻结。裁决侧代码（Q.world / grounding / digestExtra / summarize）一律收此读态——
-	 *  越权写即在冻结对象上抛错（walltest 钉住）；同时是提交的回滚基线。 */
+	/** 裁决读态：快照 + 深冻结。def 侧一切钩子（Q.world、grounding、edgePerception、propPerception、
+	 *  digestExtra、summarize）一律收此读态——越权写即在冻结对象上抛错（walltest 钉住跨度两侧）；
+	 *  同时是提交的回滚基线。 */
 	private readState(): World {
 		return deepFreeze(this.snapshot());
 	}
@@ -833,10 +834,17 @@ export class Simulation {
 		} else {
 			step = { kind: "action", at, ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
-		// 可见快照在落钟前闭合；无提交（法则拒绝或硬墙回滚）则边界未跨越，after 即 before
-		const afterVis = step.ok ? this.visible() : before;
-		const afterEdges = step.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
-		const afterProps = step.ok ? this.propField(this.world) : propsBefore;
+		// 可见快照在落钟前闭合；无提交（法则拒绝或硬墙回滚）则边界未跨越，after 即 before。
+		// 跨度两侧同一冻结契约：后侧与前侧同源于提交后读态，感知钩子不触活账本
+		let afterVis = before;
+		let afterEdges = edgesBefore;
+		let afterProps = propsBefore;
+		if (step.ok) {
+			const w1 = this.readState();
+			afterVis = this.visibleIn(w1);
+			afterEdges = this.edgeField(w1, afterVis);
+			afterProps = this.propField(w1);
+		}
 		const field: FieldSpan = { before: [...before], after: [...afterVis] };
 		if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
 		if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
@@ -892,11 +900,17 @@ export class Simulation {
 				continue;
 			}
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
-			// 每系统独立过墙；回滚即边界未跨越，after 即 before
+			// 每系统独立过墙；回滚即边界未跨越，after 即 before——后侧与前侧同源于提交后读态（冻结契约）
 			const cc = this.commitChecked(s0, res.deltas, src);
-			const afterVis = cc.ok ? this.visible() : before;
-			const afterEdges = cc.ok ? this.edgeField(this.world, afterVis) : edgesBefore;
-			const afterProps = cc.ok ? this.propField(this.world) : propsBefore;
+			let afterVis = before;
+			let afterEdges = edgesBefore;
+			let afterProps = propsBefore;
+			if (cc.ok) {
+				const w1 = this.readState();
+				afterVis = this.visibleIn(w1);
+				afterEdges = this.edgeField(w1, afterVis);
+				afterProps = this.propField(w1);
+			}
 			const field: FieldSpan = { before: [...before], after: [...afterVis] };
 			if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
 			if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };

@@ -4,9 +4,9 @@ import { Type } from "typebox";
 
 const num = (v: unknown): number => Number(v ?? 0);
 
-/** 结构墙夹具：裁决侧（规则/系统）与审查者（不变式）收冻结读态/冻结记录，越权写在冻结对象上即抛，
- *  崩溃在提交边界兑为墙否决。干净对照步区分「冻结副本」与「冻结活账本」：若回归把冻结误施于活账本
- *  （readState 冻结 this.world 而非副本），越权步之后的干净动作/刻步即红。 */
+/** 结构墙夹具：裁决侧（规则/系统）、审查者（不变式）与投影钩子（感知）收冻结读态/冻结记录，
+ *  越权写在冻结对象上即抛，崩溃在提交边界兑为墙否决。干净对照步区分「冻结副本」与「冻结活账本」：
+ *  若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），越权步之后的干净动作/刻步即红。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -18,6 +18,7 @@ const PROPS: Record<string, PropDef> = {
 	crash: { type: "boolean", internal: true },
 	gaze: { type: "boolean", internal: true },
 	phantom: { type: "boolean", internal: true },
+	spy: { type: "boolean", internal: true },
 	// 指称解析契约的字面/引用对照：note 是字面字符串（与实体 id 碰撞也不得解析），ref 是声明引用
 	note: { type: "string", label: "便签" },
 	ref: { type: "id", label: "指向" },
@@ -201,6 +202,12 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "veil.ok", judge: (q) => grant([D.set(q.player, "phantom", true)], "雾里多出了一段空白。") }],
 		}),
+		spy: defineVerb({
+			label: "窥伺",
+			description: "研究动词：武装感知钩子越权（未武装时钩子沉默）——感知钩子在未冻结读态上写账本即静默污染，跨度两侧都必须冻结。",
+			schema: Type.Object({}),
+			rules: [{ id: "spy.ok", judge: (q) => grant([D.set(q.player, "spy", true)], "感知已被武装。") }],
+		}),
 	},
 	world: {
 		time: 0,
@@ -242,6 +249,16 @@ export const walltest: GameDef = {
 		const ids = world.entities.map((e) => e.id);
 		if (world.entities.some((e) => e.props.phantom === true)) return [...ids, "ghost"];
 		return ids;
+	},
+	// 冻结契约的投影侧钉子：spy 武装后，感知钩子在未冻结读态上悄悄写账本——裁决读态与提交后采样两侧
+	// 都必须冻结，任一侧失守即污染活账本（场景锁以 hp 断言捕获）。edge 侧同契约不另设钩子：
+	// 边感知一经声明即激活值侧分侧门控，会改写既有行钉
+	propPerception: (world) => {
+		const armed = world.entities.some((e) => e.props.spy === true);
+		return (e) => {
+			if (armed && !Object.isFrozen(e)) e.props.hp = 999;
+			return true;
+		};
 	},
 	props: PROPS,
 	invariants: [{
