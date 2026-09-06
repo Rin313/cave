@@ -1,5 +1,5 @@
-// LLM 上下文裁剪：每次调用只见「近况投影 + 当前运行后缀」，会话文件仍保存全量审计。
-// 持久化事实是地籍条目（回合定稿：intent + steps——custom 条目不参与 LLM 上下文）；
+// 上下文裁剪：每次调用只见「近况投影 + 当前运行后缀」，会话文件仍保存全量审计。
+// 持久化事实是地籍条目（回合定稿：intent + steps）；
 // 近况为用时重算的投影，永不持久化，进程重启由条目重建。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { shownDepartedNames, spineLines, type Simulation, type Step } from "./sim.ts";

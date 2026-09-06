@@ -385,7 +385,7 @@ function opLabel(action: Action): string {
 
 /** 裁决地图：对每动词穷举指称参数 × 可见实体（每动作在初始世界的独立 Simulation 上裁决）。
  *  liveness＝法则×动词活性矩阵（法则 id 为行）：授予/拒绝/弃权/未达计数——
- *  永远弃权的法则（死法则，或条件未在初始域成立）只有这里显影，拒绝行清单看不见弃权。 */
+ *  永远弃权的法则（死法则，或条件未在初始域成立）只有这里可见，拒绝行清单看不见弃权。 */
 function probeDef(def: GameDef, maxCombos = 10000): {
 	rows: MapRow[];
 	grants: Map<string, number>;
@@ -520,7 +520,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（指称参数可用名称或 id）
     动作按裁决授予的刻数自动流逝；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举指称参数 × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态显影：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举指称参数 × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}

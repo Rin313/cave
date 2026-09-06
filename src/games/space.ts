@@ -15,7 +15,7 @@ const REACH_MSGS = {
 export interface SpaceOpts {
 	/** 覆盖构件内置的可达性理由文案（逐项合并）。 */
 	msgs?: Partial<typeof REACH_MSGS>;
-	/** 器皿布尔属性的键名（hostOf 键控用；承重墙：禁止特判实体 id）。缺省 "vessel"。 */
+	/** 器皿布尔属性的键名（hostOf 键控用，禁止特判实体 id）。缺省 "vessel"。 */
 	vesselProp?: string;
 }
 

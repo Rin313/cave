@@ -49,7 +49,6 @@ export interface ActOutcome {
 	proposals: { verb: string; params: unknown }[];
 	/** 过程报警 */
 	warnings: string[];
-	/** 单次 LLM 调用用量，按调用序。 */
 	usage: TokenUsage[];
 }
 
@@ -263,7 +262,7 @@ export class Engine {
 		};
 	}
 
-	/** 回合定稿（写点唯一）：条目入地籍（会话 custom 条目，不入 LLM 上下文），随后更新近况窗口。 */
+	/** 回合定稿（写点唯一）：条目入地籍（会话 custom 条目，不入上下文），随后更新近况窗口。 */
 	private recordTurn(intent: string, steps: Step[]): void {
 		const record: ChronicleEntry = { time: this.sim.world.time, intent, steps };
 		this.records.push(record);
@@ -308,7 +307,7 @@ export class Engine {
 	}
 }
 
-/** 上下文策略扩展：每次 LLM 调用前把消息裁剪为「近况 + 当前运行后缀」（core/context.ts），会话文件不受影响。 */
+/** 上下文策略扩展：每次调用前把消息裁剪为「近况 + 当前运行后缀」（core/context.ts），会话文件不受影响。 */
 function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExtension {
 	return {
 		name: "cave-context",

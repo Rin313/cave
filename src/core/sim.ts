@@ -231,7 +231,7 @@ export interface GameDef {
 	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
 	/** 近况窗口的地籍条目数——映射层指代与续接锚的时间视界 */
 	recentWindow: number;
-	/** 可见实体索引：决定哪些实体进 LLM 序列化。缺省全部可见 */
+	/** 可见实体索引：决定哪些实体进序列化。缺省全部可见 */
 	grounding?: (world: World, player: string) => string[];
 	/** 边感知（缺省恒真）：同一谓词约束状态视图的 relations 与事件投影的 rel 变更行；端点可见过滤是 core 内核，本谓词叠加其上。 */
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
