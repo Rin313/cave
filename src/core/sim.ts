@@ -589,10 +589,6 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 	return lines;
 }
 
-export function propGet(e: Entity, prop: string): PropValue {
-	return e.props[prop] ?? null;
-}
-
 export function relVal(world: World, from: string, to: string, type: string): LedgerValue | null {
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }

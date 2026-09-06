@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, fmtChange, propGet, refParamsOf, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, fmtChange, refParamsOf, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
 import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
@@ -91,7 +91,8 @@ function readPath(sim: Simulation, path: string): unknown {
 	}
 	const [id, ...rest] = path.split(".");
 	const e = sim.world.entities.find((x) => x.id === id);
-	return (e && rest.length > 0 ? propGet(e, rest.join(".")) : undefined) ?? null;
+	if (!e || rest.length === 0) return null;
+	return e.props[rest.join(".")] ?? null;
 }
 
 function checkState(sim: Simulation, checks: Record<string, unknown>): string {
