@@ -3,11 +3,9 @@ import { D, defineVerb, deny, entity, grant, relVal } from "../core/sim.ts";
 import { reachLaw } from "./space.ts";
 import { Type } from "typebox";
 
-/**
- * 梦核极研究探针：梦日记（Yume Nikki 式）。
- * 极少法则 + 极高自由：四个动词、零领域不变式、两个纯氛围系统
- * 验证目标：core 原语能否承载「发现即玩法」的世界，而不需要任何新机制。
- */
+/** 充分性对照（探针章程）：梦日记（Yume Nikki 式）。
+ * 证明「发现即玩法」——极少法则＋极高自由（四动词、零领域不变式、两个纯氛围系统）——
+ * 可以现有 core 原语表达；authored 形态的存在性证明，不承担证伪职能。 */
 
 const YUME_PROPS: Record<string, PropDef> = {
 	"in": { type: "id", label: "所在" },
