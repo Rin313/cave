@@ -12,7 +12,7 @@ import {
 import { Type } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
-import { Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step, type World } from "./sim.ts";
+import { Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -354,7 +354,7 @@ function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, inte
 	if (refused) lines.unshift(`玩家的意图 ${verbatim(intent ?? "")} 未被解析为可执行的操作，世界没有回应。`);
 	if (revealed.length) {
 		// 新见卡与状态视图同一装配线：投影钩子收冻结读态（快照克隆，冻结不落活账本）
-		const w = deepFreeze(JSON.parse(JSON.stringify(sim.world)) as World);
+		const w = deepFreeze(sim.snapshot());
 		const perceiveProp = sim.def.propPerception?.(w, sim.player);
 		lines.push("本回合新见：");
 		for (const id of revealed) {

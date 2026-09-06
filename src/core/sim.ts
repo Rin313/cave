@@ -45,7 +45,7 @@ export type Delta =
 
 /** 提交产出的变更记录（后态完整 diff）：prop/rename 只留 prev/next，rel 携带完整端点，spawn 携带完整后态实体
  *  （事件流自足于重放），despawn 携带展示名——离场者名字只存在于记录（见 shownDepartedNames）。
- *  出处是提交级事实，记录在步 src 与 InvariantCtx.src。 */
+ *  出处不进步记录（事件流是纯内容），只住在提交边界（InvariantCtx.src）。 */
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue }
 	| { kind: "rename"; entity: string; prev: string; next: string }
@@ -424,8 +424,6 @@ export interface ActionStep {
 	/** 结构化拒绝，供表达层/审计使用。 */
 	denial?: Denial;
 	facts?: Fact[];
-	/** 本提交的产出方（rule:<ruleId> / system:<systemId>）；拒绝态无提交故缺席。 */
-	src?: string;
 }
 
 /** apply 的结果：动作步 + 其授予刻数内产出的刻步（授予数以 ActionStep.ticks 为权威）。 */
@@ -437,8 +435,8 @@ export interface Resolution {
 /** 世界刻步：一刻内某个系统的产出（at 为钟已走到的时刻）。无 reason 通道；
  *  失败刻只来自必要性通道（硬墙否决 / system.crash）。 */
 export type TickStep =
-	| { kind: "tick"; at: number; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[]; src: string }
-	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; deniedBy: "invariant"; denial: Denial; src: string };
+	| { kind: "tick"; at: number; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
+	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; deniedBy: "invariant"; denial: Denial };
 
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
@@ -602,7 +600,7 @@ export function relVal(world: World, from: string, to: string, type: string): Le
 /** 裁决结果 + 未提交的 deltas（裁决与提交分离）；跨度由 apply 在提交边界闭合。
  *  拒绝态 deniedBy/denial 必填——否决必有来源；*.crash 无世界腔，noResponse 兜底。 */
 type RawResult =
-	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "src" | "deniedBy" | "denial">)
+	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">)
 	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">);
 
 export class Simulation {
@@ -834,7 +832,7 @@ export class Simulation {
 				// 硬墙回滚整个授予（含规则改写的刻数）：尝试本身仍消耗动词时价
 				step = { kind: "action", at, ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
 			} else {
-				step = { kind: "action", at, ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), src: r.src, ticks: r.ticks };
+				step = { kind: "action", at, ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), ticks: r.ticks };
 			}
 		} else {
 			step = { kind: "action", at, ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
@@ -894,7 +892,7 @@ export class Simulation {
 			try {
 				res = sys.run(this.query(s0, {}, src));
 			} catch (e) {
-				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, src, field: { before: [...before], after: [...before] } });
+				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, field: { before: [...before], after: [...before] } });
 				continue;
 			}
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
@@ -908,7 +906,7 @@ export class Simulation {
 			if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
 			const at = this.world.time;
 			if (!cc.ok) {
-				out.push({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, src, field });
+				out.push({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, field });
 				continue;
 			}
 			out.push({
@@ -917,7 +915,6 @@ export class Simulation {
 				ok: true,
 				changes: cc.changes,
 				...(res.facts !== undefined && { facts: res.facts }),
-				src,
 				field,
 			});
 		}
