@@ -93,7 +93,7 @@ export const seals: GameDef = {
 			description: "把书案上的一封信拿到手里（持者是你的躯体，清单随之销账）。",
 			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
-				id: "take.desk",
+				id: "desk",
 				judge: (q, p) => {
 					const t = isLetter(q, p.entity);
 					if (!t) return deny("take.notletter", { reason: "那不是能拿的信。" });
@@ -110,7 +110,7 @@ export const seals: GameDef = {
 			description: "细读手里的一封信：拆封会留下断口，信文自此为你所知。",
 			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
-				id: "read.held",
+				id: "held",
 				judge: (q, p) => {
 					const t = isLetter(q, p.entity);
 					if (!t) return deny("read.notletter", { reason: "那不是能读的信。" });
@@ -131,7 +131,7 @@ export const seals: GameDef = {
 				text: free("新信文全文"),
 			}),
 			rules: [{
-				id: "forge.held",
+				id: "held",
 				judge: (q, p) => {
 					const t = isLetter(q, p.entity);
 					if (!t) return deny("forge.notletter", { reason: "那不是能改的信。" });
@@ -150,7 +150,7 @@ export const seals: GameDef = {
 			description: "把手里的一封信放回书案（信件将照常送抵收信人）。",
 			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
-				id: "leave.held",
+				id: "held",
 				judge: (q, p) => {
 					const t = isLetter(q, p.entity);
 					if (!t) return deny("leave.notletter", { reason: "那不是信。" });
@@ -170,7 +170,7 @@ export const seals: GameDef = {
 				words: free("要说的话"),
 			}),
 			rules: [{
-				id: "talk.person",
+				id: "person",
 				judge: (q, p) => {
 					const t = entity(q.world, p.target);
 					if (!t || t.props.kind !== "person") return deny("talk.notperson", { reason: "那不是能交谈的人。" });
@@ -188,7 +188,7 @@ export const seals: GameDef = {
 			description: "揭下一位戴面具者的面具。",
 			schema: Type.Object({ target: ref("对方 id") }),
 			rules: [{
-				id: "unmask.masked",
+				id: "masked",
 				judge: (q, p) => {
 					const t = entity(q.world, p.target);
 					if (!t || t.props.mask !== true) return deny("unmask.nomask", { reason: "那人没有戴面具。" });
@@ -202,7 +202,7 @@ export const seals: GameDef = {
 			schema: Type.Object({ dest: ref("目的地 id") }),
 			cost: 1,
 			rules: [{
-				id: "go.path",
+				id: "path",
 				judge: (q, p) => {
 					const d = entity(q.world, p.dest);
 					if (!d || d.props.space !== true) return deny("go.noplace", { reason: "那里不是能去的地方。" });
@@ -219,7 +219,7 @@ export const seals: GameDef = {
 			description: "把神魂迁入一件能容魂的器皿（占据＝居所的迁移，一条 delta 过门）。",
 			schema: Type.Object({ entity: ref("器皿 id") }),
 			rules: [{
-				id: "channel.vessel",
+				id: "vessel",
 				judge: (q, p) => {
 					const t = entity(q.world, p.entity);
 					if (!t || t.props.vessel !== true) return deny("channel.notvessel", { reason: "那不是能容魂的东西。" });
@@ -233,7 +233,7 @@ export const seals: GameDef = {
 			description: "把一样东西掷进火盆（还系着它的东西得先解开：账上的、盛着的、挂在身上的）。",
 			schema: Type.Object({ entity: ref("目标 id") }),
 			rules: [{
-				id: "burn.tied",
+				id: "tied",
 				judge: (q, p) => {
 					const t = entity(q.world, p.entity);
 					if (!t) return deny("burn.gone", { reason: "那里已经什么都没有了。" });
@@ -248,7 +248,7 @@ export const seals: GameDef = {
 			description: "把一枚铜钱掷进火盆，看这一问的吉凶。",
 			schema: Type.Object({}),
 			rules: [{
-				id: "divine.lot",
+				id: "lot",
 				judge: (q) => grant([], `铜钱落进灰里：${q.roll("lot", 2) === 1 ? "吉" : "凶"}。`),
 			}],
 		}),
@@ -257,7 +257,7 @@ export const seals: GameDef = {
 			description: "在廊下站着：说等多久（span 为刻数，1–12，缺省一刻）。",
 			schema: Type.Object({ span: Type.Optional(Type.Number({ description: "刻数（1–12），缺省一刻" })) }),
 			rules: [{
-				id: "wait.pass",
+				id: "pass",
 				judge: (_q, p) => {
 					const span = Math.min(12, Math.max(1, Math.floor(Number(p.span ?? 1))));
 					return grant([], span >= 4 ? "你在廊下站了好一阵子。" : "你静静站了一会儿。", undefined, span);

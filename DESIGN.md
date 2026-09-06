@@ -21,7 +21,7 @@
 | `r = (from, to, type, v)` | Rel：存储边永不持 null——「无边」由边表缺席表达 | `Rel` |
 | `V = S ∪ S*` | 账本值 = 标量或标量数组；null 是缺席的记号，只活在值语言 | `LedgerValue` / `PropValue` |
 | `Δ` | 五原语 set/relSet/rename/spawn/despawn：绝对写，`w → w` 的偏函数，定义域 = 可执行性 | `Delta`、`commit` |
-| `G(Δ*, src) = C ⊎ Den` | 门 = 执行校验 + 不变式；原子性：拒 ⇒ w 不变；src ∈ rule:* / system:* / def | `commitChecked` |
+| `G(Δ*, src) = C ⊎ Den` | 门 = 执行校验 + 不变式；原子性：拒 ⇒ w 不变；src ∈ rule:<动词>.<id> / system:<id> / def | `commitChecked` |
 | `C` | 变更记录 = 后态的完整 diff（prev/next 自含） | `Change` |
 | `Q` | 裁决读态 (w 深冻结, player, t, params, roll)；越权写即抛 | `Q` |
 | `ref(a)`, `cost(v)` | `ref(a)` = 动词 a 的指称参数键集（schema 声明）；`cost(v)` = 尝试时价（刻，缺省 0，成败皆耗） | `refParamsOf`、`VerbDef.cost` |

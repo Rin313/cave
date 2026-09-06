@@ -16,7 +16,7 @@ export function withDevWait(def: GameDef): GameDef {
 				internal: true,
 				schema: Type.Object({ n: Type.Optional(Type.Number({ description: "刻数，缺省 1" })) }),
 				rules: [{
-					id: "dev.wait",
+					id: "wait",
 					judge: (_q, p) => grant([], "时间流逝。", undefined, Math.max(0, Math.floor(Number(p.n ?? 1)))),
 				}],
 			}),

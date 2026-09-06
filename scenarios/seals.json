@@ -66,8 +66,8 @@
 		{
 			"name": "占问：命运地址——同刻同源同键恒同签（随机是世界纯函数）",
 			"steps": [
-				{ "name": "零刻动词不推钟：首掷落定命运地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"], "state": { "$world.time": 0 } } },
-				{ "name": "同刻再掷：地址未变，同签（确定性骰子）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } }
+				{ "name": "零刻动词不推钟：首掷落定命运地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
+				{ "name": "同刻再掷：地址未变，同签（确定性骰子）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } }
 			]
 		}
 	]

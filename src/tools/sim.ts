@@ -393,7 +393,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	skipped: { verb: string; params: string[] }[];
 	total: number;
 	truncated: boolean;
-	liveness: Map<string, { verb: string; grant: number; deny: number; abstain: number; unreached: number }[]>;
+	liveness: Map<string, { grant: number; deny: number; abstain: number; unreached: number }>;
 } {
 	const sim = new Simulation(def);
 	const scope = [...sim.visible()];
@@ -463,7 +463,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		};
 		generate(0, {});
 	}
-	const liveness = new Map<string, { verb: string; grant: number; deny: number; abstain: number; unreached: number }[]>();
+	const liveness = new Map<string, { grant: number; deny: number; abstain: number; unreached: number }>();
 	const skippedVerbs = new Set(skipped.map((s) => s.verb));
 	for (const [verbName, verb] of Object.entries(def.verbs)) {
 		if (skippedVerbs.has(verbName)) continue;
@@ -471,10 +471,8 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		if (n === 0) continue; // 截断未覆盖的动词：矩阵行留空，由截断注记说明
 		for (const r of verb.rules) {
 			const s = stats.get(`${verbName}|${r.id}`) ?? { grant: 0, deny: 0, abstain: 0 };
-			const cell = { verb: verbName, ...s, unreached: n - s.grant - s.deny - s.abstain };
-			const list = liveness.get(r.id);
-			if (list) list.push(cell);
-			else liveness.set(r.id, [cell]);
+			// 行键 = 限定身份 verb.id：法则的同一性随出处路径，裸 id 跨动词不合并
+			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: n - s.grant - s.deny - s.abstain });
 		}
 	}
 	return { rows, grants, skipped, total, truncated, liveness };
@@ -485,10 +483,9 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const { rows, grants, skipped, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
-	for (const [law, cells] of liveness) {
-		const stated = cells.reduce((a, c) => a + c.grant + c.deny, 0);
-		const body = cells.map((c) => `${c.verb} ✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}`).join("  ");
-		console.log(`  ${law.padEnd(18)}${body}${stated === 0 ? "  ⚠ 零表态" : ""}`);
+	for (const [law, c] of liveness) {
+		const stated = c.grant + c.deny;
+		console.log(`  ${law.padEnd(18)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}${stated === 0 ? "  ⚠ 零表态" : ""}`);
 	}
 	console.log("");
 	const byVerb = new Map<string, MapRow[]>();

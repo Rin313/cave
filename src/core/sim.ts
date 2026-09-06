@@ -257,7 +257,7 @@ export interface InvariantCtx {
 	genesis: World;
 	/** 本次提交的全部变更（含 spawn/despawn）；每条规则/系统的提交独立过墙。 */
 	changes: Change[];
-	/** 本次提交的产出方（rule:<id> / system:<id> / def——构造期）。 */
+	/** 本次提交的产出方（rule:<动词>.<id> / system:<id> / def——构造期）。 */
 	src: string;
 }
 
@@ -611,9 +611,25 @@ export class Simulation {
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
+		// 出处 id 的同作用域唯一：重复即命运共享与归因歧义（def 结构错误，加载期拒绝，与 cost/参数形状同类）
+		const systemIds = new Set<string>();
+		for (const s of def.systems ?? []) {
+			if (systemIds.has(s.id)) throw new Error(`系统 id 重复：${s.id}`);
+			systemIds.add(s.id);
+		}
+		const invariantIds = new Set<string>();
+		for (const inv of def.invariants ?? []) {
+			if (invariantIds.has(inv.id)) throw new Error(`不变式 id 重复：${inv.id}`);
+			invariantIds.add(inv.id);
+		}
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
+			const ruleIds = new Set<string>();
+			for (const r of v.rules) {
+				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
+				ruleIds.add(r.id);
+			}
 			// 一次尝试＝一个裁决＝一个时价＝一个拒绝单位：多重性由批次承载，参数须为标量（账本值的标量数组是状态侧形状，不入尝试语言）
 			// 字符串参数的 kind 必须显式声明（ref＝指称、free＝自由字符串）——kind 住在词表，漏报在 def 加载时失败，不可静默 fail-open
 			for (const p of Object.keys(v.schema.properties)) {
@@ -712,21 +728,21 @@ export class Simulation {
 			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
 		}
 		for (const r of verb.rules) {
-			// Q 逐法则构造：命运地址继承出处命名空间
-			const src = `rule:${r.id}`;
-			const q = this.query(world, action.params, src);
+			// Q 逐法则构造：出处是 def 树的完整路径，命运地址元组编码整条路径（分隔符拼接有碰撞面）
+			const src = `rule:${action.verb}.${r.id}`;
+			const q = this.query(world, action.params, ["rule", action.verb, r.id]);
 			// 法则崩溃代谢为必要性否决：fail-closed，链终止，时价照耗；法则失灵无世界腔，noResponse 兜底
 			let v: Verdict | null;
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${r.id}: ${e instanceof Error ? e.message : String(e)}` }, ticks: cost };
+				return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${src}: ${e instanceof Error ? e.message : String(e)}` }, ticks: cost };
 			}
 			if (!v) continue;
 			if (v.ok) {
 				// 刻数违约走不变式通道拒绝（probe 据此报 bug），尝试仍耗动词时价
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
-					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `rule ${r.id} ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
+					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
 				return { ok: true, reason: v.reason ?? msgs.defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src, ticks: v.ticks ?? cost };
 			}
@@ -735,13 +751,14 @@ export class Simulation {
 		return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
 	}
 
-	private query(world: World, params: Record<string, Scalar>, src: string): Q {
+	/** path 是命运的机器身份（完整出处路径），src 是同一出处的可读渲染（InvariantCtx 审计面）——由调用方成对构造。 */
+	private query(world: World, params: Record<string, Scalar>, path: string[]): Q {
 		return {
 			world,
 			player: this.player,
 			time: world.time,
 			params,
-			roll: (key, sides) => rollDice(world, tupleKey([src, key]), sides),
+			roll: (key, sides) => rollDice(world, tupleKey([...path, key]), sides),
 		};
 	}
 
@@ -894,7 +911,7 @@ export class Simulation {
 			// 系统崩溃代谢为失败刻步：本系统产出作废，其余系统继续，时刻照走
 			let res: ReturnType<SystemRule["run"]> = null;
 			try {
-				res = sys.run(this.query(s0, {}, src));
+				res = sys.run(this.query(s0, {}, ["system", sys.id]));
 			} catch (e) {
 				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, field: { before: [...before], after: [...before] } });
 				continue;

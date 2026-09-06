@@ -46,7 +46,7 @@ export const walltest: GameDef = {
 			description: "干净动作：touched +1（对照：冻结不得误伤）。",
 			schema: Type.Object({}),
 			rules: [{
-				id: "touch.ok",
+				id: "ok",
 				judge: (q) => {
 					const me = entity(q.world, q.player)!;
 					return grant([D.set(q.player, "touched", num(me.props.touched) + 1)], "你触到了世界。");
@@ -58,7 +58,7 @@ export const walltest: GameDef = {
 			description: "越权动词：规则直改 hp 后授予（冻结读态上写入即抛，授予不存在）。",
 			schema: Type.Object({}),
 			rules: [{
-				id: "poke.leak",
+				id: "leak",
 				judge: (q) => {
 					leakHp(q);
 					const me = entity(q.world, q.player)!;
@@ -71,7 +71,7 @@ export const walltest: GameDef = {
 			description: "越权动词：规则直改 q.world.time（冻结读态上写入即抛——钟的唯一写者是落钟循环）。",
 			schema: Type.Object({}),
 			rules: [{
-				id: "clockpoke.leak",
+				id: "leak",
 				judge: (q) => {
 					q.world.time += 1;
 					return grant([], "钟被拨了。");
@@ -82,14 +82,14 @@ export const walltest: GameDef = {
 			label: "触封印",
 			description: "合法授予但被领域不变式否决（墙否决路径：原子回滚后账本必须仍可提交）。",
 			schema: Type.Object({}),
-			rules: [{ id: "trip.grant", judge: (q) => grant([D.set(q.player, "vault", true)], "你碰了封印。") }],
+			rules: [{ id: "grant", judge: (q) => grant([D.set(q.player, "vault", true)], "你碰了封印。") }],
 		}),
 		sneakpoke: defineVerb({
 			label: "触潜标",
 			description: "越权动词：授予后触发审查者（sneaky 不变式）直改账本——冻结读态上写入即抛，崩溃在提交边界兑为墙否决。",
 			schema: Type.Object({}),
 			rules: [{
-				id: "sneakpoke.grant",
+				id: "grant",
 				judge: (q) => {
 					const me = entity(q.world, q.player)!;
 					return grant([D.set(q.player, "sneak", num(me.props.sneak) + 1)], "你碰了潜标。");
@@ -100,73 +100,73 @@ export const walltest: GameDef = {
 			label: "夹带",
 			description: "越权动词：规则铸出对象形状的 delta——提交翼拒为非账本值（可单行线性化），整提交回滚。",
 			schema: Type.Object({}),
-			rules: [{ id: "smuggle.leak", judge: (q) => grant([D.set(q.player, "note", { a: 1 } as unknown as PropValue)], "你夹带了。") }],
+			rules: [{ id: "leak", judge: (q) => grant([D.set(q.player, "note", { a: 1 } as unknown as PropValue)], "你夹带了。") }],
 		}),
 		arm: defineVerb({
 			label: "武装",
 			description: "研究动词：武装 leak.tick 的刻步越权（未武装时该系统沉默，让被拦刻步有干净的刻可测）。",
 			schema: Type.Object({}),
-			rules: [{ id: "arm.ok", judge: (q) => grant([D.set(q.player, "armed", true)], "系统越权已武装。") }],
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "armed", true)], "系统越权已武装。") }],
 		}),
 		tag: defineVerb({
 			label: "标记",
 			description: "字面与引用同值写入：字面字符串保持字面，id 型属性解析为展示名。",
 			schema: Type.Object({}),
-			rules: [{ id: "tag.ok", judge: (q) => grant([D.set(q.player, "note", "thing"), D.set(q.player, "ref", "thing")], "你写下了标记。") }],
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "note", "thing"), D.set(q.player, "ref", "thing")], "你写下了标记。") }],
 		}),
 		junkspawn: defineVerb({
 			label: "夹带生灭",
 			description: "墙契约：spawn 带实体形状外的顶层键——形状封闭拒绝（公理一）。",
 			schema: Type.Object({}),
-			rules: [{ id: "junkspawn.leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
+			rules: [{ id: "leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
 		}),
 		nullspawn: defineVerb({
 			label: "空壳生灭",
 			description: "墙契约：spawn 的属性含 null——账本值不含 null（缺席是键不在场），提交翼拒绝。",
 			schema: Type.Object({}),
-			rules: [{ id: "nullspawn.leak", judge: () => grant([D.spawn({ id: "hollow", name: "空壳", props: { hp: null } } as unknown as Entity)], "你召唤了空壳。") }],
+			rules: [{ id: "leak", judge: () => grant([D.spawn({ id: "hollow", name: "空壳", props: { hp: null } } as unknown as Entity)], "你召唤了空壳。") }],
 		}),
 		clear: defineVerb({
 			label: "抹除",
 			description: "缺席契约：set null 即清（删键）——账本不存 null，缺席读为 null。",
 			schema: Type.Object({}),
-			rules: [{ id: "clear.ok", judge: (q) => grant([D.set(q.player, "note", null), D.set(q.player, "ref", null)], "你抹去了字迹。") }],
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "note", null), D.set(q.player, "ref", null)], "你抹去了字迹。") }],
 		}),
 		blank: defineVerb({
 			label: "置空引用",
 			description: "墙契约：id 引用写空串——无哨兵惯例（「无引用」由缺席表达，清除写 null 即删键），integrity 拒绝。",
 			schema: Type.Object({}),
-			rules: [{ id: "blank.leak", judge: (q) => grant([D.set(q.player, "ref", "")], "你写下了一段空白。") }],
+			rules: [{ id: "leak", judge: (q) => grant([D.set(q.player, "ref", "")], "你写下了一段空白。") }],
 		}),
 		edgearr: defineVerb({
 			label: "数组边",
 			description: "墙契约：边值与属性值同一账本形状——标量数组合法入账。",
 			schema: Type.Object({}),
-			rules: [{ id: "edgearr.ok", judge: () => grant([D.relSet("player", "thing", "标记", ["甲"])], "你系了一条带标记的边。") }],
+			rules: [{ id: "ok", judge: () => grant([D.relSet("player", "thing", "标记", ["甲"])], "你系了一条带标记的边。") }],
 		}),
 		mistype: defineVerb({
 			label: "误型",
 			description: "墙契约：relSet 的关系类型为数字——type 是边身份的组成，非字符串 token 执行翼拒绝。",
 			schema: Type.Object({}),
-			rules: [{ id: "mistype.leak", judge: () => grant([D.relSet("player", "thing", 123 as unknown as string, "甲")], "你系了一条无名边。") }],
+			rules: [{ id: "leak", judge: () => grant([D.relSet("player", "thing", 123 as unknown as string, "甲")], "你系了一条无名边。") }],
 		}),
 		edgeobj: defineVerb({
 			label: "对象边",
 			description: "墙契约：对象形状不是账本值——提交翼拒绝，整提交回滚（边值与属性值同一账本形状）。",
 			schema: Type.Object({}),
-			rules: [{ id: "edgeobj.leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as LedgerValue)], "你夹带了。") }],
+			rules: [{ id: "leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as LedgerValue)], "你夹带了。") }],
 		}),
 		bond: defineVerb({
 			label: "缔结",
 			description: "级联场景前置：与那件东西结一条带值的关系边（弱引用的建立）。",
 			schema: Type.Object({}),
-			rules: [{ id: "bond.ok", judge: () => grant([D.relSet("player", "thing", "标记", "甲")], "你与那件东西结下纽带。") }],
+			rules: [{ id: "ok", judge: () => grant([D.relSet("player", "thing", "标记", "甲")], "你与那件东西结下纽带。") }],
 		}),
 		sever: defineVerb({
 			label: "断绝",
 			description: "墙契约：despawn 那件东西——级联删边逐条入账（despawn 记录在前，边消散紧随，边表序）。",
 			schema: Type.Object({}),
-			rules: [{ id: "sever.ok", judge: () => grant([D.despawn("thing")], "你斩断了那件东西。") }],
+			rules: [{ id: "ok", judge: () => grant([D.despawn("thing")], "你斩断了那件东西。") }],
 		}),
 		boom: defineVerb({
 			label: "崩坏",
@@ -174,39 +174,39 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			cost: 2,
 			rules: [
-				{ id: "boom.first", judge: () => { throw new Error("法则在半空碎裂"); } },
-				{ id: "boom.fallback", judge: () => deny("boom.fallback", { reason: "兜底法则不应被触及——崩溃链即终止。" }) },
+				{ id: "first", judge: () => { throw new Error("法则在半空碎裂"); } },
+				{ id: "fallback", judge: () => deny("boom.fallback", { reason: "兜底法则不应被触及——崩溃链即终止。" }) },
 			],
 		}),
 		detonate: defineVerb({
 			label: "引爆",
 			description: "研究动词：武装 boom.tick 的系统失灵（未引爆时该系统沉默）。",
 			schema: Type.Object({}),
-			rules: [{ id: "detonate.ok", judge: (q) => grant([D.set(q.player, "crash", true)], "系统失灵已布下。") }],
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "crash", true)], "系统失灵已布下。") }],
 		}),
 		blindfold: defineVerb({
 			label: "蒙眼",
 			description: "投影缺陷夹具：授予 gaze=true——提交后感知快照崩溃，apply 原子回滚后重抛。",
 			schema: Type.Object({}),
-			rules: [{ id: "blindfold.grant", judge: (q) => grant([D.set(q.player, "gaze", true)], "你蒙上了眼。") }],
+			rules: [{ id: "grant", judge: (q) => grant([D.set(q.player, "gaze", true)], "你蒙上了眼。") }],
 		}),
 		beckon: defineVerb({
 			label: "召唤",
 			description: "参照域契约夹具：对参照域内的实体召唤（干净授予）；域外 id 由可见性门拒绝。",
 			schema: Type.Object({ target: ref("目标实体 id") }),
-			rules: [{ id: "beckon.ok", judge: () => grant([], "你朝那东西招了招手。") }],
+			rules: [{ id: "ok", judge: () => grant([], "你朝那东西招了招手。") }],
 		}),
 		veil: defineVerb({
 			label: "起雾",
 			description: "研究动词：让感知谎报一个不存在的 id（参照域夹具开关）。",
 			schema: Type.Object({}),
-			rules: [{ id: "veil.ok", judge: (q) => grant([D.set(q.player, "phantom", true)], "雾里多出了一段空白。") }],
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "phantom", true)], "雾里多出了一段空白。") }],
 		}),
 		spy: defineVerb({
 			label: "窥伺",
 			description: "研究动词：武装感知钩子越权（未武装时钩子沉默）——感知钩子在未冻结读态上写账本即静默污染，跨度两侧都必须冻结。",
 			schema: Type.Object({}),
-			rules: [{ id: "spy.ok", judge: (q) => grant([D.set(q.player, "spy", true)], "感知已被武装。") }],
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "spy", true)], "感知已被武装。") }],
 		}),
 	},
 	world: {
