@@ -9,7 +9,7 @@ export type CtxMessages = ContextEvent["messages"];
 export interface ChronicleEntry {
 	time: number;
 	steps: Step[];
-	/** 提案者声明（玩家原话 / 仪器直达的声明），逐字入账。 */
+	/** 玩家原话，逐字入账。 */
 	intent: string;
 }
 

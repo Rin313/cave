@@ -263,19 +263,6 @@ export class Engine {
 		};
 	}
 
-	/** 直达回合：提案不经映射译码直接受理（研究仪器/作者代码）——同一裁决边界与硬墙，同一回合定稿写点。
-	 *  意志即提案者：intent 是提案者的声明，逐字入地籍与近况。无门闩——门闩封的是模型不是提案者。
-	 *  投影/内核缺陷抛出时，已裁决步照常入账（与世界互证），异常原样传给调用方。 */
-	directTurn(intent: string, actions: readonly Action[]): Step[] {
-		const steps: Step[] = [];
-		try {
-			applyBatch(this.sim, actions, steps);
-		} finally {
-			if (steps.length) this.recordTurn(intent, steps);
-		}
-		return steps;
-	}
-
 	/** 回合定稿（写点唯一）：条目入地籍（会话 custom 条目，不入 LLM 上下文），随后更新近况窗口。 */
 	private recordTurn(intent: string, steps: Step[]): void {
 		const record: ChronicleEntry = { time: this.sim.world.time, intent, steps };
@@ -388,7 +375,7 @@ function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string)
 	return lines.join("\n");
 }
 
-/** 提案批次内核（act 与直达回合共用同一执行路径）：静态形态批次预检在首个裁决前抛出
+/** act 的提案批次内核：静态形态批次预检在首个裁决前抛出
  *  （否则已裁决动作失去记录），逐动作落钟——后一动作在后一世界态上裁决。
  *  已裁决步实时入 sink：投影/内核缺陷中途抛出时，先于中断动作的步已在册。 */
 function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): void {

@@ -12,7 +12,7 @@ export function withDevWait(def: GameDef): GameDef {
 			...def.verbs,
 			[DEV_WAIT]: defineVerb({
 				label: "流逝",
-				description: "研究摇钟：直达提案推进 n 刻（工具层合成的内部动词，映射层不可见）。",
+				description: "研究摇钟：推进 n 刻（工具层合成的内部动词，映射层不可见；场景 tick 脱糖与探针控制台经裸 apply 消费）。",
 				internal: true,
 				schema: Type.Object({ n: Type.Optional(Type.Number({ description: "刻数，缺省 1" })) }),
 				rules: [{

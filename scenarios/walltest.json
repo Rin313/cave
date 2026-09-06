@@ -106,6 +106,13 @@
 				{ "name": "幻影不可指名：门拒绝，与幻觉 id 同一文案（无存在性 oracle）；域外指称在尝试行原样回显", "action": { "verb": "beckon", "params": { "target": "ghost" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "世界没有回应", "lines": ["✗ 召唤(ghost)：世界没有回应。"] } },
 				{ "name": "谎报不误伤：在册实体照常可指名（干净对照步）", "action": { "verb": "beckon", "params": { "target": "thing" } }, "expect": { "ok": true } }
 			]
+		},
+		{
+			"name": "前置门两站点：静态形态违约错在裁决之外——内核收到即调用方违约，抛 ProtocolViolation（裁决与落钟不发生，无尝试无时价）",
+			"steps": [
+				{ "name": "未知动词：action.unknown 协议违约，世界为调用前原状", "action": { "verb": "no_such_verb", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "player.touched": 0 } } },
+				{ "name": "schema 违约：未知参数被 additionalProperties 拒绝（action.schema），世界同样不动", "action": { "verb": "touch", "params": { "x": 1 } }, "expect": { "protocol": "action.schema", "state": { "$world.time": 0, "player.touched": 0 } } }
+			]
 		}
 	]
 }

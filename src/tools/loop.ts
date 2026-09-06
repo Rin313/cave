@@ -5,7 +5,6 @@ import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
 import { Simulation, spineLines } from "../core/sim.ts";
 import type { World } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
-import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 interface RunMeta {
@@ -130,8 +129,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	// withDevWait 挂 internal 研究动词：wait 走同一裁决边界
-	const sim = new Simulation(withDevWait(def), loadState(dir));
+	const sim = new Simulation(def, loadState(dir));
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
 	try {
 		await fn({ dir, meta, sim, engine });
@@ -150,7 +148,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
 	mkdirSync(dir, { recursive: true });
-	const sim = new Simulation(withDevWait(def));
+	const sim = new Simulation(def);
 	const sessionManager = SessionManager.create(process.cwd(), dir);
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(gameId), sessionManager });
 	try {
@@ -198,7 +196,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 	});
 }
 
-/** 顺序执行意图文件（一行一意图；#注释/@wait N）；同一引擎会话内连跑，A/B 意图集用。 */
+/** 顺序执行意图文件（一行一意图；#注释跳过）；同一引擎会话内连跑，A/B 意图集用。 */
 async function cmdBatch(runId: string, file: string, gameId: string | undefined): Promise<void> {
 	const lines = readFileSync(file, "utf8").split(/\r?\n/)
 		.map((l) => l.trim())
@@ -207,21 +205,14 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, meta, sim, engine } = ctx;
 		for (const line of lines) {
-			if (line.startsWith("@wait")) {
-				const n = Number(line.split(/\s+/)[1] ?? 1);
-				const steps = engine.directTurn(`（时间流逝 ${n} 刻）`, [devWait(n)]);
-				appendTranscript(dir, { phase: "wait", ticks: n, steps, usage: [] });
-				console.log(`\n【wait ${n}】${spineLines(sim, steps).join("；")}`);
-			} else {
-				const outcome = await engine.act({ intent: line });
-				meta.turn += 1;
-				appendTranscript(dir, {
-					turn: meta.turn, phase: "act", intent: line, selection: null,
-					proposals: outcome.proposals, steps: outcome.steps,
-					narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
-				});
-				printAct(sim, { turn: meta.turn, intent: line, outcome, brief: true });
-			}
+			const outcome = await engine.act({ intent: line });
+			meta.turn += 1;
+			appendTranscript(dir, {
+				turn: meta.turn, phase: "act", intent: line, selection: null,
+				proposals: outcome.proposals, steps: outcome.steps,
+				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
+			});
+			printAct(sim, { turn: meta.turn, intent: line, outcome, brief: true });
 			persistRun(ctx);
 		}
 	});
@@ -232,24 +223,6 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 		const { narration: scene, warnings, usage } = await engine.narrate(instruction);
 		appendTranscript(dir, { phase: "render", instruction, scene, warnings, usage });
 		console.log(`\n【render】${instruction}`);
-		console.log(scene);
-		warnWarnings(warnings);
-		const u = usageLine(usage);
-		if (u) console.log(u);
-	});
-}
-
-async function cmdWait(runId: string, n: number, gameId: string | undefined): Promise<void> {
-	await withEngine(runId, gameId, async (ctx) => {
-		const { dir, sim, engine } = ctx;
-		const steps = engine.directTurn(`（时间流逝 ${n} 刻）`, [devWait(n)]);
-		const { narration: scene, warnings, usage } = await engine.narrate(
-			"时间流逝。请用文学笔触描写当前场景发生的变化。",
-			steps,
-		);
-		persistRun(ctx);
-		appendTranscript(dir, { phase: "wait", ticks: n, steps, scene, warnings, usage });
-		console.log(`\n【wait ${n}】${spineLines(sim, steps).join("；")}`);
 		console.log(scene);
 		warnWarnings(warnings);
 		const u = usageLine(usage);
@@ -282,7 +255,6 @@ interface ReportRow {
 	provider?: string;
 	model?: string;
 	acts: number;
-	waits: number;
 	tin: number;
 	tout: number;
 	cread: number;
@@ -300,7 +272,7 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 			const dir = join(gdir, id);
 			const tp = transcriptPath(dir);
 			if (!existsSync(tp)) continue;
-			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, waits: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
+			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
 			try {
 				const meta = readJson<Partial<RunMeta>>(metaPath(dir));
 				if (meta.provider !== undefined) row.provider = meta.provider;
@@ -317,7 +289,6 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 					continue;
 				}
 				if (e.phase === "act") row.acts++;
-				if (e.phase === "wait") row.waits++;
 				for (const u of Array.isArray(e.usage) ? e.usage : []) {
 					row.tin += u.input;
 					row.tout += u.output;
@@ -345,13 +316,13 @@ function printReport(rows: ReportRow[], gameId: string | undefined): void {
 		const trend = r.firstIn != null ? `${k(r.firstIn)}→${k(r.lastIn ?? 0)}` : "-";
 		const model = [r.provider, r.model].filter(Boolean).join("/") || "-";
 		console.log(
-			`${r.dir.padEnd(26)} ${model.padEnd(24)} act=${r.acts} wait=${r.waits}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
+			`${r.dir.padEnd(26)} ${model.padEnd(24)} act=${r.acts}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
 		);
 	}
 	if (rows.length > 1) {
 		const sum = (f: (r: ReportRow) => number): number => rows.reduce((a, r) => a + f(r), 0);
 		console.log(
-			`${"TOTAL".padEnd(26)} ${"-".padEnd(24)} act=${sum((r) => r.acts)} wait=${sum((r) => r.waits)}  出 ${k(sum((r) => r.tout))}`,
+			`${"TOTAL".padEnd(26)} ${"-".padEnd(24)} act=${sum((r) => r.acts)}  出 ${k(sum((r) => r.tout))}`,
 		);
 	}
 }
@@ -372,15 +343,14 @@ async function main() {
   loop batch <intents.txt> --run <id> [--game <id>]
   loop render --run <id> [--instruction <指令>] [--game <id>]
   loop state --run <id> [--game <id>]
-  loop wait <n> --run <id> [--game <id>]
   loop report [--game <id>]
   loop reset --run <id> [--game <id>]
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
-batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过；@wait N 为时间流逝 N 刻。
-render/wait 是研究仪器操作（回合计数不增）：render 调用场景呈现服务；wait 以合成研究动词作直达提案过裁决落钟（tools/dev.ts），回合定稿入地籍（意志即提案者）。
+batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过。
+render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合），引擎无第二条提案通道。
 report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
---game 在 act/batch/render/state/wait 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
+--game 在 act/batch/render/state 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
 `);
 		return;
@@ -410,11 +380,6 @@ report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示
 		case "render":
 			await cmdRender(runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。", gameId);
 			return;
-		case "wait": {
-			const n = Number(positionals[0] ?? flagStr(a, "n") ?? 1);
-			await cmdWait(runId, n, gameId);
-			return;
-		}
 		case "state":
 			await cmdState(runId, gameId);
 			return;
