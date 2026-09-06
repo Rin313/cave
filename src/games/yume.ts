@@ -3,7 +3,7 @@ import { D, defineVerb, deny, entity, grant, relVal } from "../core/sim.ts";
 import { reachLaw } from "./space.ts";
 import { Type } from "typebox";
 
-/** 充分性对照（探针章程）：梦日记（Yume Nikki 式）。
+/** 梦日记（Yume Nikki 式）。
  * 证明「发现即玩法」——极少法则＋极高自由（四动词、零领域不变式、两个纯氛围系统）——
  * 可以现有 core 原语表达；authored 形态的存在性证明，不承担证伪职能。 */
 

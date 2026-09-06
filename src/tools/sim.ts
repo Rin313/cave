@@ -24,6 +24,9 @@ interface StepExpect {
 	lines?: string[];
 	/** 步骤后的状态断言：`实体.属性` 点径或 `$world.*` 世界径，deepEq。 */
 	state?: Record<string, unknown>;
+	/** 步骤后的状态视图断言：digest() 的子串包含/排除——感知通道（internal 重露、边隐藏、extra 纹理）的契约锁。 */
+	viewIncludes?: string[];
+	viewExcludes?: string[];
 }
 
 interface ScenarioStep {
@@ -145,6 +148,13 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Step[]; er
 	if (e.lines) {
 		const got = spineLines(sim, ex.steps);
 		if (got.length !== e.lines.length || e.lines.some((l, i) => got[i] !== l)) p.push(`lines: 期望 ${JSON.stringify(e.lines)}，实际 ${JSON.stringify(got)}`);
+	}
+	if (e.viewIncludes?.length || e.viewExcludes?.length) {
+		const view = sim.digest();
+		const missing = (e.viewIncludes ?? []).filter((s) => !view.includes(s));
+		const leaked = (e.viewExcludes ?? []).filter((s) => view.includes(s));
+		if (missing.length) p.push(`viewIncludes: 视图中缺席 ${JSON.stringify(missing)}`);
+		if (leaked.length) p.push(`viewExcludes: 视图中泄漏 ${JSON.stringify(leaked)}`);
 	}
 	return p;
 }

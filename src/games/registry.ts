@@ -1,12 +1,8 @@
 import type { GameDef } from "../core/sim.ts";
-import { village } from "./village.ts";
-import { walltest } from "./walltest.ts";
-import { yume } from "./yume.ts";
+import { seals } from "./seals.ts";
 
 export const GAMES: Record<string, GameDef> = {
-	[village.id]: village,
-	[yume.id]: yume,
-	[walltest.id]: walltest
+	[seals.id]: seals,
 };
 
 export function getGame(id: string): GameDef {
