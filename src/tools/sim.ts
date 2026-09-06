@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, fmtChange, propGet, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, fmtChange, propGet, refParamsOf, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
 import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
@@ -265,29 +265,29 @@ function parseScalar(s: string): Scalar {
 	return s;
 }
 
-/** 实体参数解析：按 id 或 name 匹配当前世界的实体（不存在的字符串原样返回）。 */
+/** 指称参数解析：按 id 或 name 匹配当前世界的实体（不存在的字符串原样返回）。 */
 function resolveEntity(v: string, sim: Simulation): string {
 	const hit = sim.world.entities.find((e) => e.name === v || e.id === v);
 	return hit ? hit.id : v;
 }
 
-/** CLI 动作解析：实体参数（entityParams）按 id/name 解析，其余参数按动词 schema 的属性顺序解析为标量。 */
+/** CLI 动作解析：指称参数按 id/name 解析，自由字符串与其余参数按动词 schema 的属性顺序解析为标量。 */
 function parseActionToken(token: string, sim: Simulation): Action {
 	const [verbName, ...rest] = token.split(/\s+/);
 	const verb = sim.def.verbs[verbName!];
 	if (!verb) {
-		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；advance n 研究摇钟；实体参数可用名称或 id）`);
+		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；advance n 研究摇钟；指称参数可用名称或 id）`);
 	}
 	const paramOrder = Object.keys(verb.schema.properties);
 	if (rest.length > paramOrder.length) {
 		throw new Error(`动词「${verbName}」最多接受 ${paramOrder.length} 个参数（${paramOrder.join(" ")}），得到 ${rest.length} 个`);
 	}
-	const entityParams = verb.entityParams ?? [];
+	const refs = new Set(refParamsOf(verb));
 	const params: Record<string, Scalar> = {};
 	rest.forEach((raw, i) => {
 		const p = paramOrder[i];
 		if (p === undefined) return;
-		params[p] = entityParams.includes(p) ? resolveEntity(raw, sim) : parseScalar(raw);
+		params[p] = refs.has(p) ? resolveEntity(raw, sim) : parseScalar(raw);
 	});
 	return { verb: verbName!, params };
 }
@@ -383,7 +383,7 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-/** 裁决地图：对每动词穷举 entityParams × 可见实体（每动作在初始世界的独立 Simulation 上裁决）。
+/** 裁决地图：对每动词穷举指称参数 × 可见实体（每动作在初始世界的独立 Simulation 上裁决）。
  *  liveness＝法则×动词活性矩阵（法则 id 为行）：授予/拒绝/弃权/未达计数——
  *  永远弃权的法则（死法则，或条件未在初始域成立）只有这里显影，拒绝行清单看不见弃权。 */
 function probeDef(def: GameDef, maxCombos = 10000): {
@@ -442,21 +442,21 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 
 	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName]!;
-		const entityParams = verb.entityParams ?? [];
-		// 必填非实体参数的探测域无法机械穷举：显式跳过而非报违约
-		const required = ((verb.schema as unknown as { required?: string[] }).required ?? []).filter((p) => !entityParams.includes(p));
+		const refs = refParamsOf(verb);
+		// 必填非指称参数（自由字符串）的探测域无法机械穷举：显式跳过而非报违约
+		const required = ((verb.schema as unknown as { required?: string[] }).required ?? []).filter((p) => !refs.includes(p));
 		if (required.length) {
 			skipped.push({ verb: verbName, params: required });
 			continue;
 		}
 		const generate = (idx: number, acc: Record<string, Scalar>): void => {
 			if (truncated) return;
-			if (idx === entityParams.length) {
+			if (idx === refs.length) {
 				probeAction({ verb: verbName, params: { ...acc } });
 				return;
 			}
 			for (const v of scope) {
-				acc[entityParams[idx]!] = v;
+				acc[refs[idx]!] = v;
 				generate(idx + 1, acc);
 			}
 		};
@@ -503,7 +503,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 		console.log(`「${verbName}」✓ ×${grants.get(verbName) ?? 0}${vr.length ? `  ✗ ×${vr.length}` : ""}`);
 		for (const r of vr) console.log(`  ✗ ${r.op} → ${r.law}「${r.reason}」${r.bug ? ` ⚠ ${r.bug}` : ""}`);
 	}
-	for (const s of skipped) console.log(`「${s.verb}」跳过：必填参数 ${s.params.join("/")} 不在 entityParams，探测域无法机械穷举`);
+	for (const s of skipped) console.log(`「${s.verb}」跳过：必填参数 ${s.params.join("/")} 不是指称参数，探测域无法机械穷举`);
 	const bugs = rows.filter((r) => r.bug);
 	console.log(`\n执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
 	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.bug}`);
@@ -518,9 +518,9 @@ async function main(): Promise<void> {
   sim scenario <scenario.json>    运行单个法则引擎场景验证（场景文件内声明 game）
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
-    action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（实体参数可用名称或 id）
+    action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（指称参数可用名称或 id）
     动作按裁决授予的刻数自动流逝；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举 entityParams × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态显影：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举指称参数 × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态显影：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}

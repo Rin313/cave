@@ -12,7 +12,7 @@ import {
 import { Type } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
-import { Simulation, entity, spineLines, viewCard, type Action, type GameDef, type Step, type World } from "./sim.ts";
+import { Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step, type World } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -332,11 +332,11 @@ function buildSystemPrompt(def: GameDef): string {
 	// internal 动词不进系统提示：不可提案的动词在工具边界同样被拒
 	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
 		.map(([name, v]) => {
-			const refs = v.entityParams ?? [];
-			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（实体参数：${refs.join("/")}——只能取可见实体 id）` : ""}`;
+			const refs = refParamsOf(v);
+			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（指称参数：${refs.join("/")}——只能取可见实体 id）` : ""}`;
 		})
 		.join("\n");
-	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且实体参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
+	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（本回合只能调用一次）。提交与否只看能否构造出合法提案，不看意图是否合理：动词表中有承载该意图的动词、且指称参数都能取自可见实体 → 构造并提交 actions 列表（{ verb, params }），交由世界法则裁决，预计被世界拒绝也照常提交（拒绝与法则理由由世界给出）；没有动词承载该意图、或意图指称的实体不在可见实体中 → 提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体。act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文。
 呈现调用（开场、时间流逝后的场景描写）没有行动窗口：prompt 顶部标注「呈现服务」，此时不要调用 act，直接输出散文正文。
 世界说明：entities 是当前所有可见实体。id 是唯一标识，name 是展示名。extra（存在时）是游戏派生的场景纹理。
 可用动词（模拟层强制执行）：
@@ -407,7 +407,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。能构造出合法动作（动词承载意图、实体参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 省略 actions（空提案即拒绝，不写任何理由）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
+		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。能构造出合法动作（动词承载意图、指称参数取自已可见实体的 id）→ 提交 actions，预计被拒也照常提交；构造不出 → 省略 actions（空提案即拒绝，不写任何理由）。本回合只能调用一次；世界法则会按顺序裁决每个动作并返回结果。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
 				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" }),

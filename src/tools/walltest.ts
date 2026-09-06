@@ -1,5 +1,5 @@
 import type { Entity, GameDef, LedgerValue, PropDef, PropValue, Q } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, grant } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, grant, ref } from "../core/sim.ts";
 import { Type } from "typebox";
 
 const num = (v: unknown): number => Number(v ?? 0);
@@ -192,8 +192,7 @@ export const walltest: GameDef = {
 		beckon: defineVerb({
 			label: "召唤",
 			description: "参照域契约夹具：对参照域内的实体召唤（干净授予）；域外 id 由可见性门拒绝。",
-			schema: Type.Object({ target: Type.String({ description: "目标实体 id" }) }),
-			entityParams: ["target"],
+			schema: Type.Object({ target: ref("目标实体 id") }),
 			rules: [{ id: "beckon.ok", judge: () => grant([], "你朝那东西招了招手。") }],
 		}),
 		veil: defineVerb({

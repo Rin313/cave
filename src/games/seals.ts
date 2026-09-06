@@ -1,5 +1,5 @@
 import type { Delta, Fact, GameDef, PropDef, Q, ViewValue, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, grant, relVal } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, free, grant, ref, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
@@ -88,8 +88,7 @@ export const seals: GameDef = {
 		take: defineVerb({
 			label: "拿取",
 			description: "把书案上的一封信拿到手里（持者是你的躯体，清单随之销账）。",
-			schema: Type.Object({ entity: Type.String({ description: "信件 id" }) }),
-			entityParams: ["entity"],
+			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
 				id: "take.desk",
 				judge: (q, p) => {
@@ -106,8 +105,7 @@ export const seals: GameDef = {
 		read: defineVerb({
 			label: "拆读",
 			description: "细读手里的一封信：拆封会留下断口，信文自此为你所知。",
-			schema: Type.Object({ entity: Type.String({ description: "信件 id" }) }),
-			entityParams: ["entity"],
+			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
 				id: "read.held",
 				judge: (q, p) => {
@@ -126,10 +124,9 @@ export const seals: GameDef = {
 			label: "誊写",
 			description: "借着拆封的工夫重写手里这封信的信文（text 为新信文全文）——断口无法掩饰。",
 			schema: Type.Object({
-				entity: Type.String({ description: "信件 id" }),
-				text: Type.String({ description: "新信文全文" }),
+				entity: ref("信件 id"),
+				text: free("新信文全文"),
 			}),
-			entityParams: ["entity"],
 			rules: [{
 				id: "forge.held",
 				judge: (q, p) => {
@@ -148,8 +145,7 @@ export const seals: GameDef = {
 		leave: defineVerb({
 			label: "放回",
 			description: "把手里的一封信放回书案（信件将照常送抵收信人）。",
-			schema: Type.Object({ entity: Type.String({ description: "信件 id" }) }),
-			entityParams: ["entity"],
+			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
 				id: "leave.held",
 				judge: (q, p) => {
@@ -167,10 +163,9 @@ export const seals: GameDef = {
 			label: "攀谈",
 			description: "与眼前的人说一句话（words 为原话）——话语留在对方那里，成为世界里的惰性记录。",
 			schema: Type.Object({
-				target: Type.String({ description: "交谈对象 id" }),
-				words: Type.String({ description: "要说的话" }),
+				target: ref("交谈对象 id"),
+				words: free("要说的话"),
 			}),
-			entityParams: ["target"],
 			rules: [{
 				id: "talk.person",
 				judge: (q, p) => {
@@ -188,8 +183,7 @@ export const seals: GameDef = {
 		unmask: defineVerb({
 			label: "揭面",
 			description: "揭下一位戴面具者的面具。",
-			schema: Type.Object({ target: Type.String({ description: "对方 id" }) }),
-			entityParams: ["target"],
+			schema: Type.Object({ target: ref("对方 id") }),
 			rules: [{
 				id: "unmask.masked",
 				judge: (q, p) => {
@@ -202,9 +196,8 @@ export const seals: GameDef = {
 		go: defineVerb({
 			label: "走动",
 			description: "沿廊走向另一个房间（dest 为地点 id，见关系路径）。走动耗一刻。",
-			schema: Type.Object({ dest: Type.String({ description: "目的地 id" }) }),
+			schema: Type.Object({ dest: ref("目的地 id") }),
 			cost: 1,
-			entityParams: ["dest"],
 			rules: [{
 				id: "go.path",
 				judge: (q, p) => {
@@ -221,8 +214,7 @@ export const seals: GameDef = {
 		channel: defineVerb({
 			label: "附身",
 			description: "把神魂迁入一件能容魂的器皿（占据＝居所的迁移，一条 delta 过门）。",
-			schema: Type.Object({ entity: Type.String({ description: "器皿 id" }) }),
-			entityParams: ["entity"],
+			schema: Type.Object({ entity: ref("器皿 id") }),
 			rules: [{
 				id: "channel.vessel",
 				judge: (q, p) => {
@@ -236,8 +228,7 @@ export const seals: GameDef = {
 		burn: defineVerb({
 			label: "掷火",
 			description: "把一样东西掷进火盆（还系着它的东西得先解开：账上的、盛着的、挂在身上的）。",
-			schema: Type.Object({ entity: Type.String({ description: "目标 id" }) }),
-			entityParams: ["entity"],
+			schema: Type.Object({ entity: ref("目标 id") }),
 			rules: [{
 				id: "burn.tied",
 				judge: (q, p) => {

@@ -63,7 +63,7 @@ export interface Action {
 export interface Messages {
 	/** 所有法则均未表态时的兜底回应；core 完整性不变式违反也回落此文案。 */
 	noResponse: string;
-	/** 实体参数不可见/不存在的统一文案：幻觉 id 与隐藏实体同一文案。 */
+	/** 指称参数不可见/不存在的统一文案：幻觉 id 与隐藏实体同一文案。 */
 	invisibleEntity?: string;
 	/** 规则授予但未提供世界腔理由时的占位文案。 */
 	defaultReason: string;
@@ -154,10 +154,32 @@ export const D = {
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
 
-/** 引用参数键：schema 中字符串型（含可省略）属性的键（编译期锁定，声明与 schema 类型不偏斜）。 */
-type RefKey<S extends TObject> = {
-	[K in keyof S["properties"] & string]: S["properties"][K] extends TString ? K : never;
-}[keyof S["properties"] & string];
+/** 参数 kind：字符串参数的指称性声明，标记住在 schema 属性节点上（schema 即参数词表，与 PropDef.type 同构）。 */
+type ParamKind = "ref" | "free";
+
+function paramKind(node: unknown): ParamKind | undefined {
+	if (typeof node !== "object" || node === null) return undefined;
+	const n = node as Record<string, unknown>;
+	if (n.ref === true) return "ref";
+	if (n.free === true) return "free";
+	return undefined;
+}
+
+/** 指称参数：值是实体 id——可见性门管辖（不可指名即拒）、尝试行解析为名字、probe 枚举。 */
+export function ref(description?: string): TString {
+	return Type.String({ ...(description !== undefined && { description }), ref: true });
+}
+
+/** 自由字符串：许愿/内容——值按字面进入裁决，径由法则裁决，门与渲染一律不解析。 */
+export function free(description?: string): TString {
+	return Type.String({ ...(description !== undefined && { description }), free: true });
+}
+
+/** 动词的指称参数键（schema 声明序）：可见性门、尝试行渲染与 probe 的共同读取点。 */
+export function refParamsOf(verb: VerbDef): string[] {
+	const props = verb.schema.properties as Record<string, unknown>;
+	return Object.keys(props).filter((k) => paramKind(props[k]) === "ref");
+}
 
 /** 动词定义助手：规则参数 p 由 TypeBox schema 推导为编译期类型（边界处已完成 schema 校验）。 */
 export function defineVerb<S extends TObject>(spec: {
@@ -165,7 +187,6 @@ export function defineVerb<S extends TObject>(spec: {
 	description: string;
 	schema: S;
 	cost?: number;
-	entityParams?: RefKey<S>[];
 	internal?: boolean;
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
@@ -175,7 +196,6 @@ export function defineVerb<S extends TObject>(spec: {
 		...(spec.cost !== undefined && { cost: spec.cost }),
 		// 工具边界与内核前置条件同一严格度：多余参数在工具层被拒，而非到内核才触发 ProtocolViolation
 		schema: { ...spec.schema, additionalProperties: false },
-		...(spec.entityParams !== undefined && { entityParams: spec.entityParams }),
 		...(spec.internal !== undefined && { internal: spec.internal }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
@@ -188,8 +208,6 @@ export interface VerbDef {
 	schema: TObject;
 	/** 尝试时价（刻，缺省 0）：凡入裁决即尝试，成败皆消耗。规则可在授予中以 ticks 改写实际流逝。 */
 	cost?: number;
-	/** 引用参数声明：机械渲染按声明解析为名字、probe 按其枚举；可见性门管辖全部引用参数（门权威 = grounding ∩ 账本）。 */
-	entityParams?: string[];
 	/** 内部动词：不进映射层（act schema 与系统提示的投影滤除），只由代码直接 apply——同一裁决边界与硬墙。 */
 	internal?: boolean;
 	/** 卫语句式规则：按序裁决，首个表态即判决；末条可为无条件拒绝的兜底规则。 */
@@ -596,17 +614,19 @@ export class Simulation {
 		for (const [name, v] of Object.entries(def.verbs)) {
 			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
-			// 参数通道与账本值同一形状约束：schema 属性须为标量型
+			// 一次尝试＝一个裁决＝一个时价＝一个拒绝单位：多重性由批次承载，参数须为标量（账本值的标量数组是状态侧形状，不入尝试语言）
+			// 字符串参数的 kind 必须显式声明（ref＝指称、free＝自由字符串）——kind 住在词表，漏报在 def 加载时失败，不可静默 fail-open
 			for (const p of Object.keys(v.schema.properties)) {
 				const node = (v.schema.properties as Record<string, { type?: string } | undefined>)[p];
 				if (node?.type !== "string" && node?.type !== "number" && node?.type !== "boolean") {
-					throw new Error(`动词 ${name} 的参数「${p}」须为标量型（string/number/boolean），得到 ${String(node?.type)}`);
+					throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(node?.type)}`);
 				}
-			}
-			for (const p of v.entityParams ?? []) {
-				const node = (v.schema.properties as Record<string, { type?: string } | undefined>)[p];
-				if (!node) throw new Error(`动词 ${name} 的 entityParams「${p}」不是 schema 属性——引用参数声明与动词 schema 是同一事实的两面`);
-				if (node.type !== "string") throw new Error(`动词 ${name} 的 entityParams「${p}」的 schema 须为字符串型（可省略），得到 ${String(node.type)}`);
+				const kind = paramKind(node);
+				if (node.type === "string") {
+					if (!kind) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
+				} else if (kind) {
+					throw new Error(`动词 ${name} 的参数「${p}」的 kind 标记只对字符串参数有意义`);
+				}
 			}
 		}
 		// 初始世界同样过墙（genesis = 自身，changes = 空，src = def）——def 结构错误与损坏存档在此显形，而非首次提交
@@ -681,10 +701,10 @@ export class Simulation {
 		const msgs = this.def.messages;
 		const verb = this.staticForm(action);
 		const cost = attemptCost(verb);
-		// 可见性门：参照域（裁决读态的可见集）外的引用参数即不可指名
-		const invalid = (verb.entityParams ?? [])
+		// 可见性门：参照域（裁决读态的可见集）外的指称参数即不可指名——空串亦然（id 非空，"" ∉ 参照域）
+		const invalid = refParamsOf(verb)
 			.map((p) => action.params[p])
-			.filter((id): id is string => typeof id === "string" && id.length > 0 && !curVis.has(id));
+			.filter((id): id is string => typeof id === "string" && !curVis.has(id));
 		if (invalid.length) {
 			// 幻觉 id 与隐藏实体同一文案，不解析门外实体（审计 id 走 debug）——否则 id 盲猜即存在性 oracle
 			const reason = msgs.invisibleEntity ?? msgs.noResponse;
@@ -824,7 +844,7 @@ export class Simulation {
 		return { step: { ...step, field }, elapsed };
 	}
 
-	/** 尝试行线性化：参数按 schema 声明序渲染，引用参数（entityParams）解析为名字、其余字面，消费 renderValue
+	/** 尝试行线性化：参数按 schema 声明序渲染，指称参数（ref 标记）解析为名字、其余字面，消费 renderValue
 	 *  同一解析链。域外引用不查在世名——活体名解析仅限已感知指称，否则尝试行成为隐藏实体的存在性 oracle；
 	 *  离场名兜底，其余原样回显。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
@@ -832,7 +852,7 @@ export class Simulation {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
 		const field = new Set([...step.field.before, ...step.field.after]);
-		const refs = new Set(verb.entityParams ?? []);
+		const refs = new Set(refParamsOf(verb));
 		const parts = Object.keys(verb.schema.properties)
 			.filter((k) => k in action.params)
 			.map((k) => {
