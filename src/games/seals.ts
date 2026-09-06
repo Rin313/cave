@@ -42,12 +42,15 @@ const manifestOf = (q: Q): string[] => {
 	return Array.isArray(m) ? [...m] as string[] : [];
 };
 
-/** 反向引用扫描（掷火的世界腔面）：id 属性是强引用，边是弱引用——前者挡 despawn，后者随主消散。 */
+/** 反向引用扫描（掷火的世界腔面）：强引用宇宙单源于注册表声明（type:"id" 含数组值），键表不得手抄
+ *  边是弱引用，随主消散。 */
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
-		for (const k of ["in", "sender", "recipient"]) if (e.props[k] === id) return e.id;
-		const m = e.props.manifest;
-		if (Array.isArray(m) && m.includes(id)) return e.id;
+		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
+			if (pd.type !== "id") continue;
+			const v = e.props[k];
+			if (v === id || (Array.isArray(v) && v.includes(id))) return e.id;
+		}
 	}
 	return null;
 };
