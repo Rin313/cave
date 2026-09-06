@@ -237,12 +237,12 @@ export class Engine {
 		r.usage = [];
 	}
 
-	/** 回合：一次 session.prompt 内先 act 一次性提交（one-shot 门闩），世界回应经工具结果返回，其后输出散文。 */
-	async act(action: { intent: string; selection?: string }): Promise<ActOutcome> {
+	/** 回合：一次 session.prompt 内先 act 一次性提交（one-shot 门闩），世界回应经工具结果返回，其后输出散文 */
+	async act(action: { intent: string }): Promise<ActOutcome> {
 		this.outcome = { steps: [] };
 		this.beginRun("mapping", action.intent);
 		const state = this.sim.digest();
-		await this.session.prompt(buildTurnPrompt(state, action.intent, action.selection));
+		await this.session.prompt(buildTurnPrompt(state, action.intent));
 
 		let narration: string;
 		if (!this.run.acted) {
@@ -317,11 +317,8 @@ function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExte
 	};
 }
 
-function buildTurnPrompt(state: string, intent: string, selection: string | undefined): string {
-	const intentLine = selection
-		? `玩家意图：${verbatim(intent)}（玩家选中的场景文字：${verbatim(selection)}）`
-		: `玩家意图：${verbatim(intent)}`;
-	return `${STATE_HEADER}\n${state}\n\n${intentLine}\n\n解析意图并调用 act 工具提交动作提案（${CONTRACT.empty}）；${CONTRACT.follow}。`;
+function buildTurnPrompt(state: string, intent: string): string {
+	return `${STATE_HEADER}\n${state}\n\n玩家意图：${verbatim(intent)}\n\n解析意图并调用 act 工具提交动作提案（${CONTRACT.empty}）；${CONTRACT.follow}。`;
 }
 
 /** 系统提示 = def.voice（原样注入）+ 协议块（core 生成：one-shot 门闩、拒绝契约、表达纪律）。 */

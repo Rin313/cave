@@ -94,11 +94,10 @@ function warnWarnings(ws: string[]): void {
 }
 
 function printAct(sim: Simulation, o: {
-	turn: number; intent: string; selection?: string | undefined;
+	turn: number; intent: string;
 	outcome: ActOutcome; brief?: boolean;
 }): void {
-	const sel = o.selection ? `（选中：「${o.selection}」）` : "";
-	console.log(`\n【#${o.turn} act】${o.intent}${sel}`);
+	console.log(`\n【#${o.turn} act】${o.intent}`);
 	for (const a of o.outcome.proposals) console.log(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
 	for (const line of spineLines(sim, o.outcome.steps)) console.log(`  ${line}`);
 	warnWarnings(o.outcome.warnings);
@@ -177,22 +176,24 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined): Promise<void> {
 	await withEngine(runId, gameId, async (ctx) => {
 		const { dir, meta, sim, engine } = ctx;
-		const outcome = await engine.act(selection === undefined ? { intent } : { intent, selection });
+		const utterance = selection === undefined ? intent : `${intent}（选中：「${selection}」）`;
+		const outcome = await engine.act({ intent: utterance });
 
 		meta.turn += 1;
 		persistRun(ctx);
 		appendTranscript(dir, {
 			turn: meta.turn,
 			phase: "act",
-			intent,
+			raw: intent,
 			selection: selection ?? null,
+			intent: utterance,
 			proposals: outcome.proposals,
 			steps: outcome.steps,
 			narration: outcome.narration,
 			warnings: outcome.warnings,
 			usage: outcome.usage,
 		});
-		printAct(sim, { turn: meta.turn, intent, selection, outcome });
+		printAct(sim, { turn: meta.turn, intent: utterance, outcome });
 	});
 }
 
@@ -208,7 +209,7 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 			const outcome = await engine.act({ intent: line });
 			meta.turn += 1;
 			appendTranscript(dir, {
-				turn: meta.turn, phase: "act", intent: line, selection: null,
+				turn: meta.turn, phase: "act", raw: line, selection: null, intent: line,
 				proposals: outcome.proposals, steps: outcome.steps,
 				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
 			});
@@ -348,6 +349,7 @@ async function main() {
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过。
+--select 由本工具并合进意图（transcript 记 raw/selection 分解）——引擎的意志输入只有 intent 一段不透明文本。
 render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合），引擎无第二条提案通道。
 report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
 --game 在 act/batch/render/state 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
