@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
+import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, repairRecords, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
 import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
 
@@ -91,6 +91,8 @@ export class Engine {
 	private readonly recent: RecentEntry[];
 	/** 回合定稿记录，窗口裁剪至 recentWindow。 */
 	private readonly records: ChronicleEntry[];
+	/** 装载期诊断：损坏纪要截断的显形出口，loop 打印。 */
+	readonly loadWarnings: string[] = [];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
 	private outcome: { steps: Step[] } = { steps: [] };
@@ -115,6 +117,7 @@ export class Engine {
 		channel.onAdjudication = (patch) => {
 			if (patch.steps) this.outcome.steps = patch.steps;
 		};
+		this.repairLoadedRecords();
 		this.updateRecent();
 		session.subscribe((event) => {
 			switch (event.type) {
@@ -263,6 +266,13 @@ export class Engine {
 		this.updateRecent();
 	}
 
+	/** 装载修复：窗口裁剪后逐条试投影（完好判据是消费本身），损坏使近况截断至其后完好子后缀；后续写入的记录已经过消费，无需复检。 */
+	private repairLoadedRecords(): void {
+		const limit = this.sim.def.recentWindow;
+		if (this.records.length > limit) this.records.splice(0, this.records.length - limit);
+		repairRecords(this.sim, this.records, this.loadWarnings);
+	}
+
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
 		const limit = this.sim.def.recentWindow;
@@ -295,7 +305,7 @@ export class Engine {
 
 function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExtension {
 	return {
-		name: "cave-context",
+		name: "context",
 		factory: (pi) => {
 			pi.on("context", async (event) => ({ messages: pruneContext(event.messages, recent()) }));
 		},

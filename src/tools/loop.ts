@@ -128,6 +128,7 @@ async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: R
 	const def = getGame(meta.game);
 	const sim = new Simulation(def, loadState(dir));
 	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
+	for (const w of engine.loadWarnings) console.log(`  ⚠ ${w}`);
 	try {
 		await fn({ dir, meta, sim, engine });
 	} finally {

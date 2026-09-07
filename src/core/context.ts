@@ -34,7 +34,7 @@ interface RawEntry {
 	steps?: unknown;
 }
 
-/** 从会话 custom 条目读回合记录；形状不符的条目跳过（损坏容错）。 */
+/** 从会话 custom 条目读回合记录；信封粗筛，完好与否的最终判据是装载期的试投影（repairRecords）。 */
 export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
 	const out: ChronicleEntry[] = [];
 	for (const e of entries) {
@@ -50,6 +50,23 @@ export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { departed }) }));
+}
+
+/** 装载纪要的完好判据是消费本身：逐条试投影，损坏使近况截断至其后完好子后缀（名字闭合依赖完整时间后缀）；会话文件不动。 */
+export function repairRecords(sim: Simulation, records: ChronicleEntry[], warnings: string[]): void {
+	let cut = -1;
+	records.forEach((r, i) => {
+		try {
+			spineLines(sim, r.steps);
+		} catch (e) {
+			cut = i;
+			warnings.push(`纪要 t${r.time}「${r.intent.slice(0, 24)}」投影失败：${e instanceof Error ? e.message : String(e)}`);
+		}
+	});
+	if (cut >= 0) {
+		warnings.push(`近况截断：弃前 ${cut + 1}/${records.length} 条`);
+		records.splice(0, cut + 1);
+	}
 }
 
 /** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。stringify 不转义的行分隔符（U+2028/9）手动补转义。 */
