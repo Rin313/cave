@@ -679,7 +679,7 @@ export class Simulation {
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
 	}
 
-	/** 先删提交期间新建的顶层键再克隆覆写；冻结引用不得留在活账本上。 */
+	/** 先删提交期间新建的顶层键再克隆覆写；冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账坐标。 */
 	private restore(s0: World): void {
 		for (const k of Object.keys(this.world)) if (!(k in s0)) delete (this.world as unknown as Record<string, unknown>)[k];
 		Object.assign(this.world, JSON.parse(JSON.stringify(s0)) as World);
