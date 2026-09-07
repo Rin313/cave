@@ -376,7 +376,6 @@ function opLabel(action: Action): string {
 function probeDef(def: GameDef, maxCombos = 10000): {
 	rows: MapRow[];
 	grants: Map<string, number>;
-	skipped: { verb: string; params: string[] }[];
 	total: number;
 	truncated: boolean;
 	liveness: Map<string, { grant: number; deny: number; abstain: number; unreached: number }>;
@@ -385,7 +384,6 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	const scope = [...sim.visible()];
 	const rows: MapRow[] = [];
 	const grants = new Map<string, number>();
-	const skipped: { verb: string; params: string[] }[] = [];
 	const combos = new Map<string, number>();
 	const stats = new Map<string, { grant: number; deny: number; abstain: number }>();
 	const trace: RuleTrace[] = [];
@@ -429,15 +427,16 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName]!;
 		const refs = refParamsOf(verb);
-		const required = ((verb.schema as unknown as { required?: string[] }).required ?? []).filter((p) => !refs.includes(p));
-		if (required.length) {
-			skipped.push({ verb: verbName, params: required });
-			continue;
+		// 尝试空间的有限生成集：ref 穷举可见域，必填自由参数取类型代表常量——值条件法则之于常量，同状态条件之于初始世界，归作者判读
+		const props = verb.schema.properties as Record<string, { type?: string }>;
+		const seed: Record<string, Scalar> = {};
+		for (const p of (verb.schema as unknown as { required?: string[] }).required ?? []) {
+			if (!refs.includes(p)) seed[p] = props[p]!.type === "number" ? 1 : props[p]!.type === "boolean" ? true : "…";
 		}
 		const generate = (idx: number, acc: Record<string, Scalar>): void => {
 			if (truncated) return;
 			if (idx === refs.length) {
-				probeAction({ verb: verbName, params: { ...acc } });
+				probeAction({ verb: verbName, params: { ...seed, ...acc } });
 				return;
 			}
 			for (const v of scope) {
@@ -448,9 +447,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		generate(0, {});
 	}
 	const liveness = new Map<string, { grant: number; deny: number; abstain: number; unreached: number }>();
-	const skippedVerbs = new Set(skipped.map((s) => s.verb));
 	for (const [verbName, verb] of Object.entries(def.verbs)) {
-		if (skippedVerbs.has(verbName)) continue;
 		const n = combos.get(verbName) ?? 0;
 		if (n === 0) continue;
 		for (const r of verb.rules) {
@@ -458,12 +455,12 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: n - s.grant - s.deny - s.abstain });
 		}
 	}
-	return { rows, grants, skipped, total, truncated, liveness };
+	return { rows, grants, total, truncated, liveness };
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = gameOf(gameId);
-	const { rows, grants, skipped, total, truncated, liveness } = probeDef(def, maxCombos);
+	const { rows, grants, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
 	for (const [law, c] of liveness) {
@@ -477,14 +474,11 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 		if (list) list.push(r);
 		else byVerb.set(r.verb, [r]);
 	}
-	const skippedVerbs = new Set(skipped.map((s) => s.verb));
 	for (const verbName of Object.keys(def.verbs)) {
-		if (skippedVerbs.has(verbName)) continue;
 		const vr = byVerb.get(verbName) ?? [];
 		console.log(`「${verbName}」✓ ×${grants.get(verbName) ?? 0}${vr.length ? `  ✗ ×${vr.length}` : ""}`);
 		for (const r of vr) console.log(`  ✗ ${r.op} → ${r.law}「${r.reason}」${r.bug ? ` ⚠ ${r.bug}` : ""}`);
 	}
-	for (const s of skipped) console.log(`「${s.verb}」跳过：必填参数 ${s.params.join("/")} 不是指称参数，探测域无法机械穷举`);
 	const bugs = rows.filter((r) => r.bug);
 	console.log(`\n执行校验 bug（裁决不可执行/破坏完整性——规则或系统缺陷）: ${bugs.length}`);
 	for (const b of bugs) console.log(`  [BUG] ${b.op} → ${b.bug}`);
@@ -501,7 +495,7 @@ async function main(): Promise<void> {
   sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
     action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（指称参数可用名称或 id）
     动作按裁决授予的刻数自动流逝；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词穷举指称参数 × 可见实体——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可见实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}

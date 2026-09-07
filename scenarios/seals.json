@@ -48,7 +48,7 @@
 				{ "name": "拆读（立知晓边）", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。（火漆信·盐引.火漆: true → false）"] } },
 				{ "name": "掷火手中的信：解系成功；边随主消散（弱引用，机械行静默）", "action": { "verb": "burn", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 掷火(火漆信·盐引)：你把火漆信·盐引掷进了火盆。（- 火漆信·盐引）"], "viewExcludes": ["火漆信·盐引"] } },
 				{ "name": "掷火被附身的宿主：锚引用挡 despawn——迁移必先入账", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "心神还系着信使", "lines": ["✗ 掷火(信使)：心神还系着信使，解开了才烧得掉。"], "state": { "courier.vessel": true } } },
-				{ "name": "附身：居所迁移一条 delta 过门", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": true, "lines": ["✓ 附身(白瓷面具)：你的神魂没入白瓷面具。（心神.持者: 信使 → 白瓷面具）"], "state": { "player.in": "mask" } } },
+				{ "name": "附身：迁移过门；魂不可自见——主语出域，迁移行静默，由法则理由第一人称承载", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": true, "lines": ["✓ 附身(白瓷面具)：你的神魂没入白瓷面具。"], "state": { "player.in": "mask" } } },
 				{ "name": "掷火空出的器皿：器皿可生灭", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": true, "lines": ["✓ 掷火(信使)：你把信使掷进了火盆。（- 信使）"], "viewExcludes": ["信使"] } },
 				{ "name": "掷火魂自身：意志能点名的域里没有意志自身（门答）", "action": { "verb": "burn", "params": { "entity": "player" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 掷火(player)：眼前没有那样的东西。"] } },
 				{ "name": "面具持信：无主语动词的缺省主语＝居所链最近器皿", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。（火漆信·粮价.持者: 书案 → 白瓷面具；书案.收发清单: 火漆信·粮价 → null）"], "state": { "letter_grain.in": "mask" } } }
@@ -68,6 +68,13 @@
 			"steps": [
 				{ "name": "零刻动词不推钟：首掷落定骰子地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
 				{ "name": "同刻再掷：地址未变，同签（确定性骰子）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } }
+			]
+		},
+		{
+			"name": "离屏交割：prop 行主语过门——主语出域则变更行静默，知识由 Fact 与回看承接",
+			"steps": [
+				{ "name": "去书房", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true } },
+				{ "name": "三刻：t4 交割在书房外发生——火漆/持者/清单/边行全静默，Fact 照言", "tick": 3, "expect": { "ok": true, "lines": ["✓ 流逝(3)：时间流逝。", "⏱ 〔你瞥见太守与管家在廊下低语，谈了许久。〕", "⏱ 〔太守收了火漆信·盐引，拆封读毕。；盐商收了火漆信·粮价，拆封读毕。〕", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewExcludes": ["火漆信·盐引", "火漆信·粮价", "书案"] } }
 			]
 		}
 	]

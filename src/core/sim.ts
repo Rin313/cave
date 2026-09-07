@@ -437,11 +437,11 @@ export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
 
-/** 与渲染消费同一解析：渲染会说出名字之处，投影即数指称；未披露侧不数。 */
+/** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
 function referentsOf(sim: Simulation, c: Change, sides?: { prev: boolean; next: boolean }): string[] {
 	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : c.kind === "spawn" ? [c.entity.id] : [c.entity];
 	const ref = refProp(sim, c.prop);
-	const out: string[] = [];
+	const out: string[] = [c.entity];
 	if (sides?.prev ?? true) out.push(...renderValue(sim, c.prev ?? null, ref).ids);
 	if (sides?.next ?? true) out.push(...renderValue(sim, c.next ?? null, ref).ids);
 	return out;
