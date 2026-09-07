@@ -39,7 +39,7 @@ const CONTRACT = {
 /** 协议拦截而非世界拒绝：通道语言，不进玩家视野。 */
 const ACT_LATCH_MSG = `行动窗口已关闭：${CONTRACT.once}。请忽略本次调用，基于回合内已有内容继续输出散文。`;
 
-const STATE_HEADER = "[当前状态]（世界真相）：";
+const STATE_HEADER = "[状态视图]（你可见的世界截面；不在其中者，无从指称）：";
 
 export interface ActOutcome {
 	steps: Step[];
@@ -381,10 +381,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 		}),
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
 			if (run.phase !== "mapping") {
-				return {
-					content: [{ type: "text", text: JSON.stringify({ ok: false, error: ACT_LATCH_MSG }) }],
-					details: {},
-				};
+				return { content: [{ type: "text", text: ACT_LATCH_MSG }], details: {} };
 			}
 			const proposed = (params.actions ?? []) as Action[];
 			// 形态校验先于窗口占用；act 通道的动词全集是广告面——内核检查裁决面全集，internal 动词由直连 apply 合法使用
