@@ -254,15 +254,11 @@ export class Engine {
 		};
 	}
 
-	/** 写点唯一：条目入会话 custom 记录，随后更新近况窗口。 */
+	/** 写点唯一：先落盘后消费——落盘失败即回合未定稿（act 抛错、state 不存），档案两侧同留上一回合。 */
 	private recordTurn(intent: string, steps: Step[]): void {
 		const record: ChronicleEntry = { time: this.sim.world.time, intent, steps };
+		this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
 		this.records.push(record);
-		try {
-			this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
-		} catch {
-			// 持久化失败不阻断回合
-		}
 		this.updateRecent();
 	}
 
