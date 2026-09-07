@@ -1,6 +1,6 @@
 {
 	"game": "seals",
-	"name": "封缄·宅邸夜：统一探针（展品→格子见 DESIGN.md 研究章程）",
+	"name": "统一探针",
 	"scenarios": [
 		{
 			"name": "拆读：信文经 propPerception 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
