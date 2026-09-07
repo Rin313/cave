@@ -4,11 +4,7 @@ import { ProtocolViolation, Simulation, fmtChange, refParamsOf, renderDenial, sh
 import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
-import { walltest } from "./walltest.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
-
-/** 探针走注册表；结构墙夹具住工具层。 */
-const gameOf = (id: string): GameDef => (id === walltest.id ? walltest : getGame(id));
 
 // —— 场景运行器（契约锁） ——
 
@@ -33,7 +29,7 @@ interface StepExpect {
 	viewExcludes?: string[];
 }
 
-interface ScenarioStep {
+export interface ScenarioStep {
 	name: string;
 	action?: { verb: string; params: Record<string, unknown> };
 	/** 时间流逝 N 刻：脱糖为 dev.wait 动作，与 action 同走唯一执行路径。 */
@@ -41,7 +37,7 @@ interface ScenarioStep {
 	expect: StepExpect;
 }
 
-interface Scenario {
+export interface Scenario {
 	name: string;
 	steps: ScenarioStep[];
 }
@@ -61,7 +57,7 @@ interface StepReport {
 	detail: string;
 }
 
-interface ScenarioReport {
+export interface ScenarioReport {
 	name: string;
 	passed: number;
 	total: number;
@@ -160,7 +156,7 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Step[]; er
 	return p;
 }
 
-function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
+export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	const sim = new Simulation(def);
 	const reports: StepReport[] = [];
 	for (const [i, step] of scenario.steps.entries()) {
@@ -186,7 +182,7 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 
 function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
-	const def = withDevWait(gameOf(file.game));
+	const def = withDevWait(getGame(file.game));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	return {
 		file,
@@ -196,7 +192,7 @@ function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: 
 	};
 }
 
-function printReports(reports: ScenarioReport[]): void {
+export function printReports(reports: ScenarioReport[]): void {
 	for (const sc of reports) {
 		console.log(`\n【${sc.name}】`);
 		for (const r of sc.steps) {
@@ -298,7 +294,7 @@ function tickText(def: GameDef, s: TickStep): string {
 }
 
 async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
-	const def = gameOf(gameId);
+	const def = getGame(gameId);
 	const sim = new Simulation(withDevWait(def));
 	const steps: Step[] = [];
 	for (const token of tokens) {
@@ -459,7 +455,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
-	const def = gameOf(gameId);
+	const def = getGame(gameId);
 	const { rows, grants, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
