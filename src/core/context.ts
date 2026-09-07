@@ -1,6 +1,5 @@
-// 上下文裁剪：每次调用只见「近况投影 + 当前运行后缀」，会话文件仍保存全量审计。
-// 持久化事实是地籍条目（回合定稿：intent + steps）；
-// 近况为用时重算的投影，永不持久化，进程重启由条目重建。
+// 每次调用只见「近况投影 + 当前运行后缀」；会话文件保存全量审计。
+// 持久化事实是回合记录（intent + steps）；近况为用时重算的投影，永不持久化，进程重启由记录重建。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { shownDepartedNames, spineLines, type Simulation, type Step } from "./sim.ts";
 
@@ -13,7 +12,7 @@ export interface ChronicleEntry {
 	intent: string;
 }
 
-/** 近况窗口条目：ChronicleEntry 的投影缓存（内存态，永不持久化）。 */
+/** 内存态投影缓存，永不持久化。 */
 export interface RecentEntry {
 	time: number;
 	intent: string;
@@ -28,7 +27,6 @@ interface EntryLike {
 	data?: unknown;
 }
 
-/** 会话条目的原始形状 */
 interface RawEntry {
 	kind?: unknown;
 	time?: unknown;
@@ -36,7 +34,7 @@ interface RawEntry {
 	steps?: unknown;
 }
 
-/** 从会话 custom 条目读地籍条目；形状不符的条目跳过（换型/损坏容错）。 */
+/** 从会话 custom 条目读回合记录；形状不符的条目跳过（损坏容错）。 */
 export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
 	const out: ChronicleEntry[] = [];
 	for (const e of entries) {
@@ -48,14 +46,13 @@ export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
 	return out;
 }
 
-/** 近况投影：每条目以当前世界渲染其 steps（compact 骨架行，变更由状态视图承载）。
- *  名字解析随世界现值（改名连续）；离场者以窗口级离场底表兜底。 */
+/** 名字解析随世界现值（改名连续）；离场名以窗口级名表兜底。 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { compact: true, departed }) }));
 }
 
-/** 玩家-authored 文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性（不可制造行边界或伪造条目形状）；记录侧仍逐字原样。 */
+/** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。 */
 export function verbatim(s: string): string {
 	return JSON.stringify(s).replace(/[\u2028\u2029]/g, "\\n");
 }
@@ -66,8 +63,7 @@ function renderRecent(recent: readonly RecentEntry[]): string {
 	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");
 }
 
-/** 裁剪：只保留最后一条 user 消息起的当前运行后缀（toolCall/toolResult 配对完整），近况并入该消息头部。
- *  块内容消息回落纯后缀保留。每次调用独立生效，不改会话持久化。 */
+/** 只保留最后一条 user 消息起的后缀，近况并入其头部；不改会话持久化。 */
 export function pruneContext(messages: CtxMessages, recent: readonly RecentEntry[]): CtxMessages {
 	let last = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {

@@ -18,19 +18,19 @@
 			"steps": [
 				{ "name": "合法授予被领域不变式否决：整提交回滚，状态零漂移", "action": { "verb": "trip", "params": {} }, "expect": { "ok": false, "reason": "封印", "state": { "player.vault": null, "player.touched": 0 } } },
 				{ "name": "回滚后的干净提交照常（回滚冻结的探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.vault": null } } },
-			{ "name": "对象形状值（类型层除名后的 as 夹带）：提交翼拒为非账本值，整提交回滚", "action": { "verb": "smuggle", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.note": null, "player.touched": 1 } } },
+			{ "name": "对象形状值（类型层除名后的 as 夹带）：执行校验拒为非账本值，整提交回滚", "action": { "verb": "smuggle", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.note": null, "player.touched": 1 } } },
 			{ "name": "夹带被拒后账本仍健康（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 2, "player.note": null } } }
 			]
 		},
 		{
-			"name": "审查者同权隔离：不变式越权写在冻结读态上即抛，崩溃兑为墙否决——先回滚后拒绝",
+			"name": "审查者同权隔离：不变式越权写在冻结读态上即抛，崩溃兑为审查否决——先回滚后拒绝",
 			"steps": [
 				{ "name": "审查者越权写账本：TypeError 在提交边界兑为 invariant.crash 否决（可说），整提交回滚", "action": { "verb": "sneakpoke", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.sneak": null, "player.hp": 10 } } },
 				{ "name": "审查者崩溃后账本仍健康：干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.hp": 10 } } }
 			]
 		},
 		{
-			"name": "法则代码失灵的门内代谢：rule.crash 链终止、system.crash 不连坐——世界跛行而非冻结或分叉",
+			"name": "法则代码失灵的门内代谢：rule.crash 链终止、system.crash 不连坐",
 			"steps": [
 				{ "name": "规则中途抛出：崩溃兑为 rule.crash 否决步（无世界腔理由，noResponse 兜底；链终止——兜底法则不可达），时价照耗", "action": { "verb": "boom", "params": {} }, "expect": { "ok": false, "law": "rule.crash", "reason": "世界没有回应", "tickDenied": true, "state": { "player.touched": 0, "player.hp": 10, "$world.time": 2 } } },
 				{ "name": "崩溃后世界仍健康：时价已耗（t=2），干净提交照常", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "$world.time": 2 } } },
@@ -39,14 +39,14 @@
 			]
 		},
 		{
-			"name": "拒绝分支时价恒等：门与墙的拒绝照耗尝试价（时价的定义域是尝试，法则不可改写）",
+			"name": "拒绝分支时价恒等：门与墙的拒绝照耗尝试价",
 			"steps": [
 				{ "name": "域外指称：可见性门拒绝，尝试价照耗（一刻；vault.tick 照拦）", "action": { "verb": "knock", "params": { "target": "nowhere" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "世界没有回应", "tickDenied": true, "lines": ["✗ 叩问(nowhere)：世界没有回应。", "⏱ ✗ 封印纹丝不动。"], "state": { "$world.time": 1, "player.vault": null } } },
 				{ "name": "域内指称：法则授予封印，硬墙否决，尝试价照耗（一刻）", "action": { "verb": "knock", "params": { "target": "thing" } }, "expect": { "ok": false, "law": "invariant.vault.sealed", "reason": "封印", "tickDenied": true, "lines": ["✗ 叩问(那件东西)：封印纹丝不动。", "⏱ ✗ 封印纹丝不动。"], "state": { "$world.time": 2, "player.vault": null } } }
 			]
 		},
 		{
-			"name": "投影缺陷不产世界事件：感知崩溃在 apply 边界原子回滚后重抛——凡不可说者不发生",
+			"name": "投影缺陷不产世界事件：感知崩溃在 apply 边界原子回滚后重抛",
 			"steps": [
 				{ "name": "提交后感知快照崩溃：grant 已提交但步骤不可建——整 apply 回滚（gaze 不入账、时间不走）后响亮重抛", "action": { "verb": "blindfold", "params": {} }, "expect": { "throws": "感知在半空碎裂", "state": { "player.gaze": null, "player.touched": 0, "$world.time": 0 } } },
 				{ "name": "原子回滚后账本健康：干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.gaze": null } } }
@@ -61,7 +61,7 @@
 			]
 		},
 		{
-			"name": "账本形状：零边世界边表保持空表，零边授予不添形（公理一：凡后果必可说）",
+			"name": "账本形状：零边世界边表保持空表，零边授予不添形",
 			"steps": [
 				{ "name": "无关系世界的授予提交后，边表仍是空表（缺席不是边表的形态，空表即无边）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": [], "player.touched": 1 } } }
 			]
@@ -93,20 +93,20 @@
 			"steps": [
 				{ "name": "id 引用写空串：无哨兵——integrity 拒绝，整提交回滚（「无引用」由缺席表达，清除写 null 即删键）", "action": { "verb": "blank", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "player.ref": null } } },
 				{ "name": "拒绝后的干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "player.touched": 1, "player.ref": null } } },
-				{ "name": "spawn 带实体形状外的顶层键：形状封闭拒绝（公理一）", "action": { "verb": "junkspawn", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.entities.2": null } } },
+				{ "name": "spawn 带实体形状外的顶层键：形状封闭拒绝", "action": { "verb": "junkspawn", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.entities.2": null } } },
 				{ "name": "边值=账本值：标量数组合法入账（与属性值同一形状契约）", "action": { "verb": "edgearr", "params": {} }, "expect": { "ok": true, "lines": ["✓ 数组边：你系了一条带标记的边。（你.标记.那件东西: null → 甲）"] } },
 				{ "name": "对象形状不是账本值：提交翼拒绝（宽读契约的边界）", "action": { "verb": "edgeobj", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应" } }
 			]
 		},
 		{
-			"name": "边身份契约：type 是边的身份组成（感知快照与可说性的键）——执行翼拒误型，存储边同查（状态翼）",
+			"name": "边身份契约：type 是边的身份组成——执行校验拒误型，integrity 对存储边同查",
 			"steps": [
-				{ "name": "relSet 的 type 为数字：执行翼拒绝（身份退化不入账）", "action": { "verb": "mistype", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.relations": [] } } },
+				{ "name": "relSet 的 type 为数字：执行校验拒绝（身份退化不入账）", "action": { "verb": "mistype", "params": {} }, "expect": { "ok": false, "reason": "世界没有回应", "state": { "$world.relations": [] } } },
 				{ "name": "拒绝后的干净提交照常（回滚探针步）", "action": { "verb": "touch", "params": {} }, "expect": { "ok": true, "state": { "$world.relations": [] } } }
 			]
 		},
 		{
-			"name": "级联删边入账：despawn 的机械后果逐条入账——变更流是后态的完整 diff（公理一）",
+			"name": "级联删边入账：despawn 的机械后果逐条入账，变更流是后态的完整 diff",
 			"steps": [
 				{ "name": "先结一条带值的边（弱引用的建立）", "action": { "verb": "bond", "params": {} }, "expect": { "ok": true, "lines": ["✓ 缔结：你与那件东西结下纽带。（你.标记.那件东西: null → 甲）"], "state": { "$world.relations.0.value": "甲" } } },
 				{ "name": "despawn 级联删边：despawn 记录在前、边消散紧随（边表序），离场名经 despawn 记录兜底渲染", "action": { "verb": "sever", "params": {} }, "expect": { "ok": true, "lines": ["✓ 断绝：你斩断了那件东西。（- 那件东西；你.标记.那件东西: 甲 → null）"], "state": { "$world.relations.0": null, "thing.id": null } } },
@@ -123,7 +123,7 @@
 			]
 		},
 		{
-			"name": "前置门两站点：静态形态违约错在裁决之外——内核收到即调用方违约，抛 ProtocolViolation（裁决与落钟不发生，无尝试无时价）",
+			"name": "静态形态违约错在裁决之外：内核收到即调用方违约，抛 ProtocolViolation（裁决与落钟不发生，无尝试无时价）",
 			"steps": [
 				{ "name": "未知动词：action.unknown 协议违约，世界为调用前原状", "action": { "verb": "no_such_verb", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "player.touched": 0 } } },
 				{ "name": "schema 违约：未知参数被 additionalProperties 拒绝（action.schema），世界同样不动", "action": { "verb": "touch", "params": { "x": 1 } }, "expect": { "protocol": "action.schema", "state": { "$world.time": 0, "player.touched": 0 } } }

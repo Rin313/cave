@@ -69,8 +69,7 @@ function locateRunDir(runId: string, game?: string): string | null {
 	return null;
 }
 
-/** 引擎配置的环境变量按游戏 id 命名空间读取：<GAME>_PROVIDER / <GAME>_MODEL / <GAME>_THINKING。
- *  多游戏并存时各自独立配置，互不覆盖 */
+/** 引擎配置按游戏 id 命名空间读取环境变量，多游戏并存互不覆盖。 */
 function engineOptsFromEnv(gameId: string): { provider: string; model: string; thinkingLevel?: string } {
 	const prefix = gameId.toUpperCase();
 	const provider = process.env[`${prefix}_PROVIDER`];
@@ -119,7 +118,6 @@ interface RunCtx {
 	engine: Engine;
 }
 
-/** 打开既有 run 并装配引擎；fn 结束后 dispose。 */
 async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
 	const dir = locateRunDir(runId, gameId);
 	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
@@ -278,9 +276,7 @@ function collectReport(gameId: string | undefined): ReportRow[] {
 				const meta = readJson<Partial<RunMeta>>(metaPath(dir));
 				if (meta.provider !== undefined) row.provider = meta.provider;
 				if (meta.model !== undefined) row.model = meta.model;
-			} catch {
-				// meta 缺失不阻断聚合
-			}
+			} catch { }
 			for (const l of readFileSync(tp, "utf8").split(/\r?\n/)) {
 				if (!l.trim()) continue;
 				let e: { phase?: string; usage?: TokenUsage[] };

@@ -4,9 +4,7 @@ import { Type } from "typebox";
 
 const num = (v: unknown): number => Number(v ?? 0);
 
-/** 结构墙夹具：裁决侧（规则/系统）、审查者（不变式）与投影钩子（感知）收冻结读态/冻结记录，
- *  越权写在冻结对象上即抛，崩溃在提交边界兑为墙否决。干净对照步区分「冻结副本」与「冻结活账本」：
- *  若回归把冻结误施于活账本（readState 冻结 this.world 而非副本），越权步之后的干净动作/刻步即红。 */
+/** 结构墙夹具：越权写在冻结读态上即抛，崩溃在提交边界兑为审查否决；干净对照步区分「冻结副本」与「冻结活账本」。 */
 
 const PROPS: Record<string, PropDef> = {
 	hp: { type: "number", label: "生命" },
@@ -14,17 +12,15 @@ const PROPS: Record<string, PropDef> = {
 	vault: { type: "boolean", label: "封印" },
 	sneak: { type: "number", label: "潜标" },
 	armed: { type: "boolean", internal: true },
-	// 法则失灵与投影缺陷夹具的开关属性（内部 plumbing，同 armed）
 	crash: { type: "boolean", internal: true },
 	gaze: { type: "boolean", internal: true },
 	phantom: { type: "boolean", internal: true },
 	spy: { type: "boolean", internal: true },
-	// 指称解析契约的字面/引用对照：note 是字面字符串（与实体 id 碰撞也不得解析），ref 是声明引用
+	// 字面/引用对照：note 字面（与 id 碰撞不解析）、ref 引用
 	note: { type: "string", label: "便签" },
 	ref: { type: "id", label: "指向" },
 };
 
-/** 蓄意越权：经 Q 读态直改属性（冻结视图上写入即抛）。 */
 function leakHp(q: Q): void {
 	const me = entity(q.world, q.player);
 	if (me) me.props.hp = (typeof me.props.hp === "number" ? me.props.hp : 0) - 1;
@@ -123,7 +119,7 @@ export const walltest: GameDef = {
 		}),
 		junkspawn: defineVerb({
 			label: "夹带生灭",
-			description: "墙契约：spawn 带实体形状外的顶层键——形状封闭拒绝（公理一）。",
+			description: "spawn 带实体形状外的顶层键——形状封闭拒绝。",
 			schema: Type.Object({}),
 			rules: [{ id: "leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
 		}),
@@ -226,8 +222,7 @@ export const walltest: GameDef = {
 	},
 	systems: [
 		{
-			// 蓄意越权：武装（arm）后系统直改 hp——冻结读态上写入即抛，产出不存在；
-			// 未武装时沉默放行，同注册表的被拦刻步（vault.tick）才有干净的刻可测
+			// arm 武装后越权写；未武装时沉默，让被拦刻步有干净的刻可测
 			id: "leak.tick",
 			run: (q) => {
 				if (entity(q.world, q.player)?.props.armed !== true) return null;
@@ -236,7 +231,7 @@ export const walltest: GameDef = {
 			},
 		},
 		{
-			// 蓄意失灵：引爆（detonate）后系统直接抛出——崩溃兑为失败刻步（system.crash），其余系统照跑，时刻照走
+			// detonate 引爆后抛出：system.crash 失败刻步，其余系统照跑
 			id: "boom.tick",
 			run: (q) => {
 				if (entity(q.world, q.player)?.props.crash !== true) return null;
@@ -244,22 +239,19 @@ export const walltest: GameDef = {
 			},
 		},
 		{
-			// 蓄意被拦：系统产出设置封印 → vault.sealed 否决（walltest.json 的被拦刻步场景由此产生）
+			// 产出封印，被 vault.sealed 否决（被拦刻步场景）
 			id: "vault.tick",
 			run: (q) => ({ deltas: [D.set(q.player, "vault", true)] }),
 		},
 	],
-	/** 投影缺陷夹具：gaze=true 时感知快照崩溃（apply 原子回滚后重抛）；phantom=true 时感知谎报不存在的 id
-	 *  （门权威 = grounding ∩ 账本，谎报静默离场）。其余状态全见。 */
+	/** gaze=true 时感知崩溃（apply 回滚后重抛）；phantom=true 时谎报 id（门权威 = grounding ∩ 账本）。 */
 	grounding: (world) => {
 		if (world.entities.some((e) => e.props.gaze === true)) throw new Error("感知在半空碎裂");
 		const ids = world.entities.map((e) => e.id);
 		if (world.entities.some((e) => e.props.phantom === true)) return [...ids, "ghost"];
 		return ids;
 	},
-	// 冻结契约的投影侧钉子：spy 武装后，感知钩子在未冻结读态上悄悄写账本——裁决读态与提交后采样两侧
-	// 都必须冻结，任一侧失守即污染活账本（场景锁以 hp 断言捕获）。edge 侧同契约不另设钩子：
-	// 边感知一经声明即激活值侧分侧门控，会改写既有行钉
+	// spy 武装后在未冻结读态上写账本：裁决读态与提交后采样两侧都必须冻结（场景锁以 hp 断言捕获）
 	propPerception: (world) => {
 		const armed = world.entities.some((e) => e.props.spy === true);
 		return (e) => {
@@ -269,13 +261,12 @@ export const walltest: GameDef = {
 	},
 	props: PROPS,
 	invariants: [{
-		// 墙契约的另一半：否决路径的原子回滚。回滚若把冻结引用留在账本上，此场景后的任何提交即抛——
-		// 场景的干净对照步（回滚后 touch 照常）就是该回归的探针。
+		// 否决路径的原子回滚探针：回滚若留冻结引用在账本，此后的提交即抛
 		id: "vault.sealed",
 		check: (_world, ctx) => (ctx.changes.some((c) => c.kind === "prop" && c.prop === "vault") ? "封印纹丝不动。" : null),
 	},
 	{
-		// 蓄意越权：审查者直改账本——审查者收冻结读态（与裁决侧同权），写入即抛，崩溃兑为墙否决（invariant.crash）
+		// 审查者越权写：冻结读态上写入即抛，崩溃兑为 invariant.crash
 		id: "sneaky",
 		check: (world, ctx) => {
 			if (!ctx.changes.some((c) => c.kind === "prop" && c.prop === "sneak")) return null;

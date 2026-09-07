@@ -1,6 +1,6 @@
 {
 	"game": "seals",
-	"name": "封缄·宅邸夜：统一探针（展品→格子见 DESIGN.md 章程清单）",
+	"name": "封缄·宅邸夜：统一探针（展品→格子见 DESIGN.md 研究章程）",
 	"scenarios": [
 		{
 			"name": "拆读：信文经 propPerception 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
@@ -11,7 +11,7 @@
 			]
 		},
 		{
-			"name": "誊写：信文机械行随知晓立而可说、值侧分侧披露——精确行集即格子证词",
+			"name": "誊写：信文行随知晓立而可说、值侧分侧披露",
 			"steps": [
 				{ "name": "取信", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。（火漆信·粮价.持者: 书案 → 信使；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·盐引）"] } },
 				{ "name": "誊写：自由字符串参数（许愿径）入裁；断口全披露，信文只披露采样侧（未读而誊——旧文不可知）", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改为每石四百五十钱，事宜速办。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改为每石四百五十钱，事宜速办。)：你借着拆封的工夫，重新誊写了信文。（火漆信·粮价.火漆: true → false；火漆信·粮价.信文: ? → 秋粮定价改为每石四百五十钱，事宜速办。）"], "viewIncludes": ["每石四百五十钱"], "viewExcludes": ["勿为流言所动"], "state": { "letter_grain.content": "秋粮定价改为每石四百五十钱，事宜速办。" } } },
@@ -41,13 +41,13 @@
 			]
 		},
 		{
-			"name": "器皿与墙：弱/强引用二分、主体性机、魂不可自指",
+			"name": "器皿与引用：弱/强引用二分、主体性、魂不可自见",
 			"steps": [
 				{ "name": "掷火清单上的信：强引用挡 despawn（世界腔面）", "action": { "verb": "burn", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "书案还系着", "lines": ["✗ 掷火(火漆信·盐引)：书案还系着火漆信·盐引，解开了才烧得掉。"], "state": { "letter_salt.seal": true } } },
 				{ "name": "取信（清单销账）", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。（火漆信·盐引.持者: 书案 → 信使；书案.收发清单: 火漆信·盐引、火漆信·粮价 → 火漆信·粮价）"] } },
 				{ "name": "拆读（立知晓边）", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。（火漆信·盐引.火漆: true → false）"] } },
 				{ "name": "掷火手中的信：解系成功；边随主消散（弱引用，机械行静默）", "action": { "verb": "burn", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 掷火(火漆信·盐引)：你把火漆信·盐引掷进了火盆。（- 火漆信·盐引）"], "viewExcludes": ["火漆信·盐引"] } },
-				{ "name": "掷火被附身的器皿：居所引用挡 despawn——迁移必先入账", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "心神还系着信使", "lines": ["✗ 掷火(信使)：心神还系着信使，解开了才烧得掉。"], "state": { "courier.vessel": true } } },
+				{ "name": "掷火被附身的宿主：锚引用挡 despawn——迁移必先入账", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "心神还系着信使", "lines": ["✗ 掷火(信使)：心神还系着信使，解开了才烧得掉。"], "state": { "courier.vessel": true } } },
 				{ "name": "附身：居所迁移一条 delta 过门", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": true, "lines": ["✓ 附身(白瓷面具)：你的神魂没入白瓷面具。（心神.持者: 信使 → 白瓷面具）"], "state": { "player.in": "mask" } } },
 				{ "name": "掷火空出的器皿：器皿可生灭", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": true, "lines": ["✓ 掷火(信使)：你把信使掷进了火盆。（- 信使）"], "viewExcludes": ["信使"] } },
 				{ "name": "掷火魂自身：意志能点名的域里没有意志自身（门答）", "action": { "verb": "burn", "params": { "entity": "player" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 掷火(player)：眼前没有那样的东西。"] } },
@@ -55,7 +55,7 @@
 			]
 		},
 		{
-			"name": "走动：邻接前提接线法则、时价成败皆耗、视角随居所翻转（grounding 是注入的投影）",
+			"name": "走动：邻接前提接线法则、尝试时价、视角随居所翻转",
 			"steps": [
 				{ "name": "去庭院：正厅无路——邻接前提由法则拒绝，尝试时价照耗（一刻）", "action": { "verb": "go", "params": { "dest": "court" } }, "expect": { "ok": false, "law": "go.noway", "reason": "没有路", "lines": ["✗ 走动(庭院)：从这里没有路通往庭院。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
 				{ "name": "去书案：非地点——地点性前提拒绝，时价照耗；流言刻照常产出（刻是世界的因）", "action": { "verb": "go", "params": { "dest": "desk" } }, "expect": { "ok": false, "law": "go.noplace", "reason": "不是能去的地方", "lines": ["✗ 走动(书案)：那里不是能去的地方。", "⏱ 〔你瞥见太守与管家在廊下低语，谈了许久。〕"], "state": { "$world.time": 2 } } },
@@ -64,9 +64,9 @@
 			]
 		},
 		{
-			"name": "占问：命运地址——同刻同源同键恒同签（随机是世界纯函数）",
+			"name": "占问：同刻同源同键恒同签（随机是世界纯函数）",
 			"steps": [
-				{ "name": "零刻动词不推钟：首掷落定命运地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
+				{ "name": "零刻动词不推钟：首掷落定骰子地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
 				{ "name": "同刻再掷：地址未变，同签（确定性骰子）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } }
 			]
 		}

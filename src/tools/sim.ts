@@ -7,7 +7,7 @@ import { devWait, withDevWait } from "./dev.ts";
 import { walltest } from "./walltest.ts";
 import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
-/** 游戏解析：探针走注册表；结构墙夹具（core 契约锁）住工具层，不入探针馆。 */
+/** 探针走注册表；结构墙夹具住工具层。 */
 const gameOf = (id: string): GameDef => (id === walltest.id ? walltest : getGame(id));
 
 // —— 场景运行器（契约锁） ——
@@ -16,19 +16,19 @@ interface StepExpect {
 	ok?: boolean;
 	/** reason 子串匹配。 */
 	reason?: string;
-	/** 动作步的否决律（Denial.law）：否决来源的结构判据。 */
+	/** 动作步的否决律（Denial.law）。 */
 	law?: string;
-	/** 期望前置条件违约（未知动词/schema 不符——场景笔误通道，不混同于世界拒绝）。 */
+	/** 期望前置条件违约（未知动词/schema 不符），不混同于世界拒绝。 */
 	protocol?: "action.unknown" | "action.schema";
-	/** 期望裁决中抛错（结构墙拦截：越权写在冻结读态上即抛）；值为错误信息子串。 */
+	/** 期望抛错（错误信息子串）。 */
 	throws?: string;
-	/** 期望本步骤的刻步被必要性通道拦截（墙否决或法则失灵代谢），拦截即通过。 */
+	/** 期望刻步被必要性通道拦截。 */
 	tickDenied?: boolean;
 	/** spineLines 于本步骤 [动作步, ...刻步] 的精确行集。 */
 	lines?: string[];
 	/** 步骤后的状态断言：`实体.属性` 点径或 `$world.*` 世界径，deepEq。 */
 	state?: Record<string, unknown>;
-	/** 步骤后的状态视图断言：digest() 的子串包含/排除——感知通道（internal 重露、边隐藏、extra 纹理）的契约锁。 */
+	/** 状态视图断言：digest() 的子串包含/排除。 */
 	viewIncludes?: string[];
 	viewExcludes?: string[];
 }
@@ -68,7 +68,6 @@ interface ScenarioReport {
 	steps: StepReport[];
 }
 
-/** 结构等值：对象按键集递归、数组按位（$world 探针的精确键集断言所需）；标量行为同 ===。 */
 function deepEq(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
 	if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => deepEq(v, b[i]));
@@ -80,7 +79,6 @@ function deepEq(a: unknown, b: unknown): boolean {
 	return false;
 }
 
-/** 状态径读数：`$world.*` 走世界对象，其余首段为实体 id、余段为属性键；缺席渲染为 null。 */
 function readPath(sim: Simulation, path: string): unknown {
 	if (path.startsWith("$world.")) {
 		let actual: unknown = sim.world;
@@ -104,7 +102,7 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	return failures.length ? failures.join("; ") : "ok";
 }
 
-/** 唯一执行路径：tick 步脱糖为 dev.wait；apply 含落钟，抛错即前置条件违约/投影缺陷（世界已由 apply 回滚）。 */
+/** tick 脱糖为 dev.wait，与 action 同走唯一执行路径；apply 含落钟。 */
 function runStep(sim: Simulation, step: ScenarioStep): { steps: Step[]; error?: unknown } {
 	if (step.tick == null && !step.action) return { steps: [], error: new Error("无效步骤：缺 action/tick") };
 	try {
@@ -118,9 +116,7 @@ function runStep(sim: Simulation, step: ScenarioStep): { steps: Step[]; error?: 
 	}
 }
 
-/** 断言词汇的唯一语义：ok/reason/law 恒指动作步（tick 步的动作步是 dev.wait 授予，恒真——
- *  刻步现象用 tickDenied/lines 断言）；protocol/throws 断言抛错通道，二者与 ok 断言互斥；
- *  state/lines 对抛错步同样断言（回滚探针：抛错后世界必须是调用前原状，steps 为空）。 */
+/** ok/reason/law 恒指动作步（tick 步的动作步是 dev.wait 授予，恒真）；protocol/throws 断言抛错通道；state/lines 兼断抛错步（回滚探针）。 */
 function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Step[]; error?: unknown }): string[] {
 	const p: string[] = [];
 	const e = step.expect;
@@ -190,7 +186,6 @@ function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 
 function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
-	// dev.wait 挂 internal 研究动词：tick 步经同一裁决边界落钟
 	const def = withDevWait(gameOf(file.game));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	return {
@@ -220,8 +215,7 @@ async function cmdScenario(scenarioPath: string): Promise<void> {
 	process.exit(passed === total ? 0 : 1);
 }
 
-/** 验证全部场景：自动发现 scenarios/*.json，跳过未注册游戏（归档的游戏场景保留作参考）。
- *  不绑定任何特定游戏/场景文件——新增场景即被纳入，移除游戏只需从注册表摘除。 */
+/** 自动发现 scenarios/*.json，跳过未注册游戏（归档场景保留作参考）。 */
 async function cmdVerify(): Promise<void> {
 	let files: string[];
 	try {
@@ -266,13 +260,11 @@ function parseScalar(s: string): Scalar {
 	return s;
 }
 
-/** 指称参数解析：按 id 或 name 匹配当前世界的实体（不存在的字符串原样返回）。 */
 function resolveEntity(v: string, sim: Simulation): string {
 	const hit = sim.world.entities.find((e) => e.name === v || e.id === v);
 	return hit ? hit.id : v;
 }
 
-/** CLI 动作解析：指称参数按 id/name 解析，自由字符串与其余参数按动词 schema 的属性顺序解析为标量。 */
 function parseActionToken(token: string, sim: Simulation): Action {
 	const [verbName, ...rest] = token.split(/\s+/);
 	const verb = sim.def.verbs[verbName!];
@@ -295,13 +287,12 @@ function parseActionToken(token: string, sim: Simulation): Action {
 
 type DenialBearer = { ok: boolean; deniedBy?: "rule" | "invariant"; denial?: Denial };
 
-/** bug 判据：deniedBy=invariant 且无世界腔理由（核心级拦截）；authored 墙否决有 reason，不算 bug。 */
+/** bug 判据：invariant 否决且无世界腔理由。 */
 function bugOf(s: DenialBearer): string | undefined {
 	if (s.ok || s.deniedBy !== "invariant" || !s.denial || s.denial.reason != null) return undefined;
 	return s.denial.debug ?? s.denial.law;
 }
 
-/** 刻步的可说文本：成功刻 = 事实串联，失败刻 = 拒绝的世界腔。 */
 function tickText(def: GameDef, s: TickStep): string {
 	return s.ok ? (s.facts?.join(" ") ?? "") : renderDenial(def, s.denial);
 }
@@ -342,7 +333,6 @@ async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }
 
 // —— 裁决地图（probe） ——
 
-/** 裁决地图行：拒绝（含法则与理由）或协议违约。授予不逐行记，按动词计数。 */
 interface MapRow {
 	verb: string;
 	op: string;
@@ -351,16 +341,14 @@ interface MapRow {
 	bug?: string;
 }
 
-/** 规则判定踪迹：instrumentDef 的包装规则在真实裁决链上逐条记录。 */
 interface RuleTrace {
 	verb: string;
 	rule: string;
-	/** undefined＝弃权（返回 null）；true/false＝表态（首表态即判决，后继规则的缺席即未达）。 */
+	/** undefined＝弃权；true/false＝表态。 */
 	ok?: boolean | undefined;
 }
 
-/** 给 def 组合上记录包装（不改原 def、不复制裁决逻辑）：规则仍在真实裁决链上运行，
- *  踪迹即「谁表态、谁弃权、谁未达」的忠实记录。 */
+/** 包装规则记录踪迹：不改原 def，不复制裁决逻辑。 */
 function instrumentDef(def: GameDef, trace: RuleTrace[]): GameDef {
 	const verbs: Record<string, VerbDef> = {};
 	for (const [name, v] of Object.entries(def.verbs)) {
@@ -384,9 +372,7 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-/** 裁决地图：对每动词穷举指称参数 × 可见实体（每动作在初始世界的独立 Simulation 上裁决）。
- *  liveness＝法则×动词活性矩阵（法则 id 为行）：授予/拒绝/弃权/未达计数——
- *  永远弃权的法则（死法则，或条件未在初始域成立）只有这里可见，拒绝行清单看不见弃权。 */
+/** 穷举指称参数 × 可见域（每动作在独立 Simulation 上裁决）；liveness 为法则×动词活性矩阵——永远弃权的法则只有此处可见。 */
 function probeDef(def: GameDef, maxCombos = 10000): {
 	rows: MapRow[];
 	grants: Map<string, number>;
@@ -421,7 +407,6 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			const bug = bugOf(step);
 			if (step.ok) grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
 			else rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason, ...(bug !== undefined && { bug }) });
-			// 授予与拒绝两条路径都要查刻步：拦截即 bug（authored 墙否决有世界腔理由，不算）
 			for (const t of elapsed) {
 				if (t.ok) continue;
 				const b = bugOf(t);
@@ -444,7 +429,6 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName]!;
 		const refs = refParamsOf(verb);
-		// 必填非指称参数（自由字符串）的探测域无法机械穷举：显式跳过而非报违约
 		const required = ((verb.schema as unknown as { required?: string[] }).required ?? []).filter((p) => !refs.includes(p));
 		if (required.length) {
 			skipped.push({ verb: verbName, params: required });
@@ -468,10 +452,9 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	for (const [verbName, verb] of Object.entries(def.verbs)) {
 		if (skippedVerbs.has(verbName)) continue;
 		const n = combos.get(verbName) ?? 0;
-		if (n === 0) continue; // 截断未覆盖的动词：矩阵行留空，由截断注记说明
+		if (n === 0) continue;
 		for (const r of verb.rules) {
 			const s = stats.get(`${verbName}|${r.id}`) ?? { grant: 0, deny: 0, abstain: 0 };
-			// 行键 = 限定身份 verb.id：法则的同一性随出处路径，裸 id 跨动词不合并
 			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: n - s.grant - s.deny - s.abstain });
 		}
 	}

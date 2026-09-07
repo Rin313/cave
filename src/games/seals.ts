@@ -3,10 +3,7 @@ import { D, defineVerb, deny, entity, free, grant, ref, relVal } from "../core/s
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
-/** 探针章程：统一探针「封缄·宅邸夜」——陈列馆式最小探针，展品→格子清单见 DESIGN.md。
- *  判定单位是格子，隔离由场景锁承载（每场景独立起跑）；世界只提供通道共存的基质，使复合格可实例化。
- *  仪器约束：grounding 锚定 hostOf（魂不可自见）、社会边经 edgePerception 隐藏（path 通路可感）、
- *  信文经 propPerception 隐藏、聚合纹理走 digestExtra（无引用面）。 */
+/** 统一探针「封缄·宅邸夜」：展品 → 格子清单见 DESIGN.md 研究章程。 */
 
 const SEALS_PROPS: Record<string, PropDef> = {
 	kind: { type: "string", label: "类别" },
@@ -15,15 +12,15 @@ const SEALS_PROPS: Record<string, PropDef> = {
 	seal: { type: "boolean", label: "火漆" },
 	sender: { type: "id", label: "寄信人" },
 	recipient: { type: "id", label: "收信人" },
-	// 信文：propPerception 展品——只对知晓者可感，机械变更行随之可说（双写税废除）
+	// 展品：信文只对知晓者可感（属性感知槽）
 	content: { type: "string", label: "信文" },
-	// known 标记：对模型不可见，grounding 并入参照域（对话获名的引用生命周期）
+	// 展品：known 生命周期（对话获名，internal 不进视图、并入参照域）
 	introduced: { type: "boolean", internal: true },
-	// 主体性机：hostOf 键控的器皿标记；魂不可自见
+	// 展品：主体性（hostOf 键控、魂不可自见）
 	vessel: { type: "boolean", internal: true },
 	mask: { type: "boolean", label: "面具" },
 	heard: { type: "string", label: "闻言" },
-	// id 数组展品：书案的收发清单——强引用（掷火前须解系）
+	// 展品：id 数组（强引用挡 despawn）
 	manifest: { type: "id", label: "收发清单" },
 };
 
@@ -34,7 +31,7 @@ const isLetter = (q: Q, id: string) => {
 	return t && t.props.kind === "letter" ? t : null;
 };
 
-/** 无主语动词的缺省主语：居所链上最近器皿（魂锚定视角与持取，社交记录落在器皿）。 */
+/** 无主语动词的缺省主语：居所链最近宿主。 */
 const host = (q: Q): string => hostOf(q.world, q.player);
 
 const manifestOf = (q: Q): string[] => {
@@ -42,8 +39,7 @@ const manifestOf = (q: Q): string[] => {
 	return Array.isArray(m) ? [...m] as string[] : [];
 };
 
-/** 反向引用扫描（掷火的世界腔面）：强引用宇宙单源于注册表声明（type:"id" 含数组值），键表不得手抄
- *  边是弱引用，随主消散。 */
+/** 强引用宇宙单源于注册表声明（type:"id" 含数组值）；边是弱引用，随主消散。 */
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
 		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
@@ -55,7 +51,7 @@ const referenced = (q: Q, id: string): string | null => {
 	return null;
 };
 
-/** 桶级披露（digestExtra 的残余职责：非账本的聚合纹理）；信文的重露已由 propPerception 承载。 */
+/** 桶级披露：非账本的聚合纹理。 */
 function extraOf(world: World, player: string): Record<string, ViewValue> {
 	const name = (id: string): string => nameOf(world, id);
 	const affinity: string[] = [];
@@ -368,11 +364,11 @@ export const seals: GameDef = {
 	],
 	props: SEALS_PROPS,
 	voice: `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。`,
-	// 一切边对体验者隐藏：社会真相只经 extra 的桶级披露与法则代笔流动（被测通道）
+	// 社会真相只经桶级披露与法则代笔流动（被测通道）
 	edgePerception: () => (r) => r.type !== "信任" && r.type !== "猜疑" && r.type !== "知晓",
-	// 属性感知：信文只对知晓者可感（判据读物化真相——知晓边；键控非 id 特判）
+	// 信文只对知晓者可感（判据 = 知晓边）
 	propPerception: (world, player) => (e, prop) => prop !== "content" || relVal(world, player, e.id, "知晓") !== null,
-	// 视角锚＝居所链最近器皿；魂不可自见（意志能点名的域里没有意志自身）
+	// 视角锚 = hostOf；魂不可自见
 	grounding: (world, player) => {
 		const vis = inTreeVisible(world, hostOf(world, player));
 		vis.delete(player);
