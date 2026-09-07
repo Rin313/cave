@@ -253,7 +253,10 @@ export const seals: GameDef = {
 			rules: [{
 				id: "pass",
 				judge: (_q, p) => {
-					const span = Math.min(12, Math.max(1, Math.floor(Number(p.span ?? 1))));
+					const span = p.span ?? 1;
+					if (!Number.isInteger(span)) return deny("wait.span", { reason: "时间以刻计，没有半刻。" });
+					if (span < 1) return deny("wait.span", { reason: "那不算等候。" });
+					if (span > 12) return deny("wait.span", { reason: "你等不了那么久。" });
 					return grant([], span >= 4 ? "你在廊下站了好一阵子。" : "你静静站了一会儿。", undefined, span);
 				},
 			}],

@@ -64,6 +64,15 @@
 			]
 		},
 		{
+			"name": "等候：越域由法则拒绝而非改写——世界不代映射器重释意图",
+			"steps": [
+				{ "name": "一刻授予：刻步全静默，聚合归账", "action": { "verb": "wait", "params": { "span": 1 } }, "expect": { "ok": true, "lines": ["✓ 等候(1)：你静静站了一会儿。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
+				{ "name": "过长：拒绝而非钳到 12，钟不动", "action": { "verb": "wait", "params": { "span": 999 } }, "expect": { "ok": false, "law": "wait.span", "reason": "等不了那么久", "lines": ["✗ 等候(999)：你等不了那么久。"], "state": { "$world.time": 1 } } },
+				{ "name": "半刻：时间以刻计，不静默取整", "action": { "verb": "wait", "params": { "span": 2.5 } }, "expect": { "ok": false, "law": "wait.span", "reason": "时间以刻计", "lines": ["✗ 等候(2.5)：时间以刻计，没有半刻。"], "state": { "$world.time": 1 } } },
+				{ "name": "零刻：不成等候", "action": { "verb": "wait", "params": { "span": 0 } }, "expect": { "ok": false, "law": "wait.span", "reason": "那不算等候", "lines": ["✗ 等候(0)：那不算等候。"], "state": { "$world.time": 1 } } }
+			]
+		},
+		{
 			"name": "占问：同刻同源同键恒同签（随机是世界纯函数）",
 			"steps": [
 				{ "name": "零刻动词不推钟：首掷落定骰子地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
