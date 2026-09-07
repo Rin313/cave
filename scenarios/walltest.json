@@ -141,6 +141,20 @@
 				{ "name": "未知动词：action.unknown 协议违约，世界为调用前原状", "action": { "verb": "no_such_verb", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "player.touched": 0 } } },
 				{ "name": "schema 违约：未知参数被 additionalProperties 拒绝（action.schema），世界同样不动", "action": { "verb": "touch", "params": { "x": 1 } }, "expect": { "protocol": "action.schema", "state": { "$world.time": 0, "player.touched": 0 } } }
 			]
+		},
+		{
+			"name": "attempt 入界即冻结：法则改写裁决入参即抛——链内各法则与步记录所见同一不可变 attempt",
+			"steps": [
+				{ "name": "改写 q.params：TypeError 兑为 rule.crash（授予不存在，时价照耗，世界不动）", "action": { "verb": "rewrite", "params": {} }, "expect": { "ok": false, "law": "rule.crash", "state": { "$world.time": 0 } } }
+			]
+		},
+		{
+			"name": "步入账即冻结：法则保留的拒绝对象入账后改写即抛——记录是证据而非视图",
+			"steps": [
+				{ "name": "初次记仇：拒绝对象随步入账（本步返回即冻结）", "action": { "verb": "grudge", "params": {} }, "expect": { "ok": false, "law": "grudge.hold", "reason": "初次记仇" } },
+				{ "name": "武装改写分支", "action": { "verb": "mark", "params": {} }, "expect": { "ok": true } },
+				{ "name": "改写已入账的拒绝对象：TypeError 兑为 rule.crash，记录未被污染", "action": { "verb": "grudge", "params": {} }, "expect": { "ok": false, "law": "rule.crash" } }
+			]
 		}
 	]
 }

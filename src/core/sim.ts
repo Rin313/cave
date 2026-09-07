@@ -722,11 +722,12 @@ export class Simulation {
 		return null;
 	}
 
-	/** 历史原子性：异常逃逸 ⇒ 世界恢复调用前原状再抛。 */
+	/** 历史原子性：异常逃逸 ⇒ 世界恢复调用前原状再抛。attempt 入界即冻结（Q.params 与步记录同一对象），Resolution 出界即冻结（记录是证据而非视图）。 */
 	apply(action: Action): Resolution {
+		deepFreeze(action);
 		const s0 = this.readState();
 		try {
-			return this.applyInner(action, s0);
+			return deepFreeze(this.applyInner(action, s0));
 		} catch (e) {
 			this.restore(s0);
 			throw e;

@@ -1,4 +1,4 @@
-import type { Entity, GameDef, LedgerValue, PropDef, PropValue, Q } from "../core/sim.ts";
+import type { Denial, Entity, GameDef, LedgerValue, PropDef, PropValue, Q } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant, ref } from "../core/sim.ts";
 import { Type } from "typebox";
 
@@ -19,11 +19,15 @@ const PROPS: Record<string, PropDef> = {
 	mech: { type: "boolean", internal: true },
 	mute: { type: "boolean", internal: true },
 	mechturn: { type: "number", internal: true },
+	grudged: { type: "boolean", internal: true },
 	beats: { type: "number", label: "摆动" },
 	// 字面/引用对照：note 字面（与 id 碰撞不解析）、ref 引用
 	note: { type: "string", label: "便签" },
 	ref: { type: "id", label: "指向" },
 };
+
+/** grudge 保留的拒绝对象：入账即冻结的越权写探针（改写它即抛）。 */
+let retainedDenial: Denial | undefined;
 
 function leakHp(q: Q): void {
 	const me = entity(q.world, q.player);
@@ -233,6 +237,42 @@ export const walltest: GameDef = {
 			description: "研究动词：武装 mech.tick（纯机械刻）并静默 vault.tick——刻账目闭合的锁需要干净的刻。",
 			schema: Type.Object({}),
 			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "mech", true), D.set(q.player, "mute", true)], "机械刻已上弦。") }],
+		}),
+		rewrite: defineVerb({
+			label: "改判",
+			description: "墙契约：法则改写裁决入参（q.params）——attempt 入界即冻结，越权写即抛（rule.crash）。",
+			schema: Type.Object({}),
+			rules: [{
+				id: "tamper",
+				judge: (q) => {
+					(q.params as Record<string, unknown>).hack = true;
+					return grant([], "参数被改写。");
+				},
+			}],
+		}),
+		grudge: defineVerb({
+			label: "记仇",
+			description: "墙契约：法则保留拒绝对象并于下次裁决改写它——步入账即冻结，越权写即抛（rule.crash）。",
+			schema: Type.Object({}),
+			rules: [{
+				id: "hold",
+				judge: (q) => {
+					const me = entity(q.world, q.player)!;
+					if (me.props.grudged === true && retainedDenial) {
+						retainedDenial.reason = "被改写的记仇";
+						return deny("grudge.rewrite", { reason: "不应到达。" });
+					}
+					const denial: Denial = { law: "grudge.hold", reason: "初次记仇。" };
+					retainedDenial = denial;
+					return { ok: false, denial };
+				},
+			}],
+		}),
+		mark: defineVerb({
+			label: "立仇",
+			description: "研究动词：武装 grudge 的改写分支（未武装时每次记仇都重新立状）。",
+			schema: Type.Object({}),
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "grudged", true)], "仇已记下。") }],
 		}),
 	},
 	world: {
