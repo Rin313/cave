@@ -73,6 +73,13 @@
 			]
 		},
 		{
+			"name": "刻账目闭合：有言刻成块，内务刻与无步刻同归静默——言默与消费面无关",
+			"steps": [
+				{ "name": "上弦：武装机械刻并静默封印刻", "action": { "verb": "windup", "params": {} }, "expect": { "ok": true } },
+				{ "name": "两刻：奇刻仅内务变更、偶刻机械变更——有言成块，静默 ×1", "tick": 2, "expect": { "ok": true, "lines": ["✓ 流逝(2)：时间流逝。", "⏱ （你.摆动: null → 1）", "⏱ 时间流逝 ×1"], "state": { "player.beats": 1, "player.mechturn": 1 } } }
+			]
+		},
+		{
 			"name": "指称解析按声明：字面字符串与实体 id 碰撞也不得解析，id 型属性解析为展示名",
 			"steps": [
 				{ "name": "字面保持字面，引用解析为名字", "action": { "verb": "tag", "params": {} }, "expect": { "ok": true, "lines": ["✓ 标记：你写下了标记。（你.便签: null → thing；你.指向: null → 那件东西）"] } }

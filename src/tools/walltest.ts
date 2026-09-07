@@ -16,6 +16,10 @@ const PROPS: Record<string, PropDef> = {
 	gaze: { type: "boolean", internal: true },
 	phantom: { type: "boolean", internal: true },
 	spy: { type: "boolean", internal: true },
+	mech: { type: "boolean", internal: true },
+	mute: { type: "boolean", internal: true },
+	mechturn: { type: "number", internal: true },
+	beats: { type: "number", label: "摆动" },
 	// 字面/引用对照：note 字面（与 id 碰撞不解析）、ref 引用
 	note: { type: "string", label: "便签" },
 	ref: { type: "id", label: "指向" },
@@ -224,6 +228,12 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "spy", true)], "感知已被武装。") }],
 		}),
+		windup: defineVerb({
+			label: "上弦",
+			description: "研究动词：武装 mech.tick（纯机械刻）并静默 vault.tick——刻账目闭合的锁需要干净的刻。",
+			schema: Type.Object({}),
+			rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "mech", true), D.set(q.player, "mute", true)], "机械刻已上弦。") }],
+		}),
 	},
 	world: {
 		time: 0,
@@ -252,9 +262,19 @@ export const walltest: GameDef = {
 			},
 		},
 		{
-			// 产出封印，被 vault.sealed 否决（被拦刻步场景）
+			// 产出封印，被 vault.sealed 否决（被拦刻步场景）；mute 时沉默——给账目闭合锁让出干净的刻
 			id: "vault.tick",
-			run: (q) => ({ deltas: [D.set(q.player, "vault", true)] }),
+			run: (q) => (entity(q.world, q.player)?.props.mute === true ? null : { deltas: [D.set(q.player, "vault", true)] }),
+		},
+		{
+			// windup 武装后产纯机械刻（delta 无事实）；未武装时沉默——刻账目闭合的锁点：有言刻不并入静默，内务刻同归静默
+			id: "mech.tick",
+			run: (q) => {
+				const me = entity(q.world, q.player);
+				if (me?.props.mech !== true) return null;
+				if (q.time % 2 === 1) return { deltas: [D.set(q.player, "mechturn", Number(me.props.mechturn ?? 0) + 1)] };
+				return { deltas: [D.set(q.player, "beats", num(me.props.beats) + 1)] };
+			},
 		},
 	],
 	/** gaze=true 时感知崩溃（apply 回滚后重抛）；phantom=true 时谎报 id（门权威 = grounding ∩ 账本）。 */

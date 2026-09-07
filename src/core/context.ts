@@ -46,10 +46,10 @@ export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
 	return out;
 }
 
-/** 名字解析随世界现值（改名连续）；离场名以窗口级名表兜底。 */
+/** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底。 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
-	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { compact: true, departed }) }));
+	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { departed }) }));
 }
 
 /** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。stringify 不转义的行分隔符（U+2028/9）手动补转义。 */
@@ -59,7 +59,12 @@ export function verbatim(s: string): string {
 
 function renderRecent(recent: readonly RecentEntry[]): string {
 	if (!recent.length) return "";
-	const lines = recent.map((m) => `- t${m.time} ${verbatim(m.intent)} → ${m.moves.length ? m.moves.join("；") : "未解析"}`);
+	const lines: string[] = [];
+	for (const m of recent) {
+		lines.push(`- t${m.time} ${verbatim(m.intent)}`);
+		if (m.moves.length) for (const l of m.moves) lines.push(`  ${l}`);
+		else lines.push("  未解析");
+	}
 	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");
 }
 

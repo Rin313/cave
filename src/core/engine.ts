@@ -12,7 +12,7 @@ import {
 import { Type } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
-import { Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
+import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -26,9 +26,11 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 const ACT_TOOL = "act";
 
-/** 映射契约单源：系统提示、工具描述、回合提示、门闩文案共享同一措辞。 */
+/** 映射契约单源：系统提示、工具描述、回合提示、门闩与形态反馈共享同一措辞。 */
 const CONTRACT = {
-	once: "act 每回合只能在裁决前调用一次",
+	once: "act 每回合恰一个裁决窗口，提案进入裁决后本回合不再受理",
+	retry: "被形态校验拒绝的调用不占窗口，按反馈修正后重新提交",
+	form: "提案未通过形态校验，未进入裁决：按以下违约点修正后重新提交",
 	commit: "能构造出合法提案（动词承载意图、指称参数都取自可见实体的 id）就提交 actions，预计被世界拒绝也照常提交——意图是否合理由世界法则裁决，不由你判断",
 	empty: "构造不出合法提案就提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体",
 	follow: "act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文",
@@ -311,7 +313,7 @@ function buildSystemPrompt(def: GameDef): string {
 			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（指称参数：${refs.join("/")}——只能取可见实体 id）` : ""}`;
 		})
 		.join("\n");
-	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（${CONTRACT.once}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.follow}。
+	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（${CONTRACT.once}；${CONTRACT.retry}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.follow}。
 呈现调用（开场、时间流逝后的场景描写）没有行动窗口：prompt 顶部标注「呈现服务」，此时不要调用 act，直接输出散文正文。
 世界说明：entities 是当前所有可见实体，relations 是可见的关系边（from/to 为实体 id，type 为关系名）。id 是唯一标识，name 是展示名。extra（存在时）是游戏派生的场景纹理。
 可用动词（模拟层强制执行）：
@@ -346,10 +348,8 @@ function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string)
 	return lines.join("\n");
 }
 
-/** 整批静态预检在首个裁决前；逐动作落钟，后一动作在后一世界态上裁决；已裁决步实时入 sink。 */
+/** 逐动作落钟：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
 function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): void {
-	if (!actions.length) return;
-	sim.validateBatch(actions);
 	for (const a of actions) {
 		const res = sim.apply(a);
 		sink.push(res.step, ...res.elapsed);
@@ -372,7 +372,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
-		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.once}；世界法则按顺序裁决每个动作并返回结果。`,
+		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.once}；${CONTRACT.retry}；世界法则按顺序裁决每个动作并返回结果。`,
 		parameters: Type.Object({
 			actions: Type.Optional(
 				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" }),
@@ -385,16 +385,23 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 					details: {},
 				};
 			}
+			const proposed = (params.actions ?? []) as Action[];
+			// 形态校验先于窗口占用：违约不占窗口（宿主已整包校验，此处是纵深防御）
+			try {
+				sim.validateBatch(proposed);
+			} catch (e) {
+				if (!(e instanceof ProtocolViolation)) throw e;
+				return { content: [{ type: "text", text: `${CONTRACT.form}\n${e.message}` }], details: {} };
+			}
 			run.phase = "narration";
 			run.acted = true;
-			const proposed = (params.actions ?? []) as Action[];
 			run.proposals = [...proposed];
 			const steps: Step[] = [];
 			let crashed: string | null = null;
 			try {
 				applyBatch(sim, proposed, steps);
 			} catch (e) {
-				// apply 边界重抛的缺陷代谢为可审计回合：已裁决步照常入账，其余不得虚构
+				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛代谢为可审计回合——已裁决步照常入账，其余不得虚构
 				crashed = e instanceof Error ? e.message : String(e);
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}

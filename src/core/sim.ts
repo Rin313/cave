@@ -447,8 +447,8 @@ function referentsOf(sim: Simulation, c: Change, sides?: { prev: boolean; next: 
 	return out;
 }
 
-/** 事件流的规范单行渲染（✓/✗/⏱/×n）；可说性按步的感知截面判据，静默刻归账 timePassed ×n。 */
-export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: boolean; departed?: ReadonlyMap<string, string> }): string[] {
+/** 事件流的规范单行渲染（✓/✗/⏱/×n）；可说性按冻结截面判据，言默不随消费面改变（刻账目闭合）。 */
+export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: ReadonlyMap<string, string> }): string[] {
 	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
 	const shownDeparted = opts?.departed ?? shownDepartedNames(steps);
 	/** 步内可说变更的渲染：存在性、值侧披露与指称门共一判定。 */
@@ -475,7 +475,6 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		};
 	};
 	const msgs = sim.def.messages;
-	const compact = opts?.compact === true;
 	const lines: string[] = [];
 	const said = new Map<number, { changes: string[]; facts: Fact[]; denials: string[] }>();
 	let granted = 0;
@@ -495,7 +494,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		if (s.kind === "action") {
 			flush();
 			granted = s.ticks;
-			const changes = compact ? [] : narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
+			const changes = narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
 				changes.length ? `（${changes.join("；")}）` : "",
 				s.facts?.length ? `〔${s.facts.join("；")}〕` : "",
@@ -504,7 +503,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { compact?: bo
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [], denials: [] };
 			if (s.ok) {
-				if (!compact) held.changes.push(...narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null));
+				held.changes.push(...narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null));
 				if (s.facts?.length) held.facts.push(...s.facts);
 			} else {
 				held.denials.push(renderDenial(sim.def, s.denial));
