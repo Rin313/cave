@@ -620,7 +620,7 @@ export class Simulation {
 		return verb;
 	}
 
-	/** 整批须在首个裁决前过静态检查，否则已裁决动作失去记录。 */
+	/** 整批须在首个裁决前过静态检查，否则已裁决动作失去记录；全集是裁决面，internal 动词经直连 apply 合法进入（act 通道的广告面排除住引擎）。 */
 	validateBatch(actions: readonly Action[]): void {
 		for (const a of actions) this.staticForm(a);
 	}

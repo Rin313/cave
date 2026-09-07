@@ -358,6 +358,7 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
+	const advertised = new Set(publicVerbs.map(([name]) => name));
 	const actionSchema = Type.Union(
 		publicVerbs.map(([name, v]) =>
 			Type.Object(
@@ -386,8 +387,13 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 				};
 			}
 			const proposed = (params.actions ?? []) as Action[];
-			// 形态校验先于窗口占用：违约不占窗口（宿主已整包校验，此处是纵深防御）
+			// 形态校验先于窗口占用；act 通道的动词全集是广告面——内核检查裁决面全集，internal 动词由直连 apply 合法使用
 			try {
+				for (const a of proposed) {
+					if (!advertised.has(a.verb)) {
+						throw new ProtocolViolation("action.unknown", `verb:${a.verb}（可用动词：${[...advertised].join("、")}）`);
+					}
+				}
 				sim.validateBatch(proposed);
 			} catch (e) {
 				if (!(e instanceof ProtocolViolation)) throw e;
