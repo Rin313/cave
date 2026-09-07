@@ -1,7 +1,6 @@
 # Project Structure
 
 .gitignore
-ARCHITECTURE.md
 DESIGN.md
 package.json
 tsconfig.json
