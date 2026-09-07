@@ -388,7 +388,7 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return def.messages.noResponse;
 }
 
-/** 离场名表：窗口内一切 despawn 记录入表。 */
+/** 离场名表：窗口内一切 despawn 记录入表。只可查合法指称；出域引用恒不查。 */
 export function shownDepartedNames(steps: readonly { changes: Change[] }[]): Map<string, string> {
 	const m = new Map<string, string>();
 	for (const s of steps) for (const c of s.changes) if (c.kind === "despawn") m.set(c.entity, c.name);
@@ -768,19 +768,19 @@ export class Simulation {
 		return { step: { ...step, field }, elapsed };
 	}
 
-	/** 域外引用不查在世名；离场名兜底，其余原样回显。 */
+	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态参照域判，出域引用恒原样回显（在世名与离场名都不查）。 */
 	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
 		const action = step.action;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
-		const field = new Set([...step.field.before, ...step.field.after]);
+		const legal = new Set(step.field.before);
 		const refs = new Set(refParamsOf(verb));
 		const parts = Object.keys(verb.schema.properties)
 			.filter((k) => k in action.params)
 			.map((k) => {
 				const v = action.params[k]!;
 				if (!refs.has(k) || typeof v !== "string") return renderValue(this, v, false, departed).text;
-				if (!field.has(v)) return departed?.get(v) ?? v;
+				if (!legal.has(v)) return v;
 				return renderValue(this, v, true, departed).text;
 			});
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;

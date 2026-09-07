@@ -171,6 +171,19 @@ export const walltest: GameDef = {
 			schema: Type.Object({}),
 			rules: [{ id: "ok", judge: () => grant([D.despawn("thing")], "你斩断了那件东西。") }],
 		}),
+		stack: defineVerb({
+			label: "叠写",
+			description: "墙契约：同一值地址的叠加增量按序覆盖——两个从冻结读态派生的 +1 只落一次。",
+			schema: Type.Object({}),
+			rules: [{
+				id: "ok",
+				judge: (q) => {
+					const me = entity(q.world, q.player)!;
+					const v = num(me.props.touched) + 1;
+					return grant([D.set(q.player, "touched", v), D.set(q.player, "touched", v)], "你叠了两次。");
+				},
+			}],
+		}),
 		boom: defineVerb({
 			label: "崩坏",
 			description: "法则失灵夹具：规则中途抛出——门的全面性代谢为必要性否决（rule.crash，链终止，时价照耗）。",

@@ -296,6 +296,8 @@ export const seals: GameDef = {
 				const deltas: Delta[] = [];
 				const facts: Fact[] = [];
 				let rest = manifest;
+				// 猜疑按收信人聚合为一次写：同址叠加增量按序覆盖
+				const suspicion = new Map<string, number>();
 				for (const id of manifest) {
 					const l = entity(q.world, id);
 					if (!l || l.props.in !== "desk") continue;
@@ -307,12 +309,15 @@ export const seals: GameDef = {
 					rest = rest.filter((x) => x !== id);
 					deltas.push(D.set("desk", "manifest", rest.length ? rest : null));
 					if (tampered) {
-						const prev = Number(relVal(q.world, rid, host(q), "猜疑") ?? 0);
-						deltas.push(D.relSet(rid, host(q), "猜疑", prev + 1));
+						suspicion.set(rid, (suspicion.get(rid) ?? 0) + 1);
 						facts.push(`${to.name}收了${nameOf(q.world, id)}。断口的火漆瞒不过人，${to.name}的目光落在你身上。`);
 					} else {
 						facts.push(`${to.name}收了${nameOf(q.world, id)}，拆封读毕。`);
 					}
+				}
+				for (const [rid, n] of suspicion) {
+					const prev = Number(relVal(q.world, rid, host(q), "猜疑") ?? 0);
+					deltas.push(D.relSet(rid, host(q), "猜疑", prev + n));
 				}
 				return deltas.length ? { deltas, facts } : null;
 			},

@@ -52,9 +52,9 @@ export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { compact: true, departed }) }));
 }
 
-/** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。 */
+/** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。stringify 不转义的行分隔符（U+2028/9）手动补转义。 */
 export function verbatim(s: string): string {
-	return JSON.stringify(s).replace(/[\u2028\u2029]/g, "\\n");
+	return JSON.stringify(s).replace(/[\u2028\u2029]/g, (c) => (c === "\u2028" ? "\\u2028" : "\\u2029"));
 }
 
 function renderRecent(recent: readonly RecentEntry[]): string {

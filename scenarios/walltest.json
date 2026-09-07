@@ -114,6 +114,12 @@
 			]
 		},
 		{
+			"name": "同址叠加：绝对写下没有读通道——从冻结读态重复派生的增量按序覆盖，只落一次",
+			"steps": [
+				{ "name": "两次 w⁻ 派生的 +1：终值 +1 而非 +2，同值后写幂等跳过（单变更行）", "action": { "verb": "stack", "params": {} }, "expect": { "ok": true, "lines": ["✓ 叠写：你叠了两次。（你.触及: 0 → 1）"], "state": { "player.touched": 1 } } }
+			]
+		},
+		{
 			"name": "参照域契约：门权威 = grounding ∩ 账本——谎报的 id 不可指名，在册实体不误伤",
 			"steps": [
 				{ "name": "干净对照：召唤在册实体（参照域内，法则授予）", "action": { "verb": "beckon", "params": { "target": "thing" } }, "expect": { "ok": true, "reason": "招了招手" } },

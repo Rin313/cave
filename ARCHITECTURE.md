@@ -5,7 +5,7 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 桌面壳 | Electron | 目标形态；原型期交互面为 `tools/loop.ts` CLI |
-| AI 编排 | pi coding-agent SDK | 进程内集成，文档`node_modules/@earendil-works/pi-coding-agent/docs/` |
+| AI 编排 | pi agent SDK | 进程内集成，文档`node_modules/@earendil-works/pi-coding-agent/docs/` |
 | 持久化 | SQLite | 目标形态（存档 + 审计）；原型期由 `loop` 的 runs/ 目录落盘 |
 
 ## 核心架构
