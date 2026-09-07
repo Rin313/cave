@@ -3,7 +3,7 @@ import { D, defineVerb, deny, entity, free, grant, ref, relVal } from "../core/s
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 import { Type } from "typebox";
 
-/** 统一探针「封缄·宅邸夜」：展品 → 格子清单见 DESIGN.md 研究章程。 */
+/** 统一探针：展品 → 格子清单见 DESIGN.md 研究章程。 */
 
 const SEALS_PROPS: Record<string, PropDef> = {
 	kind: { type: "string", label: "类别" },
