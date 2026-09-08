@@ -18,8 +18,8 @@ const SEALS_PROPS: Record<string, PropDef> = {
 	vessel: { type: "boolean", internal: true },
 	mask: { type: "boolean", label: "面具" },
 	heard: { type: "string", label: "闻言" },
-	// 展品：id 数组（强引用挡 despawn）
-	manifest: { type: "id", label: "收发清单" },
+	// 展品：键控载荷（揭面的真名随面具者泛化，internal 不进视图）
+	trueName: { type: "string", internal: true },
 };
 
 const nameOf = (w: World, id: string): string => entity(w, id)?.name ?? id;
@@ -31,11 +31,6 @@ const isLetter = (q: Q, id: string) => {
 
 /** 无主语动词的缺省主语：居所链最近宿主。 */
 const host = (q: Q): string => hostOf(q.world, q.player);
-
-const manifestOf = (q: Q): string[] => {
-	const m = entity(q.world, "desk")?.props.manifest;
-	return Array.isArray(m) ? [...m] as string[] : [];
-};
 
 /** 强引用宇宙单源于注册表声明（type:"id" 含数组值）；边是弱引用，随主消散。 */
 const referenced = (q: Q, id: string): string | null => {
@@ -84,7 +79,7 @@ export const seals: GameDef = {
 	verbs: {
 		take: defineVerb({
 			label: "拿取",
-			description: "把书案上的一封信拿到手里（持者是你的躯体，清单随之销账）。",
+			description: "把书案上的一封信拿到手里（持者是你的躯体）。",
 			schema: Type.Object({ entity: ref("信件 id") }),
 			rules: [{
 				id: "desk",
@@ -92,10 +87,7 @@ export const seals: GameDef = {
 					const t = isLetter(q, p.entity);
 					if (!t) return deny("take.notletter", { reason: "那不是能拿的信。" });
 					if (t.props.in !== "desk") return deny("take.notondesk", { reason: "那封信不在书案上。" });
-					return grant(
-						[D.set(p.entity, "in", host(q)), D.set("desk", "manifest", (() => { const r = manifestOf(q).filter((x) => x !== p.entity); return r.length ? r : null; })())],
-						`你把${nameOf(q.world, p.entity)}拿到了手里。`,
-					);
+					return grant([D.set(p.entity, "in", host(q))], `你把${nameOf(q.world, p.entity)}拿到了手里。`);
 				},
 			}],
 		}),
@@ -149,10 +141,7 @@ export const seals: GameDef = {
 					const t = isLetter(q, p.entity);
 					if (!t) return deny("leave.notletter", { reason: "那不是信。" });
 					if (t.props.in !== host(q)) return deny("leave.notheld", { reason: "那封信不在你手里。" });
-					return grant(
-						[D.set(p.entity, "in", "desk"), D.set("desk", "manifest", [...manifestOf(q), p.entity])],
-						`你把${nameOf(q.world, p.entity)}放回了书案。`,
-					);
+					return grant([D.set(p.entity, "in", "desk")], `你把${nameOf(q.world, p.entity)}放回了书案。`);
 				},
 			}],
 		}),
@@ -186,7 +175,9 @@ export const seals: GameDef = {
 				judge: (q, p) => {
 					const t = entity(q.world, p.target);
 					if (!t || t.props.mask !== true) return deny("unmask.nomask", { reason: "那人没有戴面具。" });
-					return grant([D.rename(p.target, "沈青"), D.set(p.target, "mask", false)], "你揭下了面具。");
+					const trueName = t.props.trueName;
+					const reveal = typeof trueName === "string" && trueName !== "" ? trueName : null;
+					return grant([...(reveal !== null ? [D.rename(p.target, reveal)] : []), D.set(p.target, "mask", false)], "你揭下了面具。");
 				},
 			}],
 		}),
@@ -224,13 +215,11 @@ export const seals: GameDef = {
 		}),
 		burn: defineVerb({
 			label: "掷火",
-			description: "把一样东西掷进火盆（还系着它的东西得先解开：账上的、盛着的、挂在身上的）。",
+			description: "把一样东西掷进火盆（被信或魂系着的东西，得先解开）。",
 			schema: Type.Object({ entity: ref("目标 id") }),
 			rules: [{
 				id: "tied",
 				judge: (q, p) => {
-					const t = entity(q.world, p.entity);
-					if (!t) return deny("burn.gone", { reason: "那里已经什么都没有了。" });
 					const ref = referenced(q, p.entity);
 					if (ref) return deny("burn.tied", { reason: `${nameOf(q.world, ref)}还系着${nameOf(q.world, p.entity)}，解开了才烧得掉。` });
 					return grant([D.despawn(p.entity)], `你把${nameOf(q.world, p.entity)}掷进了火盆。`);
@@ -270,12 +259,12 @@ export const seals: GameDef = {
 			{ id: "magistrate", name: "太守", props: { kind: "person", in: "parlor" } },
 			{ id: "steward", name: "管家", props: { kind: "person", in: "parlor" } },
 			{ id: "merchant", name: "盐商", props: { kind: "person", in: "parlor" } },
-			{ id: "guest", name: "灰衣人", props: { kind: "person", mask: true, in: "study" } },
+			{ id: "guest", name: "灰衣人", props: { kind: "person", mask: true, trueName: "沈青", in: "study" } },
 			{ id: "mask", name: "白瓷面具", props: { kind: "thing", vessel: true, in: "parlor" } },
 			{ id: "parlor", name: "正厅", props: { kind: "room", space: true } },
 			{ id: "study", name: "书房", props: { kind: "room", space: true } },
 			{ id: "court", name: "庭院", props: { kind: "room", space: true } },
-			{ id: "desk", name: "书案", props: { kind: "desk", manifest: ["letter_salt", "letter_grain"], in: "parlor" } },
+			{ id: "desk", name: "书案", props: { kind: "desk", in: "parlor" } },
 			{ id: "letter_salt", name: "火漆信·盐引", props: { kind: "letter", in: "desk", seal: true, sender: "merchant", recipient: "magistrate", content: "盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。" } },
 			{ id: "letter_grain", name: "火漆信·粮价", props: { kind: "letter", in: "desk", seal: true, sender: "magistrate", recipient: "merchant", content: "秋粮定价每石四百钱，勿为流言所动。" } },
 		],
@@ -292,28 +281,22 @@ export const seals: GameDef = {
 			id: "post.deliver",
 			run: (q) => {
 				if (q.time % 4 !== 0) return null;
-				const manifest = manifestOf(q);
-				if (!manifest.length) return null;
 				const deltas: Delta[] = [];
 				const facts: Fact[] = [];
-				let rest = manifest;
 				// 猜疑按收信人聚合为一次写：同址叠加增量按序覆盖
 				const suspicion = new Map<string, number>();
-				for (const id of manifest) {
-					const l = entity(q.world, id);
-					if (!l || l.props.in !== "desk") continue;
+				for (const l of q.world.entities) {
+					if (l.props.kind !== "letter" || l.props.in !== "desk") continue;
 					const rid = String(l.props.recipient ?? "");
 					const to = entity(q.world, rid);
 					if (!to) continue;
 					const tampered = l.props.seal !== true;
-					deltas.push(D.set(id, "in", rid), D.set(id, "seal", false), D.relSet(rid, id, "知晓", true));
-					rest = rest.filter((x) => x !== id);
-					deltas.push(D.set("desk", "manifest", rest.length ? rest : null));
+					deltas.push(D.set(l.id, "in", rid), D.set(l.id, "seal", false), D.relSet(rid, l.id, "知晓", true));
 					if (tampered) {
 						suspicion.set(rid, (suspicion.get(rid) ?? 0) + 1);
-						facts.push(`${to.name}收了${nameOf(q.world, id)}。断口的火漆瞒不过人，${to.name}的目光落在你身上。`);
+						facts.push(`${to.name}收了${nameOf(q.world, l.id)}。断口的火漆瞒不过人，${to.name}的目光落在你身上。`);
 					} else {
-						facts.push(`${to.name}收了${nameOf(q.world, id)}，拆封读毕。`);
+						facts.push(`${to.name}收了${nameOf(q.world, l.id)}，拆封读毕。`);
 					}
 				}
 				for (const [rid, n] of suspicion) {
@@ -326,11 +309,13 @@ export const seals: GameDef = {
 		{
 			id: "post.arrive",
 			run: (q) => {
-				if (q.time !== 5 || entity(q.world, "letter_night")) return null;
+				if (q.time % 4 !== 1 || entity(q.world, "letter_night")) return null;
+				// 首轮交割后的下一刻；判据取账本状态（信在收信人处）而非绝对钟点（存档恢复、变体开局同义）
+				const delivered = q.world.entities.some((e) => e.props.kind === "letter" && e.props.recipient != null && e.props.in === e.props.recipient);
+				if (!delivered) return null;
 				return {
 					deltas: [
 						D.spawn({ id: "letter_night", name: "夜笺", props: { kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } }),
-						D.set("desk", "manifest", [...manifestOf(q), "letter_night"]),
 					],
 					facts: ["又有一封夜笺送到，搁在书案上。"],
 				};
