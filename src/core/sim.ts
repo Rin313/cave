@@ -573,7 +573,6 @@ export class Simulation {
 				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
 				ruleIds.add(r.id);
 			}
-			// as 通道的结构复核：存储形状运行时验收，字符串参数的 kind 漏报不可静默 fail-open
 			for (const [p, s] of Object.entries(v.params)) {
 				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(s.type)}`);
 				if (s.type === "string" && !s.kind) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);

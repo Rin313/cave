@@ -9,7 +9,6 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, repairRecords, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
 import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type ParamSpec, type Step } from "./sim.ts";
@@ -359,35 +358,57 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 	}
 }
 
+/** 裸 JSON Schema：pi 的工具参数校验对无 kind 标记的 schema 走 JSON Schema 通道（coerce + Compile）。 */
+type JsonSchema = {
+	type?: string;
+	const?: string;
+	description?: string;
+	properties?: Record<string, JsonSchema>;
+	required?: string[];
+	additionalProperties?: boolean;
+	anyOf?: JsonSchema[];
+	items?: JsonSchema;
+};
+
+/** 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
+function hostParametersSchema(def: GameDef): JsonSchema {
+	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
+	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type, ...(spec.description !== undefined && { description: spec.description }) });
+	return {
+		anyOf: publicVerbs.map(([name, v]) => {
+			const entries = Object.entries(v.params);
+			const required = entries.filter(([, s]) => !s.optional).map(([p]) => p);
+			return {
+				type: "object",
+				required: ["verb", "params"],
+				properties: {
+					verb: { type: "string", const: name },
+					params: {
+						type: "object",
+						...(required.length > 0 && { required }),
+						properties: Object.fromEntries(entries.map(([p, s]) => [p, paramSchema(s)])),
+						additionalProperties: false,
+					},
+				},
+				additionalProperties: false,
+			};
+		}),
+	};
+}
+
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
 	const advertised = new Set(publicVerbs.map(([name]) => name));
-	// 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换
-	const paramSchema = (spec: ParamSpec): TSchema => {
-		const opts = spec.description !== undefined ? { description: spec.description } : {};
-		const s = spec.type === "number" ? Type.Number(opts) : spec.type === "boolean" ? Type.Boolean(opts) : Type.String(opts);
-		return spec.optional === true ? Type.Optional(s) : s;
-	};
-	const actionSchema = Type.Union(
-		publicVerbs.map(([name, v]) =>
-			Type.Object(
-				{
-					verb: Type.Literal(name),
-					params: Type.Object(Object.fromEntries(Object.entries(v.params).map(([p, s]) => [p, paramSchema(s)])), { additionalProperties: false }),
-				},
-				{ additionalProperties: false },
-			),
-		),
-	);
 	return defineTool({
 		name: ACT_TOOL,
 		label: "世界提案",
 		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.once}；${CONTRACT.retry}；世界法则按顺序裁决每个动作并返回结果。`,
-		parameters: Type.Object({
-			actions: Type.Optional(
-				Type.Array(actionSchema, { description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" }),
-			),
-		}),
+		parameters: {
+			type: "object",
+			properties: {
+				actions: { type: "array", items: hostParametersSchema(def), description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" },
+			},
+		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
 			if (run.phase !== "mapping") {
 				return { content: [{ type: "text", text: ACT_LATCH_MSG }], details: {} };
