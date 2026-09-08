@@ -1,12 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, refParamsOf, renderDenial, spineLines } from "../core/sim.ts";
-import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
+import type { Action, Change, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
-
-// —— 场景运行器（契约锁） ——
 
 interface StepExpect {
 	ok?: boolean;
@@ -237,8 +235,6 @@ async function cmdVerify(): Promise<void> {
 	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
-// —— 裁决地图（probe） ——
-
 type DenialBearer = { ok: boolean; deniedBy?: "rule" | "invariant"; denial?: Denial };
 
 /** bug 判据：invariant 否决且无世界腔理由。 */
@@ -253,6 +249,15 @@ interface MapRow {
 	law: string;
 	reason: string;
 	bug?: string;
+}
+
+/** 授予行：按授予法则×变更形状分组，机械后果的逐 op 落点——分组上界是规则代码分支而非指称域。 */
+interface GrantRow {
+	verb: string;
+	rule: string;
+	shape: string;
+	count: number;
+	rep: string;
 }
 
 interface RuleTrace {
@@ -286,10 +291,17 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
+/** 授予的变更形状指纹：kind＋键（prop 名/rel 型），机械真相不滤 internal。 */
+function deltaShape(changes: Change[]): string {
+	if (!changes.length) return "∅";
+	return changes.map((c) => (c.kind === "prop" ? `prop:${c.prop}` : c.kind === "rel" ? `rel:${c.type}` : c.kind)).sort().join("+");
+}
+
 /** 穷举指称参数 × 可见域（每动作在独立 Simulation 上裁决）；liveness 为法则×动词活性矩阵——永远弃权的法则只有此处可见。 */
 function probeDef(def: GameDef, maxCombos = 10000): {
 	rows: MapRow[];
 	grants: Map<string, number>;
+	grantRows: GrantRow[];
 	total: number;
 	truncated: boolean;
 	liveness: Map<string, { grant: number; deny: number; abstain: number; unreached: number }>;
@@ -297,6 +309,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	const sim = new Simulation(def);
 	const scope = [...sim.visible()];
 	const rows: MapRow[] = [];
+	const grantRows = new Map<string, GrantRow>();
 	const grants = new Map<string, number>();
 	const combos = new Map<string, number>();
 	const stats = new Map<string, { grant: number; deny: number; abstain: number }>();
@@ -317,7 +330,15 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		try {
 			const { step, elapsed } = new Simulation(instrumented).apply(action);
 			const bug = bugOf(step);
-			if (step.ok) grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
+			if (step.ok) {
+				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
+				const rule = trace.find((t) => t.ok === true)!.rule;
+				const shape = deltaShape(step.changes);
+				const key = `${action.verb}|${rule}|${shape}`;
+				const row = grantRows.get(key);
+				if (row) row.count += 1;
+				else grantRows.set(key, { verb: action.verb, rule, shape, count: 1, rep: op });
+			}
 			else rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason, ...(bug !== undefined && { bug }) });
 			for (const t of elapsed) {
 				if (t.ok) continue;
@@ -369,12 +390,12 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: n - s.grant - s.deny - s.abstain });
 		}
 	}
-	return { rows, grants, total, truncated, liveness };
+	return { rows, grants, grantRows: [...grantRows.values()], total, truncated, liveness };
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
-	const { rows, grants, total, truncated, liveness } = probeDef(def, maxCombos);
+	const { rows, grants, grantRows, total, truncated, liveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
 	for (const [law, c] of liveness) {
@@ -382,15 +403,23 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 		console.log(`  ${law.padEnd(18)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}${stated === 0 ? "  ⚠ 零表态" : ""}`);
 	}
 	console.log("");
+	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按授予法则×变更形状分组（∅＝零变更授予）、载代表 op——机械后果不滤 internal。");
 	const byVerb = new Map<string, MapRow[]>();
 	for (const r of rows) {
 		const list = byVerb.get(r.verb);
 		if (list) list.push(r);
 		else byVerb.set(r.verb, [r]);
 	}
+	const grantByVerb = new Map<string, GrantRow[]>();
+	for (const r of grantRows) {
+		const list = grantByVerb.get(r.verb);
+		if (list) list.push(r);
+		else grantByVerb.set(r.verb, [r]);
+	}
 	for (const verbName of Object.keys(def.verbs)) {
 		const vr = byVerb.get(verbName) ?? [];
 		console.log(`「${verbName}」✓ ×${grants.get(verbName) ?? 0}${vr.length ? `  ✗ ×${vr.length}` : ""}`);
+		for (const r of grantByVerb.get(verbName) ?? []) console.log(`  ✓ ${r.shape} ×${r.count} ← ${r.rule}（代表 ${r.rep}）`);
 		for (const r of vr) console.log(`  ✗ ${r.op} → ${r.law}「${r.reason}」${r.bug ? ` ⚠ ${r.bug}` : ""}`);
 	}
 	const bugs = rows.filter((r) => r.bug);
@@ -405,7 +434,7 @@ async function main(): Promise<void> {
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可见实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可见实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）＋逐 op 落行（✗ 载法则与理由；✓ 按授予法则×变更形状分组，∅＝零变更，载代表 op）＋核心级否决单列 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}

@@ -50,7 +50,6 @@ export interface Action {
 	params: Record<string, Scalar>;
 }
 
-/** core 不内嵌文案，由游戏注入；core 不在文案里解析实体名。 */
 export interface Messages {
 	/** 所有法则未表态时的兜底回应。 */
 	noResponse: string;
@@ -417,7 +416,6 @@ function refProp(sim: Simulation, prop: string): boolean {
 	return sim.def.props?.[prop]?.type === "id";
 }
 
-/** core 只做符号连接，name/label 取自游戏声明。 */
 export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>, sides?: { prev: boolean; next: boolean }): string {
 	const val = (v: PropValue, ok: boolean, ref: boolean): string => (ok ? renderValue(sim, v, ref, departed).text : "?");
 	if (c.kind === "spawn") return `+ ${c.entity.name}`;

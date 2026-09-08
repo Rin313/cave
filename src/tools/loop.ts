@@ -187,7 +187,7 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 		.map((l) => l.trim())
 		.filter((l) => l !== "" && !l.startsWith("#"));
 	if (!lines.length) throw new Error(`意图文件 ${file} 为空`);
-	await withEngine(runId, gameId, async (ctx) => {
+	await withEngine(gameId, runId, async (ctx) => {
 		const { dir, meta, sim, engine } = ctx;
 		for (const line of lines) {
 			const outcome = await engine.act({ intent: line });
