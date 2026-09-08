@@ -25,7 +25,7 @@ Edge   ::= (a, b, τ, v)          -- a, b 为实体 id，τ ∈ String⁺，v �
 ```
 
 - 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于写载荷（δ 的 `v ∈ V?`）。
-- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`。type 是值形状契约：
+- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`。
 
   | type | 值形状 |
   |---|---|
@@ -242,9 +242,8 @@ core 的机制增长只由「无法表达」驱动。「无法表达」的判定
 ## 非目标
 
 - 语义校验
-- 一次提交的动作数上界、刻数授予上界（不违反任何契约）
-- 回合纪要（自述偏差经上下文跨回合放大）
-- 直达提案通道与仪器摇钟（意志的提案必经映射译码；时间控制属于玩家动词与工具层夹具）
+- 一次提交的动作数上界、刻数授予上界
+- 回合纪要
 
 ## 架构决策
 - pi agent SDK：进程内集成，`node_modules/@earendil-works/pi-coding-agent/docs/`

@@ -12,8 +12,8 @@ export interface RecentEntry {
 	moves: string[];
 }
 
-export const TURN_RECORD_TYPE = "cave.turn";
-export const CHECKPOINT_RECORD_TYPE = "cave.checkpoint";
+export const TURN_RECORD_TYPE = "turn";
+export const CHECKPOINT_RECORD_TYPE = "checkpoint";
 
 interface CheckpointEntry {
 	seq: number;
