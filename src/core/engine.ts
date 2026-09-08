@@ -258,7 +258,6 @@ export class Engine {
 		this.recent.push(...projectWindow(this.sim, this.records));
 	}
 
-	/** 场景呈现：无提案通道、不写近况、不触门闩。 */
 	async narrate(instruction: string, steps: Step[] = []): Promise<NarrationOutcome> {
 		this.beginRun("narration");
 		await this.session.prompt(buildNarratePrompt(this.sim, steps, instruction));
@@ -348,7 +347,7 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 	}
 }
 
-/** 裸 JSON Schema：pi 的工具参数校验对无 kind 标记的 schema 走 JSON Schema 通道（coerce + Compile）。 */
+/** pi 的工具参数校验对无 kind 标记的 schema 走 JSON Schema 通道 */
 type JsonSchema = {
 	type?: string;
 	const?: string;
