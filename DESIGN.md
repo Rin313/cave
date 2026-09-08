@@ -36,7 +36,7 @@ r = (a, b, τ, v)       τ ∈ String⁺，v ∈ V；边身份 (a, b, τ) 在 R 
 δ ::= set(e,k,v) | relSet(a,b,τ,v) | rename(e,n) | spawn(ê) | despawn(e)       v ∈ V⊥
 ```
 
-绝对写，后态自含；`set/relSet` 取 null 即删。幂等跳过限于状态写（set/relSet/rename）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。其余不可执行——目标缺失、端点缺失、spawn 的 id 占用——拒绝整提交；spawn/despawn 是存在事件，无跳过形态。
+绝对写，后态自含；`set/relSet` 取 null 即删。幂等跳过限于状态写（set/relSet/rename）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。
 
 ```
 G : Δ* × Src → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
@@ -198,12 +198,6 @@ ticks(s) = ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb)
 **表达契约**　`voice` 是静态世界语言文档，原样注入 system prompt，缺省无契约。散文对已锚定内容的转写与渲染自由。`spineLines` 是事件流的规范单行渲染：符号承担结构（✓/✗/⏱/×n），语言词全部来自 messages/label/规则文案。`summarize` 是可选的声音覆写，崩溃回落缺省——呈现缺陷不得丢弃已发生的账目。叙述不回流：回合输入 = 状态视图 + 变更 + 近况。
 
 **呈现服务**　narrate 无提案通道、无 act 通道、无时间流逝，不是回合；输出不入账、不进投影。用途：开场与仪器的场景重渲。
-
-## 词汇面
-
-- 世界语言：玩家可见的一切文字（法则理由、不变式 message、回退摘要）与表达契约 `voice`。core 不内嵌文案，`messages` 由游戏注入（noResponse / invisibleEntity / defaultReason / timePassed）。
-- 通道语言：引擎与 prompt 脚手架之间的协议文本（工具描述、校验反馈、协议锚）。映射契约文案单源：系统提示、工具描述、回合提示、门闩与内核形态反馈共享同一措辞；宿主自产的 schema 报错在单源之外，协议只约束其语义（指名违约点、足以据以修正），不约束其措辞。
-- 开口键按字面：关系类型与 tag token 无声明卡，机械行按字面言说，其世界腔由表达层承担。
 
 ## 面向作者的契约
 
