@@ -5,6 +5,8 @@ import {
 	entity,
 	grant,
 	ref,
+	Simulation,
+	type Action,
 	type Denial,
 	type Entity,
 	type GameDef,
@@ -13,11 +15,13 @@ import {
 	type PropDef,
 	type PropValue,
 	type Q,
+	type Step,
 	type SystemRule,
 	type VerbDef,
 } from "../core/sim.ts";
-import { withDevWait } from "./dev.ts";
-import { printReports, runScenario, type ScenarioReport, type ScenarioStep } from "./sim.ts";
+import { resume } from "../core/context.ts";
+import { withDevWait, devWait } from "./dev.ts";
+import { printReports, runScenario, type ScenarioReport, type ScenarioStep, type StepReport } from "./sim.ts";
 
 const num = (v: unknown): number => Number(v ?? 0);
 
@@ -580,8 +584,79 @@ const CASES: WallCase[] = [
 	},
 ];
 
+/** 档案对账探针：单日志（回合条目＋检查点条目）装载即对账——𝒞 重放复原世界，链断同界截断，丢失可检。 */
+function archiveCases(): ScenarioReport {
+	const eq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+	const def = makeDef({
+		verbs: {
+			touch,
+			summon: defineVerb({ label: "召唤", description: "spawn 探针。", params: {}, cost: 0, rules: [{ id: "s", judge: () => grant([D.spawn({ id: "x", name: "外物", props: {} })], "外物来了。") }] }),
+			bond,
+			sever,
+		},
+		entities: [playerEntity(), thingEntity()],
+	});
+	const sim = new Simulation(def);
+	const records: { seq: number; time: number; intent: string; steps: Step[] }[] = [];
+	const snaps: string[] = [];
+	let seq = 0;
+	const turn = (action: Action): void => {
+		const res = sim.apply(action);
+		records.push({ seq: ++seq, time: sim.world.time, intent: action.verb, steps: [res.step, ...res.elapsed] });
+		snaps.push(JSON.stringify(sim.snapshot()));
+	};
+	turn(devWait(1));
+	turn({ verb: "touch", params: {} });
+	turn({ verb: "bond", params: {} });
+	turn({ verb: "summon", params: {} });
+	turn(devWait(2));
+	turn({ verb: "sever", params: {} });
+	turn({ verb: "touch", params: {} });
+	const final = JSON.stringify(sim.snapshot());
+	const wrap = (r: unknown): { type: string; customType: string; data: unknown } => ({ type: "custom", customType: "cave.turn", data: r });
+	const out: StepReport[] = [];
+	const check = (name: string, pass: boolean, detail = ""): void => {
+		out.push({ index: out.length + 1, name, pass, actual: pass ? "matches" : "mismatch", detail: pass ? "matches" : detail });
+	};
+	{
+		const r = resume(def, records.map(wrap));
+		check("全量重放复原世界（无检查点）", eq(JSON.stringify(r.sim.snapshot()), final) && r.lastSeq === seq && r.warnings.length === 0, JSON.stringify(r.warnings));
+	}
+	{
+		const entries = [{ type: "custom", customType: "cave.checkpoint", data: { seq: 3, world: JSON.parse(snaps[2]!) } }, ...records.slice(3).map(wrap)];
+		const r = resume(def, entries);
+		check("检查点重放复原世界", eq(JSON.stringify(r.sim.snapshot()), final) && r.checkpointSeq === 3 && r.lastSeq === seq, JSON.stringify([r.checkpointSeq, r.lastSeq]));
+	}
+	{
+		const tampered = structuredClone(records);
+		for (const s of tampered[6]!.steps) for (const c of s.changes) if (c.kind === "prop") c.prev = 999;
+		const r = resume(def, [...records.slice(0, 6).map(wrap), wrap(tampered[6])]);
+		check("篡改 prev：链断同界截断", r.lastSeq === 6 && JSON.stringify(r.sim.snapshot()) === snaps[5] && r.warnings.some((w) => w.includes("前值不符")), JSON.stringify(r.warnings));
+	}
+	{
+		const r = resume(def, records.filter((r) => r.seq !== 4).map(wrap));
+		check("序位断裂：同界截断", r.lastSeq === 3 && JSON.stringify(r.sim.snapshot()) === snaps[2] && r.warnings.some((w) => w.includes("链断")), JSON.stringify(r.warnings));
+	}
+	{
+		const entries = [{ type: "custom", customType: "cave.checkpoint", data: { seq: 99, world: JSON.parse(snaps[snaps.length - 1]!) } }, ...records.map(wrap)];
+		let threw = "";
+		try {
+			resume(def, entries);
+		} catch (e) {
+			threw = e instanceof Error ? e.message : String(e);
+		}
+		check("检查点领先证据：拒绝装载（丢失可检）", threw.includes("丢失可检"), threw);
+	}
+	{
+		const entries = [{ type: "custom", customType: "cave.checkpoint", data: { seq: 3, world: { broken: true } } }, ...records.map(wrap)];
+		const r = resume(def, entries);
+		check("检查点损坏：弃置回退全量重放", eq(JSON.stringify(r.sim.snapshot()), final) && r.warnings.some((w) => w.includes("检查点损坏")), JSON.stringify(r.warnings));
+	}
+	return { name: "档案对账：单日志装载即对账（重放复原、链断同界截断、丢失可检）", passed: out.filter((r) => r.pass).length, total: out.length, steps: out };
+}
+
 function main(): void {
-	const reports: ScenarioReport[] = CASES.map((c) => runScenario({ name: c.name, steps: c.steps }, c.def));
+	const reports: ScenarioReport[] = [...CASES.map((c) => runScenario({ name: c.name, steps: c.steps }, c.def)), archiveCases()];
 	printReports(reports);
 	const passed = reports.reduce((a, r) => a + r.passed, 0);
 	const total = reports.reduce((a, r) => a + r.total, 0);

@@ -8,6 +8,10 @@ export function deepFreeze<T>(value: T): T {
 	return value;
 }
 
+export function errorText(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
+}
+
 function hashStr(s: string): number {
 	let h = 0x811c9dc5;
 	for (let i = 0; i < s.length; i++) {

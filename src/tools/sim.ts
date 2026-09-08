@@ -46,7 +46,7 @@ interface ScenarioFile {
 	scenarios: Scenario[];
 }
 
-interface StepReport {
+export interface StepReport {
 	index: number;
 	name: string;
 	pass: boolean;

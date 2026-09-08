@@ -9,9 +9,9 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, repairRecords, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
-import { deepFreeze } from "./util.ts";
-import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type ParamSpec, type Step } from "./sim.ts";
+import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, repairRecords, resume, verbatim, type RecentEntry } from "./context.ts";
+import { deepFreeze, errorText } from "./util.ts";
+import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Step } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -75,32 +75,38 @@ interface RunState {
 	usage: TokenUsage[];
 }
 
+/** 装载与定稿共享的档案态：records 是近况窗口源，lastSeq 是定稿序位，dead 非空即引擎毒化。 */
+interface Archive {
+	records: ChronicleEntry[];
+	lastSeq: number;
+	dead: string | null;
+}
+
 export class Engine {
 	readonly sim: Simulation;
 	private session: SessionHandle;
-	private readonly sessionManager: SessionManager;
 	private readonly recent: RecentEntry[];
-	/** 回合定稿记录，窗口裁剪至 recentWindow。 */
-	private readonly records: ChronicleEntry[];
-	/** 装载期诊断：损坏纪要截断的显形出口。 */
-	readonly loadWarnings: string[] = [];
+	/** 共享档案态：定稿写点（act 工具尾）与近况窗口的共同源。 */
+	private readonly archive: Archive;
+	/** 装载期诊断：损坏纪要截断、档案链断、检查点弃置的显形出口。 */
+	readonly loadWarnings: string[];
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
 		sim: Simulation,
 		session: SessionHandle,
-		sessionManager: SessionManager,
+		archive: Archive,
 		recent: RecentEntry[],
-		records: ChronicleEntry[],
 		run: RunState,
+		loadWarnings: string[],
 	) {
 		this.sim = sim;
 		this.session = session;
-		this.sessionManager = sessionManager;
+		this.archive = archive;
 		this.recent = recent;
-		this.records = records;
 		this.run = run;
+		this.loadWarnings = loadWarnings;
 		this.repairLoadedRecords();
 		this.updateRecent();
 		session.subscribe((event) => {
@@ -144,9 +150,23 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	/** def 一律取 sim.def：广告面（act schema 与系统提示）是同一动词表滤除 internal 的投影。 */
-	static async create(sim: Simulation, options: EngineOptions): Promise<Engine> {
-		const def = sim.def;
+	/** 装载即对账（resume），档案单侧：引擎自日志组装世界，不经第二档案侧。 */
+	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
+		if (def.recentWindow === undefined) throw new Error("GameDef.recentWindow 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
+		if (!Number.isInteger(def.recentWindow) || def.recentWindow < 0) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
+
+		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
+		const resumed = resume(def, sessionManager.getEntries());
+		const archive: Archive = { records: resumed.records, lastSeq: resumed.lastSeq, dead: null };
+		// 检查点自愈：日志缺检查点或落后于证据时补写（缓存写，失败仅告警）
+		if (resumed.checkpointSeq === null || resumed.checkpointSeq < resumed.lastSeq) {
+			try {
+				sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: resumed.lastSeq, world: resumed.sim.snapshot() });
+			} catch (e) {
+				resumed.warnings.push(`检查点补写失败（缓存迟到）：${errorText(e)}`);
+			}
+		}
+
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
 		const modelDef = modelRuntime.getModel(options.provider, options.model);
 		if (!modelDef) throw new Error(`模型 ${options.provider}/${options.model} 不可用`);
@@ -159,10 +179,6 @@ export class Engine {
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
 			retry: { enabled: true, maxRetries: 2 },
 		});
-		if (def.recentWindow === undefined) throw new Error("GameDef.recentWindow 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
-		if (!Number.isInteger(def.recentWindow) || def.recentWindow < 0) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
-		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-		const records = loadRecords(sessionManager.getEntries());
 		const recent: RecentEntry[] = [];
 		const loader = new DefaultResourceLoader({
 			cwd: process.cwd(),
@@ -178,7 +194,7 @@ export class Engine {
 		});
 		await loader.reload();
 
-		const customTools = [buildActTool(def, sim, run)];
+		const customTools = [buildActTool(def, resumed.sim, run, archive, sessionManager)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
@@ -192,7 +208,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(sim, session, sessionManager, recent, records, run);
+		return new Engine(resumed.sim, session, archive, recent, run, resumed.warnings);
 	}
 
 	get sessionFile(): string | undefined {
@@ -213,9 +229,16 @@ export class Engine {
 	}
 
 	async act(action: { intent: string }): Promise<ActOutcome> {
+		this.assertLive();
 		this.beginRun("mapping", action.intent);
 		const state = this.sim.digest();
-		await this.session.prompt(buildTurnPrompt(state, action.intent));
+		try {
+			await this.session.prompt(buildTurnPrompt(state, action.intent));
+		} catch (e) {
+			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
+			if (this.run.phase === "mapping") throw e;
+			this.run.warnings.push(`表达中断（回合已定稿，呈现回落）：${errorText(e)}`);
+		}
 
 		let narration: string;
 		if (this.run.phase === "mapping") {
@@ -225,7 +248,7 @@ export class Engine {
 		} else {
 			narration = this.settleNarration(this.run.steps);
 		}
-		this.recordTurn(action.intent, this.run.steps);
+		this.updateRecent();
 		return {
 			steps: this.run.steps,
 			narration,
@@ -235,30 +258,28 @@ export class Engine {
 		};
 	}
 
-	/** 写点唯一：先落盘后消费——落盘失败即回合未定稿（act 抛错、state 不存），档案两侧同留上一回合。 */
-	private recordTurn(intent: string, steps: Step[]): void {
-		const record: ChronicleEntry = { time: this.sim.world.time, intent, steps };
-		this.sessionManager.appendCustomEntry(MEMORY_RECORD_TYPE, record);
-		this.records.push(record);
-		this.updateRecent();
+	/** 毒化后的引擎拒绝一切回合与呈现：世界领先于档案时，进程内任何走向都不安全，裁决权移交装载对账。 */
+	private assertLive(): void {
+		if (this.archive.dead !== null) throw new Error(`引擎已毒化（${this.archive.dead}）：须重启进程由日志对账`);
 	}
 
 	/** 装载修复：窗口裁剪后逐条试投影（完好判据是消费本身），损坏使近况截断至其后完好子后缀；后续写入的记录已经过消费，无需复检。 */
 	private repairLoadedRecords(): void {
 		const limit = this.sim.def.recentWindow;
-		if (this.records.length > limit) this.records.splice(0, this.records.length - limit);
-		repairRecords(this.sim, this.records, this.loadWarnings);
+		if (this.archive.records.length > limit) this.archive.records.splice(0, this.archive.records.length - limit);
+		repairRecords(this.sim, this.archive.records, this.loadWarnings);
 	}
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
 		const limit = this.sim.def.recentWindow;
-		if (this.records.length > limit) this.records.splice(0, this.records.length - limit);
+		if (this.archive.records.length > limit) this.archive.records.splice(0, this.archive.records.length - limit);
 		this.recent.length = 0;
-		this.recent.push(...projectWindow(this.sim, this.records));
+		this.recent.push(...projectWindow(this.sim, this.archive.records));
 	}
 
 	async narrate(instruction: string, steps: Step[] = []): Promise<NarrationOutcome> {
+		this.assertLive();
 		this.beginRun("narration");
 		await this.session.prompt(buildNarratePrompt(this.sim, steps, instruction));
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
@@ -347,6 +368,19 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 	}
 }
 
+/** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到）。回合条目写点失败原样抛出，由调用方毒化。 */
+function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
+	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, intent: run.intent ?? "", steps: deepFreeze(run.steps) };
+	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
+	archive.records.push(record);
+	archive.lastSeq = record.seq;
+	try {
+		sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: record.seq, world: sim.snapshot() });
+	} catch (e) {
+		run.warnings.push(`检查点追加失败（缓存迟到，装载对账治愈）：${errorText(e)}`);
+	}
+}
+
 /** pi 的工具参数校验对无 kind 标记的 schema 走 JSON Schema 通道 */
 type JsonSchema = {
 	type?: string;
@@ -385,7 +419,7 @@ function hostParametersSchema(def: GameDef): JsonSchema {
 	};
 }
 
-function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
+function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Archive, sessionManager: SessionManager) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
 	const advertised = new Set(publicVerbs.map(([name]) => name));
 	return defineTool({
@@ -423,15 +457,37 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 				applyBatch(sim, proposed, steps);
 			} catch (e) {
 				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛代谢为可审计回合——已裁决步照常入账，其余不得虚构
-				crashed = e instanceof Error ? e.message : String(e);
+				crashed = errorText(e);
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}
 			run.steps = steps;
-			// 投影失灵时不重入 visible()：新见段缺席
-			const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
-			const text = formatTurnEvents(sim, steps, proposed.length === 0, run.intent, revealed).join("\n");
+			// 定稿先于一切呈现：窗口关闭即落条目；写点失败即毒化（世界领先于档案，进程内无安全走向）
+			try {
+				finalizeTurn(sim, sessionManager, run, archive);
+			} catch (e) {
+				archive.dead = `回合条目落盘失败：${errorText(e)}`;
+				run.warnings.push(archive.dead);
+			}
+			let text: string;
+			try {
+				// 投影失灵时不重入 visible()：新见段缺席
+				const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
+				text = formatTurnEvents(sim, steps, proposed.length === 0, run.intent, revealed).join("\n");
+				if (crashed) text += `\n内部缺陷：以上是中断前已发生的后果；中断的提案已整体回滚，其余不得虚构。`;
+				if (archive.dead) text += `\n内部缺陷：${archive.dead}`;
+			} catch (e) {
+				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
+				run.warnings.push(`结果投影抛错：${errorText(e)}`);
+				try {
+					text = sim.summarize(steps);
+					run.warnings.push(...sim.warnings.splice(0));
+				} catch (e2) {
+					text = def.messages.noResponse;
+					run.warnings.push(`摘要回落失败：${errorText(e2)}`);
+				}
+			}
 			return {
-				content: [{ type: "text", text: crashed ? `${text}\n内部缺陷：以上是中断前已发生的后果；中断的提案已整体回滚，其余不得虚构。` : text }],
+				content: [{ type: "text", text }],
 				details: {},
 			};
 		},

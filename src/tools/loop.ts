@@ -3,8 +3,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
-import { Simulation, spineLines } from "../core/sim.ts";
-import type { World } from "../core/sim.ts";
+import { resume } from "../core/context.ts";
+import { spineLines, type Simulation } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
@@ -39,10 +39,7 @@ function saveMeta(dir: string, meta: RunMeta): void {
 	writeJson(metaPath(dir), meta);
 }
 
-function loadState(dir: string): World {
-	return readJson(statePath(dir));
-}
-
+/** state.json 是导出物（机械 diff 用），不参与装载：档案主侧是会话日志。 */
 function saveState(dir: string, sim: Simulation): void {
 	writeJson(statePath(dir), sim.snapshot());
 }
@@ -113,11 +110,10 @@ async function withEngine(gameId: string, runId: string, fn: (ctx: RunCtx) => Pr
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	}
 	const def = getGame(meta.game);
-	const sim = new Simulation(def, loadState(dir));
-	const engine = await Engine.create(sim, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
 	for (const w of engine.loadWarnings) console.log(`  ⚠ ${w}`);
 	try {
-		await fn({ dir, meta, sim, engine });
+		await fn({ dir, meta, sim: engine.sim, engine });
 	} finally {
 		engine.dispose();
 	}
@@ -133,9 +129,8 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
 	mkdirSync(dir, { recursive: true });
-	const sim = new Simulation(def);
 	const sessionManager = SessionManager.create(process.cwd(), dir);
-	const engine = await Engine.create(sim, { ...engineOptsFromEnv(gameId), sessionManager });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sessionManager });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
 		const meta: RunMeta = {
@@ -146,7 +141,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 			...(engine.sessionFile !== undefined && { sessionFile: engine.sessionFile }),
 		};
 		saveMeta(dir, meta);
-		saveState(dir, sim);
+		saveState(dir, engine.sim);
 		appendTranscript(dir, { phase: "start", scene, warnings, usage });
 		console.log(`【${runId}·start】${def.title}`);
 		console.log(scene);
@@ -219,9 +214,11 @@ async function cmdRender(gameId: string, runId: string, instruction: string): Pr
 function cmdState(gameId: string, runId: string): void {
 	const dir = requireRunDir(gameId, runId);
 	const meta = loadMeta(dir);
+	if (!meta.sessionFile || !existsSync(meta.sessionFile)) throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
 	const def = getGame(meta.game);
-	const sim = new Simulation(def, loadState(dir));
+	const { sim, warnings } = resume(def, SessionManager.open(meta.sessionFile).getEntries());
 	console.log(`【${runId}】${meta.game} 已进行 ${meta.turn} 回合`);
+	for (const w of warnings) console.log(`  ⚠ ${w}`);
 	console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
 }
 

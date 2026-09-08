@@ -1,4 +1,4 @@
-import { deepFreeze, roll as rollDice } from "./util.ts";
+import { deepFreeze, errorText, roll as rollDice } from "./util.ts";
 
 export type Scalar = string | number | boolean;
 
@@ -130,6 +130,17 @@ export const D = {
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
+
+/** 𝒞 反推 δ：绝对写、后态自含——重放不需读前值。 */
+function deltaOf(c: Change): Delta {
+	switch (c.kind) {
+		case "spawn": return D.spawn(JSON.parse(JSON.stringify(c.entity)) as Entity);
+		case "despawn": return D.despawn(c.entity);
+		case "rename": return D.rename(c.entity, c.next);
+		case "prop": return D.set(c.entity, c.prop, c.next);
+		case "rel": return D.relSet(c.from, c.to, c.type, c.next);
+	}
+}
 
 /** 动词参数的声明面：惰性描述符——内核校验、宿主面与规则参数类型皆由构造派生。 */
 export interface ParamSpec {
@@ -391,6 +402,14 @@ export interface ActionStep {
 export interface Resolution {
 	step: ActionStep;
 	elapsed: TickStep[];
+}
+
+/** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟。 */
+export interface ChronicleEntry {
+	seq: number;
+	time: number;
+	intent: string;
+	steps: Step[];
 }
 
 /** 一刻内某个系统的产出；失败刻只来自必要性通道。 */
@@ -790,6 +809,63 @@ export class Simulation {
 				return renderValue(this, v, true, departed).text;
 			});
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
+	}
+
+	/** 重放一条回合记录：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审——历史由当时的法则裁判过。链断回滚并返回原因。 */
+	replayRecord(record: ChronicleEntry): string | null {
+		const s0 = this.readState();
+		const fail = (reason: string): string => {
+			this.restore(s0);
+			return `seq${record.seq} ${reason}`;
+		};
+		try {
+			const start = record.steps.length ? record.steps[0]!.at : record.time;
+			if (!Number.isInteger(start) || start !== this.world.time) return fail(`起点钟 ${String(start)} 不接续当前钟 ${this.world.time}`);
+			const grants = record.steps.reduce((n, s) => (s.kind === "action" ? n + s.ticks : n), 0);
+			if (!Number.isInteger(record.time) || record.time !== start + grants) return fail(`末钟 ${String(record.time)} ≠ 起点 ${start} + 刻账 ${grants}`);
+			for (const step of record.steps) {
+				for (const c of step.changes) {
+					const broken = this.verifyChange(c);
+					if (broken) return fail(broken);
+					const out = this.commit([deltaOf(c)]);
+					if ("refusal" in out) return fail(`重放提交被拒：${out.refusal.debug}`);
+				}
+			}
+			this.world.time = record.time;
+			const inv = integrityInvariant().check(this.readState(), { def: this.def, genesis: s0, changes: [], src: `replay:${record.seq}` });
+			if (inv) return fail(`integrity：${inv}`);
+			return null;
+		} catch (e) {
+			return fail(errorText(e));
+		}
+	}
+
+	/** 逐变更 prev 校验：记录前值须与重放世界相符；消散行的边可已随 despawn 消散（后态已成立即通过）。 */
+	private verifyChange(c: Change): string | null {
+		switch (c.kind) {
+			case "spawn":
+				return entity(this.world, c.entity.id) ? `spawn "${c.entity.id}" 已在世` : null;
+			case "despawn": {
+				const gone = entity(this.world, c.entity);
+				if (!gone) return `despawn "${c.entity}" 不在世`;
+				return gone.name !== c.name ? `despawn "${c.entity}" 离场名不符（在世 ${gone.name}，记录 ${c.name}）` : null;
+			}
+			case "rename": {
+				const e = entity(this.world, c.entity);
+				if (!e) return `rename "${c.entity}" 不在世`;
+				return e.name !== c.prev ? `rename "${c.entity}" 前名不符` : null;
+			}
+			case "prop": {
+				const e = entity(this.world, c.entity);
+				if (!e) return `set "${c.entity}.${c.prop}" 主语不在世`;
+				return sameLedger(e.props[c.prop] ?? null, c.prev) ? null : `set "${c.entity}.${c.prop}" 前值不符`;
+			}
+			case "rel": {
+				const cur = relVal(this.world, c.from, c.to, c.type);
+				if (c.next === null && cur === null) return null;
+				return sameLedger(cur, c.prev) ? null : `rel ${c.from}->${c.to} (${c.type}) 前值不符`;
+			}
+		}
 	}
 
 	private tick(n = 1): TickStep[] {

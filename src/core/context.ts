@@ -1,24 +1,24 @@
 // 每次调用只见「近况投影 + 当前运行后缀」；会话文件保存全量审计。
-// 持久化事实是回合记录（intent + steps）；近况为用时重算的投影，永不持久化，进程重启由记录重建。
+// 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { shownDepartedNames, spineLines, type Simulation, type Step } from "./sim.ts";
+import { Simulation, shownDepartedNames, spineLines, type ChronicleEntry, type GameDef, type Step, type World } from "./sim.ts";
+import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
-export interface ChronicleEntry {
-	time: number;
-	steps: Step[];
-	intent: string;
-}
-
-/** 内存态投影缓存，永不持久化。 */
 export interface RecentEntry {
 	time: number;
 	intent: string;
 	moves: string[];
 }
 
-export const MEMORY_RECORD_TYPE = "cave.turn";
+export const TURN_RECORD_TYPE = "cave.turn";
+export const CHECKPOINT_RECORD_TYPE = "cave.checkpoint";
+
+export interface CheckpointEntry {
+	seq: number;
+	world: World;
+}
 
 interface EntryLike {
 	type: string;
@@ -26,23 +26,104 @@ interface EntryLike {
 	data?: unknown;
 }
 
-interface RawEntry {
-	kind?: unknown;
+interface RawTurn {
+	seq?: unknown;
 	time?: unknown;
 	intent?: unknown;
 	steps?: unknown;
 }
 
-/** 从会话 custom 条目读回合记录；信封粗筛，完好与否的最终判据是装载期的试投影（repairRecords）。 */
-export function loadRecords(entries: readonly EntryLike[]): ChronicleEntry[] {
-	const out: ChronicleEntry[] = [];
+interface RawCheckpoint {
+	seq?: unknown;
+	world?: unknown;
+}
+
+export interface LogEntries {
+	records: ChronicleEntry[];
+	checkpoint?: CheckpointEntry;
+}
+
+/** 信封粗筛：损坏条目在此离场（无 seq 的旧格式同弃、显形）；最终完好判据是装载对账与试投影。 */
+export function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries {
+	const out: LogEntries = { records: [] };
+	let broken = 0;
 	for (const e of entries) {
-		if (e.type !== "custom" || e.customType !== MEMORY_RECORD_TYPE) continue;
-		const d = e.data as RawEntry | undefined;
-		if (!d || typeof d.time !== "number" || typeof d.intent !== "string" || !Array.isArray(d.steps)) continue;
-		out.push({ time: d.time, intent: d.intent, steps: d.steps as Step[] });
+		if (e.type !== "custom") continue;
+		if (e.customType === TURN_RECORD_TYPE) {
+			const d = e.data as RawTurn | undefined;
+			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.intent === "string" && Array.isArray(d.steps)) {
+				out.records.push({ seq: d.seq, time: d.time, intent: d.intent, steps: d.steps as Step[] });
+			} else broken++;
+			continue;
+		}
+		if (e.customType === CHECKPOINT_RECORD_TYPE) {
+			const d = e.data as RawCheckpoint | undefined;
+			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 0 && d.world !== null && typeof d.world === "object") {
+				out.checkpoint = { seq: d.seq, world: d.world as World };
+			}
+		}
 	}
+	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 的旧格式），粗筛弃置`);
 	return out;
+}
+
+export interface Resumed {
+	sim: Simulation;
+	records: ChronicleEntry[];
+	lastSeq: number;
+	/** 生效检查点的 seq；null＝日志无可用的检查点条目（自变体开局起算）。 */
+	checkpointSeq: number | null;
+	warnings: string[];
+}
+
+/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。 */
+export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
+	const warnings: string[] = [];
+	const log = loadLog(entries, warnings);
+	let checkpoint = log.checkpoint;
+	let sim: Simulation;
+	if (checkpoint) {
+		try {
+			sim = new Simulation(def, checkpoint.world);
+		} catch (e) {
+			warnings.push(`检查点损坏（${errorText(e)}）：弃置，自变体开局全量重放`);
+			checkpoint = undefined;
+			sim = new Simulation(def);
+		}
+	} else {
+		sim = new Simulation(def);
+	}
+	const boundary = checkpoint?.seq ?? 0;
+	const maxSeq = log.records.reduce((n, r) => Math.max(n, r.seq), 0);
+	if (checkpoint && checkpoint.seq > maxSeq) {
+		throw new Error(`档案对账失败：检查点声称已含 seq≤${checkpoint.seq} 的回合，日志证据至 seq${maxSeq}——丢失可检，拒绝装载`);
+	}
+	const records: ChronicleEntry[] = [];
+	let lastSeq = boundary;
+	let expected = boundary + 1;
+	let broken = false;
+	for (const r of log.records) {
+		if (r.seq <= boundary) {
+			records.push(r);
+			continue;
+		}
+		if (broken) continue;
+		if (r.seq !== expected) {
+			warnings.push(`档案链断于 seq${expected}（得到 seq${r.seq}）：世界与近况同界截断`);
+			broken = true;
+			continue;
+		}
+		const reason = sim.replayRecord(r);
+		if (reason) {
+			warnings.push(`档案链断（${reason}）：世界与近况同界截断`);
+			broken = true;
+			continue;
+		}
+		records.push(r);
+		lastSeq = r.seq;
+		expected = r.seq + 1;
+	}
+	return { sim, records, lastSeq, checkpointSeq: checkpoint ? boundary : null, warnings };
 }
 
 /** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底。 */
@@ -51,16 +132,23 @@ export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[
 	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { departed }) }));
 }
 
-/** 装载纪要的完好判据是消费本身：逐条试投影，损坏使近况截断至其后完好子后缀（名字闭合依赖完整时间后缀）；会话文件不动。 */
+/** 装载纪要的完好判据：seq 连续加试投影存活；坏点使近况截断至其后完好子后缀（名字闭合依赖完整时间后缀）；会话文件不动。 */
 export function repairRecords(sim: Simulation, records: ChronicleEntry[], warnings: string[]): void {
 	let cut = -1;
 	records.forEach((r, i) => {
-		try {
-			spineLines(sim, r.steps);
-		} catch (e) {
-			cut = i;
-			warnings.push(`纪要 t${r.time}「${r.intent.slice(0, 24)}」投影失败：${e instanceof Error ? e.message : String(e)}`);
+		const prev = records[i - 1];
+		const gap = prev !== undefined && r.seq !== prev.seq + 1 ? `序位断裂 ${prev.seq}→${r.seq}` : null;
+		let reason = gap;
+		if (!reason) {
+			try {
+				spineLines(sim, r.steps);
+			} catch (e) {
+				reason = `投影失败：${errorText(e)}`;
+			}
 		}
+		if (!reason) return;
+		cut = Math.max(cut, gap ? i - 1 : i);
+		warnings.push(`纪要 seq${r.seq}「${r.intent.slice(0, 24)}」${reason}`);
 	});
 	if (cut >= 0) {
 		warnings.push(`近况截断：弃前 ${cut + 1}/${records.length} 条`);
