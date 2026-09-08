@@ -26,7 +26,6 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 const ACT_TOOL = "act";
 
-/** 映射契约单源：系统提示、工具描述、回合提示、门闩与形态反馈共享同一措辞。 */
 const CONTRACT = {
 	once: "act 每回合恰一个裁决窗口，提案进入裁决后本回合不再受理",
 	retry: "被形态校验拒绝的调用不占窗口，按反馈修正后重新提交",

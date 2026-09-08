@@ -8,7 +8,6 @@ export type CtxMessages = ContextEvent["messages"];
 export interface ChronicleEntry {
 	time: number;
 	steps: Step[];
-	/** 玩家原话，逐字入账。 */
 	intent: string;
 }
 

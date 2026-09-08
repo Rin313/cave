@@ -28,7 +28,7 @@ r = (a, b, τ, v)       τ ∈ String⁺，v ∈ V；边身份 (a, b, τ) 在 R 
 ```
 
 - `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`，`type ∈ {string, number, boolean, id, tags, any}`。词汇闭合：`keys(e.props) ⊆ K`；动态键值对走关系边（关系类型与 tag 是开口 token，无注册表）。
-- `type: id` 的属性值（标量或标量数组）是强引用：被指实体须在世，「无引用」由缺席表达。关系边是弱引用（见 despawn）。
+- `type: id` 的属性值（标量或标量数组）是强引用：被指实体须在世，「无引用」由缺席表达。关系边是弱引用。
 - `internal` 的属性与动词不进任何呈现面；裁决侧照常读世界真相。
 - id 与 name 是实体的必备字段：id 承担协议指称（提案参数、键控），name 只承担呈现，是渲染解析的终点。
 
