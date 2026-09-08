@@ -363,10 +363,10 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		const verb = def.verbs[verbName]!;
 		const refs = refParamsOf(verb);
 		// 尝试空间的有限生成集：ref 穷举可见域，必填自由参数取类型代表常量——值条件法则之于常量，同状态条件之于初始世界，归作者判读
-		const props = verb.schema.properties as Record<string, { type?: string }>;
 		const seed: Record<string, Scalar> = {};
-		for (const p of (verb.schema as unknown as { required?: string[] }).required ?? []) {
-			if (!refs.includes(p)) seed[p] = props[p]!.type === "number" ? 1 : props[p]!.type === "boolean" ? true : "…";
+		for (const [p, s] of Object.entries(verb.params)) {
+			if (s.optional || refs.includes(p)) continue;
+			seed[p] = s.type === "number" ? 1 : s.type === "boolean" ? true : "…";
 		}
 		const generate = (idx: number, acc: Record<string, Scalar>): void => {
 			if (truncated) return;

@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { defineVerb, grant, type GameDef } from "../core/sim.ts";
 
 /** 工具合成的时间通道：摇出的刻同样过裁决边界与审查。 */
@@ -14,7 +13,7 @@ export function withDevWait(def: GameDef): GameDef {
 				label: "流逝",
 				description: "研究摇钟：推进 n 刻（工具层合成的内部动词，映射层不可见；场景 tick 脱糖经裸 apply 消费）。",
 				internal: true,
-				schema: Type.Object({ n: Type.Optional(Type.Number({ description: "刻数，缺省 1" })) }),
+				params: { n: { type: "number", optional: true, description: "刻数，缺省 1" } },
 				rules: [{
 					id: "wait",
 					judge: (_q, p) => grant([], "时间流逝。", undefined, Math.max(0, Math.floor(Number(p.n ?? 1)))),

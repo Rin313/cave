@@ -1,5 +1,3 @@
-import { Compile } from "typebox/compile";
-import { Type, type Static, type TObject, type TString } from "typebox";
 import { deepFreeze, roll as rollDice } from "./util.ts";
 
 export type Scalar = string | number | boolean;
@@ -137,74 +135,84 @@ export const D = {
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
 
-export type ParamKind = "ref" | "free";
-
-function paramKind(node: unknown): ParamKind | undefined {
-	if (typeof node !== "object" || node === null) return undefined;
-	const n = node as Record<string, unknown>;
-	if (n.ref === true) return "ref";
-	if (n.free === true) return "free";
-	return undefined;
+/** 动词参数的声明面：惰性描述符——内核校验、宿主面与规则参数类型皆由构造派生。 */
+export interface ParamSpec {
+	type: "string" | "number" | "boolean";
+	/** 字符串参数的语义：ref＝实体 id（过可见性门），free＝字面。 */
+	kind?: "ref" | "free";
+	optional?: true;
+	description?: string;
 }
 
-function stripKind(node: unknown): unknown {
-	if (typeof node !== "object" || node === null) return node;
-	const out = { ...(node as Record<string, unknown>) };
-	delete out.ref;
-	delete out.free;
-	return out;
-}
+type ScalarOf<T extends ParamSpec["type"]> = T extends "number" ? number : T extends "boolean" ? boolean : string;
+
+/** 规则参数的编译期类型，由 params 声明推导。 */
+export type ParamsOf<P extends Record<string, ParamSpec>> = {
+	[K in keyof P as P[K] extends { optional: true } ? never : K]: ScalarOf<P[K]["type"]>;
+} & {
+	[K in keyof P as P[K] extends { optional: true } ? K : never]?: ScalarOf<P[K]["type"]>;
+};
 
 /** 指称参数：值是实体 id，过可见性门。 */
-export function ref(description?: string): TString {
-	return Type.String({ ...(description !== undefined && { description }), ref: true });
+export function ref(description?: string): { type: "string"; kind: "ref"; description?: string } {
+	return { type: "string", kind: "ref", ...(description !== undefined && { description }) };
 }
 
 /** 自由字符串：值按字面进入裁决。 */
-export function free(description?: string): TString {
-	return Type.String({ ...(description !== undefined && { description }), free: true });
+export function free(description?: string): { type: "string"; kind: "free"; description?: string } {
+	return { type: "string", kind: "free", ...(description !== undefined && { description }) };
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
-	return Object.keys(verb.kinds).filter((k) => verb.kinds[k] === "ref");
+	return Object.keys(verb.params).filter((k) => verb.params[k]?.kind === "ref");
 }
 
-/** 规则参数由 TypeBox schema 推导编译期类型。 */
-export function defineVerb<S extends TObject>(spec: {
+/** 规则参数由 params 声明推导编译期类型。 */
+export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	label: string;
 	description: string;
-	schema: S;
+	params: P;
 	cost?: number;
 	internal?: boolean;
-	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
+	rules: { id: string; judge: (q: Q, p: ParamsOf<P>) => Verdict | null }[];
 }): VerbDef {
-	const kinds: Record<string, ParamKind> = {};
-	const stripped: Record<string, unknown> = {};
-	for (const [k, node] of Object.entries(spec.schema.properties)) {
-		const kind = paramKind(node);
-		if (kind) kinds[k] = kind;
-		stripped[k] = stripKind(node);
-	}
 	return {
 		label: spec.label,
 		description: spec.description,
+		params: spec.params,
 		...(spec.cost !== undefined && { cost: spec.cost }),
-		schema: { ...spec.schema, properties: stripped as S["properties"], additionalProperties: false },
-		kinds,
 		...(spec.internal !== undefined && { internal: spec.internal }),
-		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
+		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as ParamsOf<P>) })),
 	};
 }
 
 export interface VerbDef {
 	label: string;
 	description: string;
-	schema: TObject;
-	kinds: Record<string, ParamKind>;
+	params: Record<string, ParamSpec>;
 	cost?: number;
 	/** 不进映射层，由代码直接 apply——同一裁决边界与审查。 */
 	internal?: boolean;
 	rules: Rule[];
+}
+
+/** 内核形态检查（裁决面全集）：指名违约点并携带参数描述，报错措辞走通道语言单源。 */
+function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[] {
+	if (params === null || typeof params !== "object" || Array.isArray(params)) return ["params：须为对象"];
+	const out: string[] = [];
+	const desc = (s: ParamSpec): string => (s.description !== undefined ? `（${s.description}）` : "");
+	for (const name of Object.keys(params)) {
+		if (!Object.hasOwn(verb.params, name)) out.push(`params.${name}：未知参数（可用：${Object.keys(verb.params).join("、") || "无"}）`);
+	}
+	for (const [name, s] of Object.entries(verb.params)) {
+		const v = (params as Record<string, unknown>)[name];
+		if (v === undefined) {
+			if (!s.optional) out.push(`params.${name}：缺少必填参数${desc(s)}`);
+			continue;
+		}
+		if (typeof v !== s.type) out.push(`params.${name}：须为 ${s.type}${desc(s)}`);
+	}
+	return out;
 }
 
 export interface GameDef {
@@ -544,7 +552,6 @@ export class Simulation {
 	readonly world: World;
 	/** 实际起点读态的冻结副本，首次提交前惰性捕获。 */
 	private genesisCache?: World;
-	private readonly validators = new Map<string, ReturnType<typeof Compile>>();
 
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
@@ -560,25 +567,17 @@ export class Simulation {
 			invariantIds.add(inv.id);
 		}
 		for (const [name, v] of Object.entries(def.verbs)) {
-			this.validators.set(name, Compile(Type.Object(v.schema.properties, { additionalProperties: false })));
 			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
 			const ruleIds = new Set<string>();
 			for (const r of v.rules) {
 				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
 				ruleIds.add(r.id);
 			}
-			// 形态标记只住 kinds（schema 携带即绕过 defineVerb）；字符串参数的 kind 漏报在加载期失败，不可静默 fail-open
-			const props = v.schema.properties as Record<string, { type?: string } | undefined>;
-			for (const p of Object.keys(props)) {
-				const node = props[p];
-				if (node?.type !== "string" && node?.type !== "number" && node?.type !== "boolean") {
-					throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(node?.type)}`);
-				}
-				if (paramKind(node)) throw new Error(`动词 ${name} 的参数「${p}」的 schema 不得携带 ref/free 标记（经 defineVerb 构造，标记归 kinds）`);
-				if (node.type === "string" && !v.kinds[p]) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
-			}
-			for (const [p, kind] of Object.entries(v.kinds)) {
-				if (props[p]?.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 ${kind} 标记只对字符串参数有意义`);
+			// as 通道的结构复核：存储形状运行时验收，字符串参数的 kind 漏报不可静默 fail-open
+			for (const [p, s] of Object.entries(v.params)) {
+				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(s.type)}`);
+				if (s.type === "string" && !s.kind) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
+				if (s.kind !== undefined && s.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 kind 标记只对字符串参数有意义`);
 			}
 		}
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
@@ -629,9 +628,8 @@ export class Simulation {
 	private staticForm(action: Action): VerbDef {
 		const verb = this.def.verbs[action.verb];
 		if (!verb) throw new ProtocolViolation("action.unknown", `verb:${action.verb}`);
-		if (!this.validators.get(action.verb)!.Check(action.params)) {
-			throw new ProtocolViolation("action.schema", this.schemaErrors(action.verb, action.params));
-		}
+		const problems = paramProblems(verb, action.params);
+		if (problems.length) throw new ProtocolViolation("action.schema", problems.join("; "));
 		return verb;
 	}
 
@@ -686,11 +684,6 @@ export class Simulation {
 
 	private genesis(): World {
 		return (this.genesisCache ??= this.readState());
-	}
-
-	private schemaErrors(verbName: string, params: Record<string, PropValue>): string {
-		const errs = this.validators.get(verbName)!.Errors(params);
-		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
 	}
 
 	/** 克隆覆写：冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账坐标。 */
@@ -789,7 +782,7 @@ export class Simulation {
 		if (!verb) return action.verb;
 		const legal = new Set(step.field.before);
 		const refs = new Set(refParamsOf(verb));
-		const parts = Object.keys(verb.schema.properties)
+		const parts = Object.keys(verb.params)
 			.filter((k) => k in action.params)
 			.map((k) => {
 				const v = action.params[k]!;

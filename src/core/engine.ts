@@ -9,10 +9,10 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { MEMORY_RECORD_TYPE, loadRecords, projectWindow, pruneContext, repairRecords, verbatim, type ChronicleEntry, type RecentEntry } from "./context.ts";
 import { deepFreeze } from "./util.ts";
-import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type Step } from "./sim.ts";
+import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type GameDef, type ParamSpec, type Step } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -362,12 +362,18 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
 	const advertised = new Set(publicVerbs.map(([name]) => name));
+	// 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换
+	const paramSchema = (spec: ParamSpec): TSchema => {
+		const opts = spec.description !== undefined ? { description: spec.description } : {};
+		const s = spec.type === "number" ? Type.Number(opts) : spec.type === "boolean" ? Type.Boolean(opts) : Type.String(opts);
+		return spec.optional === true ? Type.Optional(s) : s;
+	};
 	const actionSchema = Type.Union(
 		publicVerbs.map(([name, v]) =>
 			Type.Object(
 				{
 					verb: Type.Literal(name),
-					params: v.schema,
+					params: Type.Object(Object.fromEntries(Object.entries(v.params).map(([p, s]) => [p, paramSchema(s)])), { additionalProperties: false }),
 				},
 				{ additionalProperties: false },
 			),
