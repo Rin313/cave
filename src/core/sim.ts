@@ -442,7 +442,9 @@ export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<str
 	if (c.kind === "despawn") return `- ${c.name}`;
 	if (c.kind === "rename") return `~ ${c.prev} → ${c.next}`;
 	if (c.kind === "rel") {
-		return `${renderValue(sim, c.from, true, departed).text}.${c.type}.${renderValue(sim, c.to, true, departed).text}: ${val(c.prev, sides?.prev ?? true, false)} → ${val(c.next, sides?.next ?? true, false)}`;
+		// 空侧（创生/消散）随行广播、豁免截面；? 只占位有值未读
+		const readable = (v: PropValue, side: boolean | undefined): boolean => v === null || (side ?? true);
+		return `${renderValue(sim, c.from, true, departed).text}.${c.type}.${renderValue(sim, c.to, true, departed).text}: ${val(c.prev, readable(c.prev, sides?.prev), false)} → ${val(c.next, readable(c.next, sides?.next), false)}`;
 	}
 	const e = sim.world.entities.find((x) => x.id === c.entity);
 	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
