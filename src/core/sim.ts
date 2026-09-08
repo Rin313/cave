@@ -947,7 +947,7 @@ export class Simulation {
 		return lines.length ? lines.join("\n") : this.def.messages.noResponse;
 	}
 
-	/** 逐条校验而非预检（同一授予内 spawn 后 set 是合法书写）；幂等跳过的唯一判据是目标状态已成立。 */
+	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */
 	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
 		const upsertRel = (from: string, to: string, type: string, value: LedgerValue) => {

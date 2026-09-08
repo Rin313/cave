@@ -95,7 +95,6 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	return failures.length ? failures.join("; ") : "ok";
 }
 
-/** tick 脱糖为 dev.wait，与 action 同走唯一执行路径；apply 含落钟。 */
 function runStep(sim: Simulation, step: ScenarioStep): { steps: Step[]; error?: unknown } {
 	if (step.tick == null && !step.action) return { steps: [], error: new Error("无效步骤：缺 action/tick") };
 	try {
