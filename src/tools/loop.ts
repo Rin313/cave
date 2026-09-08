@@ -82,7 +82,6 @@ function printAct(sim: Simulation, o: {
 	outcome: ActOutcome; brief?: boolean;
 }): void {
 	console.log(`\n【#${o.turn} act】${o.intent}`);
-	for (const a of o.outcome.proposals) console.log(`  提案 ${a.verb}${JSON.stringify(a.params ?? {})}`);
 	for (const line of spineLines(sim, o.outcome.steps)) console.log(`  ${line}`);
 	warnWarnings(o.outcome.warnings);
 	const u = usageLine(o.outcome.usage);
@@ -167,7 +166,6 @@ async function cmdAct(gameId: string, runId: string, intent: string, selection: 
 			raw: intent,
 			selection: selection ?? null,
 			intent: utterance,
-			proposals: outcome.proposals,
 			steps: outcome.steps,
 			narration: outcome.narration,
 			warnings: outcome.warnings,
@@ -190,7 +188,7 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 			meta.turn += 1;
 			appendTranscript(dir, {
 				turn: meta.turn, phase: "act", raw: line, selection: null, intent: line,
-				proposals: outcome.proposals, steps: outcome.steps,
+				steps: outcome.steps,
 				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
 			});
 			printAct(sim, { turn: meta.turn, intent: line, outcome, brief: true });

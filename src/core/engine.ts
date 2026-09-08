@@ -9,7 +9,7 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, repairRecords, resume, verbatim, type RecentEntry } from "./context.ts";
+import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim, type RecentEntry } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
 import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Step } from "./sim.ts";
 
@@ -39,7 +39,6 @@ const STATE_HEADER = "[状态视图]（你可见的世界截面；不在其中�
 export interface ActOutcome {
 	steps: Step[];
 	narration: string;
-	proposals: { verb: string; params: unknown }[];
 	warnings: string[];
 	usage: TokenUsage[];
 }
@@ -70,7 +69,6 @@ interface RunState {
 	settled: string;
 	current: string;
 	steps: Step[];
-	proposals: { verb: string; params: unknown }[];
 	warnings: string[];
 	usage: TokenUsage[];
 }
@@ -86,10 +84,10 @@ export class Engine {
 	readonly sim: Simulation;
 	private session: SessionHandle;
 	private readonly recent: RecentEntry[];
-	/** 共享档案态：定稿写点（act 工具尾）与近况窗口的共同源。 */
+	/** 共享档案态：定稿写点（act 工具尾）与近况窗口的共同源；records 只保留窗口内记录。 */
 	private readonly archive: Archive;
 	/** 装载期诊断：损坏纪要截断、档案链断、检查点弃置的显形出口。 */
-	readonly loadWarnings: string[];
+	readonly loadWarnings: readonly string[];
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
 
@@ -107,7 +105,6 @@ export class Engine {
 		this.recent = recent;
 		this.run = run;
 		this.loadWarnings = loadWarnings;
-		this.repairLoadedRecords();
 		this.updateRecent();
 		session.subscribe((event) => {
 			switch (event.type) {
@@ -173,7 +170,7 @@ export class Engine {
 
 		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", visibleBefore: new Set(), settled: "", current: "", steps: [], proposals: [], warnings: [], usage: [] };
+		const run: RunState = { phase: "mapping", visibleBefore: new Set(), settled: "", current: "", steps: [], warnings: [], usage: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
@@ -222,7 +219,6 @@ export class Engine {
 		r.intent = intent;
 		r.settled = "";
 		r.current = "";
-		r.proposals = [];
 		r.warnings = [];
 		r.usage = [];
 		r.steps = [];
@@ -252,7 +248,6 @@ export class Engine {
 		return {
 			steps: this.run.steps,
 			narration,
-			proposals: this.run.proposals,
 			warnings: this.run.warnings,
 			usage: this.run.usage,
 		};
@@ -263,21 +258,8 @@ export class Engine {
 		if (this.archive.dead !== null) throw new Error(`引擎已毒化（${this.archive.dead}）：须重启进程由日志对账`);
 	}
 
-	/** 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载。 */
-	private limitRecords(): void {
-		const excess = this.archive.records.length - this.sim.def.recentWindow;
-		if (excess > 0) this.archive.records.splice(0, excess);
-	}
-
-	/** 装载修复：窗口裁剪后逐条试投影（完好判据是消费本身），损坏使近况截断至其后完好子后缀；后续写入的记录已经过消费，无需复检。 */
-	private repairLoadedRecords(): void {
-		this.limitRecords();
-		repairRecords(this.sim, this.archive.records, this.loadWarnings);
-	}
-
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
-		this.limitRecords();
 		this.recent.length = 0;
 		this.recent.push(...projectWindow(this.sim, this.archive.records));
 	}
@@ -378,6 +360,9 @@ function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunS
 	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
 	archive.records.push(record);
 	archive.lastSeq = record.seq;
+	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
+	const excess = archive.records.length - sim.def.recentWindow;
+	if (excess > 0) archive.records.splice(0, excess);
 	try {
 		sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: record.seq, world: sim.snapshot() });
 	} catch (e) {
@@ -454,7 +439,6 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				return { content: [{ type: "text", text: `${CONTRACT.form}\n${e.message}` }], details: {} };
 			}
 			run.phase = "narration";
-			run.proposals = [...proposed];
 			const steps: Step[] = [];
 			let crashed: string | null = null;
 			try {

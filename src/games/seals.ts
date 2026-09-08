@@ -82,11 +82,11 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "desk",
-				judge: (q, p) => {
-					const t = isLetter(q, p.entity);
+				judge: (q) => {
+					const t = isLetter(q, q.params.entity);
 					if (!t) return deny("take.notletter", { reason: "那不是能拿的信。" });
 					if (t.props.in !== "desk") return deny("take.notondesk", { reason: "那封信不在书案上。" });
-					return grant([D.set(p.entity, "in", host(q))], `你把${nameOf(q.world, p.entity)}拿到了手里。`);
+					return grant([D.set(q.params.entity, "in", host(q))], `你把${nameOf(q.world, q.params.entity)}拿到了手里。`);
 				},
 			}],
 		}),
@@ -97,14 +97,14 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "held",
-				judge: (q, p) => {
-					const t = isLetter(q, p.entity);
+				judge: (q) => {
+					const t = isLetter(q, q.params.entity);
 					if (!t) return deny("read.notletter", { reason: "那不是能读的信。" });
 					if (t.props.in !== host(q)) return deny("read.notheld", { reason: "你得先把信拿到手里。" });
 					const deltas: Delta[] = [];
-					if (t.props.seal === true) deltas.push(D.set(p.entity, "seal", false));
-					if (relVal(q.world, q.player, p.entity, "知晓") === null) deltas.push(D.relSet(q.player, p.entity, "知晓", true));
-					if (!deltas.length) return grant([], `你把${nameOf(q.world, p.entity)}又读了一遍，字句没有变。`);
+					if (t.props.seal === true) deltas.push(D.set(q.params.entity, "seal", false));
+					if (relVal(q.world, q.player, q.params.entity, "知晓") === null) deltas.push(D.relSet(q.player, q.params.entity, "知晓", true));
+					if (!deltas.length) return grant([], `你把${nameOf(q.world, q.params.entity)}又读了一遍，字句没有变。`);
 					return grant(deltas, `你展信细读：${String(t.props.content ?? "")}`);
 				},
 			}],
@@ -116,14 +116,14 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "held",
-				judge: (q, p) => {
-					const t = isLetter(q, p.entity);
+				judge: (q) => {
+					const t = isLetter(q, q.params.entity);
 					if (!t) return deny("forge.notletter", { reason: "那不是能改的信。" });
 					if (t.props.in !== host(q)) return deny("forge.notheld", { reason: "你得先把信拿到手里。" });
-					const text = p.text.trim();
+					const text = q.params.text.trim();
 					if (!text) return deny("forge.blank", { reason: "信文不能是空的。" });
 					return grant(
-						[D.set(p.entity, "seal", false), D.set(p.entity, "content", text), D.relSet(q.player, p.entity, "知晓", true)],
+						[D.set(q.params.entity, "seal", false), D.set(q.params.entity, "content", text), D.relSet(q.player, q.params.entity, "知晓", true)],
 						"你借着拆封的工夫，重新誊写了信文。",
 					);
 				},
@@ -136,11 +136,11 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "held",
-				judge: (q, p) => {
-					const t = isLetter(q, p.entity);
+				judge: (q) => {
+					const t = isLetter(q, q.params.entity);
 					if (!t) return deny("leave.notletter", { reason: "那不是信。" });
 					if (t.props.in !== host(q)) return deny("leave.notheld", { reason: "那封信不在你手里。" });
-					return grant([D.set(p.entity, "in", "desk")], `你把${nameOf(q.world, p.entity)}放回了书案。`);
+					return grant([D.set(q.params.entity, "in", "desk")], `你把${nameOf(q.world, q.params.entity)}放回了书案。`);
 				},
 			}],
 		}),
@@ -154,14 +154,14 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "person",
-				judge: (q, p) => {
-					const t = entity(q.world, p.target);
+				judge: (q) => {
+					const t = entity(q.world, q.params.target);
 					if (!t || t.props.kind !== "person") return deny("talk.notperson", { reason: "那不是能交谈的人。" });
-					const words = p.words.trim();
+					const words = q.params.words.trim();
 					if (!words) return deny("talk.blank", { reason: "话不能是空的。" });
 					return grant(
-						[D.set(p.target, "heard", words), ...(t.props.introduced !== true ? [D.set(p.target, "introduced", true)] : [])],
-						`你与${nameOf(q.world, p.target)}攀谈了一句。`,
+						[D.set(q.params.target, "heard", words), ...(t.props.introduced !== true ? [D.set(q.params.target, "introduced", true)] : [])],
+						`你与${nameOf(q.world, q.params.target)}攀谈了一句。`,
 					);
 				},
 			}],
@@ -173,12 +173,12 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "masked",
-				judge: (q, p) => {
-					const t = entity(q.world, p.target);
+				judge: (q) => {
+					const t = entity(q.world, q.params.target);
 					if (!t || t.props.mask !== true) return deny("unmask.nomask", { reason: "那人没有戴面具。" });
 					const trueName = t.props.trueName;
 					const reveal = typeof trueName === "string" && trueName !== "" ? trueName : null;
-					return grant([...(reveal !== null ? [D.rename(p.target, reveal)] : []), D.set(p.target, "mask", false)], "你揭下了面具。");
+					return grant([...(reveal !== null ? [D.rename(q.params.target, reveal)] : []), D.set(q.params.target, "mask", false)], "你揭下了面具。");
 				},
 			}],
 		}),
@@ -189,14 +189,14 @@ export const seals: GameDef = {
 			cost: 1,
 			rules: [{
 				id: "path",
-				judge: (q, p) => {
-					const d = entity(q.world, p.dest);
+				judge: (q) => {
+					const d = entity(q.world, q.params.dest);
 					if (!d || d.props.space !== true) return deny("go.noplace", { reason: "那里不是能去的地方。" });
 					const here = enclosingSpace(q.world, host(q));
 					if (here === null) return deny("go.noway", { reason: "你无处可去。" });
-					if (here === p.dest) return deny("go.here", { reason: `你已经身在${nameOf(q.world, p.dest)}。` });
-					if (relVal(q.world, here, p.dest, "path") === null) return deny("go.noway", { reason: `从这里没有路通往${nameOf(q.world, p.dest)}。` });
-					return grant([D.set(host(q), "in", p.dest)], `你走向${nameOf(q.world, p.dest)}。`);
+					if (here === q.params.dest) return deny("go.here", { reason: `你已经身在${nameOf(q.world, q.params.dest)}。` });
+					if (relVal(q.world, here, q.params.dest, "path") === null) return deny("go.noway", { reason: `从这里没有路通往${nameOf(q.world, q.params.dest)}。` });
+					return grant([D.set(host(q), "in", q.params.dest)], `你走向${nameOf(q.world, q.params.dest)}。`);
 				},
 			}],
 		}),
@@ -207,11 +207,11 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "vessel",
-				judge: (q, p) => {
-					const t = entity(q.world, p.entity);
+				judge: (q) => {
+					const t = entity(q.world, q.params.entity);
 					if (!t || t.props.vessel !== true) return deny("channel.notvessel", { reason: "那不是能容魂的东西。" });
-					if (p.entity === host(q)) return deny("channel.self", { reason: "你已经居于其中。" });
-					return grant([D.set(q.player, "in", p.entity)], `你的神魂没入${nameOf(q.world, p.entity)}。`);
+					if (q.params.entity === host(q)) return deny("channel.self", { reason: "你已经居于其中。" });
+					return grant([D.set(q.player, "in", q.params.entity)], `你的神魂没入${nameOf(q.world, q.params.entity)}。`);
 				},
 			}],
 		}),
@@ -222,10 +222,10 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "tied",
-				judge: (q, p) => {
-					const ref = referenced(q, p.entity);
-					if (ref) return deny("burn.tied", { reason: `${nameOf(q.world, ref)}还系着${nameOf(q.world, p.entity)}，解开了才烧得掉。` });
-					return grant([D.despawn(p.entity)], `你把${nameOf(q.world, p.entity)}掷进了火盆。`);
+				judge: (q) => {
+					const ref = referenced(q, q.params.entity);
+					if (ref) return deny("burn.tied", { reason: `${nameOf(q.world, ref)}还系着${nameOf(q.world, q.params.entity)}，解开了才烧得掉。` });
+					return grant([D.despawn(q.params.entity)], `你把${nameOf(q.world, q.params.entity)}掷进了火盆。`);
 				},
 			}],
 		}),
@@ -246,8 +246,8 @@ export const seals: GameDef = {
 			cost: 0,
 			rules: [{
 				id: "pass",
-				judge: (_q, p) => {
-					const span = p.span ?? 1;
+				judge: (q) => {
+					const span = q.params.span ?? 1;
 					if (!Number.isInteger(span)) return deny("wait.span", { reason: "时间以刻计，没有半刻。" });
 					if (span < 1) return deny("wait.span", { reason: "那不算等候。" });
 					if (span > 12) return deny("wait.span", { reason: "你等不了那么久。" });

@@ -69,6 +69,7 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 
 export interface Resumed {
 	sim: Simulation;
+	/** 近况窗口内的回合记录（已过完好判据）。 */
 	records: ChronicleEntry[];
 	lastSeq: number;
 	/** 生效检查点的 seq；null＝日志无可用的检查点条目（自变体开局起算）。 */
@@ -76,7 +77,7 @@ export interface Resumed {
 	warnings: string[];
 }
 
-/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。 */
+/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要，截断而非剔除（名字闭合依赖完整时间后缀）。 */
 export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const warnings: string[] = [];
 	const log = loadLog(entries, warnings);
@@ -123,17 +124,10 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 		lastSeq = r.seq;
 		expected = r.seq + 1;
 	}
-	return { sim, records, lastSeq, checkpointSeq: checkpoint ? boundary : null, warnings };
-}
-
-/** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底。 */
-export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
-	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
-	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { departed }) }));
-}
-
-/** 装载纪要的完好判据：seq 连续加试投影存活；坏点使近况截断至其后完好子后缀（名字闭合依赖完整时间后缀）；会话文件不动。 */
-export function repairRecords(sim: Simulation, records: ChronicleEntry[], warnings: string[]): void {
+	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
+	const excess = records.length - def.recentWindow;
+	if (excess > 0) records.splice(0, excess);
+	// 纪要完好按消费判据：seq 连续加试投影存活；坏点使近况截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
 	let cut = -1;
 	records.forEach((r, i) => {
 		const prev = records[i - 1];
@@ -154,6 +148,13 @@ export function repairRecords(sim: Simulation, records: ChronicleEntry[], warnin
 		warnings.push(`近况截断：弃前 ${cut + 1}/${records.length} 条`);
 		records.splice(0, cut + 1);
 	}
+	return { sim, records, lastSeq, checkpointSeq: checkpoint ? boundary : null, warnings };
+}
+
+/** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底。 */
+export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
+	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
+	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { departed }) }));
 }
 
 /** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。stringify 不转义的行分隔符（U+2028/9）手动补转义。 */

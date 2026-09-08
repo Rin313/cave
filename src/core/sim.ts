@@ -88,11 +88,11 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** world 为深冻结裁决读态，越权写即抛；一切后果经返回值表达。 */
-export interface Q {
+/** world 为深冻结裁决读态，越权写即抛；一切后果经返回值表达。P 为参数的编译期形状（defineVerb 从 params 声明派生）。 */
+export interface Q<P = Record<string, Scalar>> {
 	readonly world: World;
 	readonly player: string;
-	readonly params: Record<string, Scalar>;
+	readonly params: P;
 	/** 确定性骰子；key 以出处路径限定，重名不共享命运。 */
 	roll(key: string, sides: number): number;
 }
@@ -178,7 +178,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	params: P;
 	cost: number;
 	internal?: boolean;
-	rules: { id: string; judge: (q: Q, p: ParamsOf<P>) => Verdict | null }[];
+	rules: { id: string; judge: (q: Q<ParamsOf<P>>) => Verdict | null }[];
 }): VerbDef {
 	return {
 		label: spec.label,
@@ -186,7 +186,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 		params: spec.params,
 		cost: spec.cost,
 		...(spec.internal !== undefined && { internal: spec.internal }),
-		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as ParamsOf<P>) })),
+		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q as Q<ParamsOf<P>>) })),
 	};
 }
 

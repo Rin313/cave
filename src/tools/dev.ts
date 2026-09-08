@@ -17,7 +17,7 @@ export function withDevWait(def: GameDef): GameDef {
 				cost: 0,
 				rules: [{
 					id: "wait",
-					judge: (_q, p) => grant([], "时间流逝。", undefined, Math.max(0, Math.floor(Number(p.n ?? 1)))),
+					judge: (q) => grant([], "时间流逝。", undefined, Math.max(0, Math.floor(Number(q.params.n ?? 1)))),
 				}],
 			}),
 		},
