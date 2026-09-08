@@ -55,7 +55,7 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 	const affinity: string[] = [];
 	const seen = new Set<string>();
 	for (const r of world.relations) {
-		if (r.type !== "信任" || Number(r.value ?? 0) < 2) continue;
+		if (r.type !== "信任" || !(Number(r.value ?? 0) >= 2)) continue;
 		const key = [r.from, r.to].sort().join("|");
 		if (seen.has(key)) continue;
 		seen.add(key);

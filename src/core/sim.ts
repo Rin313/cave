@@ -676,9 +676,8 @@ export class Simulation {
 		return errs.length ? errs.map((e) => `${e.instancePath} ${e.message}`).join("; ") : JSON.stringify(params);
 	}
 
-	/** 先删提交期间新建的顶层键再克隆覆写；冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账坐标。 */
+	/** 克隆覆写：冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账坐标。 */
 	private restore(s0: World): void {
-		for (const k of Object.keys(this.world)) if (!(k in s0)) delete (this.world as unknown as Record<string, unknown>)[k];
 		Object.assign(this.world, JSON.parse(JSON.stringify(s0)) as World);
 	}
 
@@ -871,13 +870,10 @@ export class Simulation {
 	/** 逐条校验而非预检（同一授予内 spawn 后 set 是合法书写）；幂等跳过的唯一判据是目标状态已成立。 */
 	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
-		// 边表原地增删，全程同一数组引用
-		const rels = (): Rel[] => this.world.relations;
 		const upsertRel = (from: string, to: string, type: string, value: LedgerValue) => {
-			const rs = rels();
-			const hit = rs.find((r) => r.from === from && r.to === to && r.type === type);
+			const hit = this.world.relations.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
-			else rs.push({ from, to, type, value });
+			else this.world.relations.push({ from, to, type, value });
 		};
 		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", debug: `commit: ${debug}` } });
 		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
@@ -916,10 +912,9 @@ export class Simulation {
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
 				if (d.value !== null && !isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
 				if (d.value === null) {
-					// 能走到此处则边必已存在（prev !== null）；原地删——边表是本提交共享的数组，不可整体替换
-					const rs = rels();
-					const i = rs.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
-					if (i >= 0) rs.splice(i, 1);
+					// 能走到此处则边必已存在（prev !== null）
+					const i = this.world.relations.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
+					if (i >= 0) this.world.relations.splice(i, 1);
 				} else {
 					upsertRel(d.from, d.to, d.type, d.value);
 				}
