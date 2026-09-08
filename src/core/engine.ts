@@ -35,7 +35,6 @@ const CONTRACT = {
 	follow: "act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文",
 } as const;
 
-/** 协议拦截而非世界拒绝：通道语言，不进玩家视野。 */
 const ACT_LATCH_MSG = `行动窗口已关闭：${CONTRACT.once}。请忽略本次调用，基于回合内已有内容继续输出散文。`;
 
 const STATE_HEADER = "[状态视图]（你可见的世界截面；不在其中者，无从指称）：";
@@ -90,7 +89,7 @@ export class Engine {
 	private readonly recent: RecentEntry[];
 	/** 回合定稿记录，窗口裁剪至 recentWindow。 */
 	private readonly records: ChronicleEntry[];
-	/** 装载期诊断：损坏纪要截断的显形出口，loop 打印。 */
+	/** 装载期诊断：损坏纪要截断的显形出口。 */
 	readonly loadWarnings: string[] = [];
 	private readonly run: RunState;
 	private readonly channel: TurnChannel;
@@ -179,7 +178,6 @@ export class Engine {
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const records = loadRecords(sessionManager.getEntries());
 		const recent: RecentEntry[] = [];
-		// 宿主资源发现全关：cwd 的 AGENTS.md/扩展/技能不得泄入游戏 prompt
 		const loader = new DefaultResourceLoader({
 			cwd: process.cwd(),
 			agentDir: getAgentDir(),

@@ -326,7 +326,7 @@ const CASES: WallCase[] = [
 			systems: [leakSystem, beatsSystem],
 		}),
 		steps: [
-			{ name: "系统越权写属性：TypeError 兑为 system.crash 失败刻步，beats.tick 照跑", tick: 1, expect: { tickDenied: true, lines: ["✓ 流逝(1)：时间流逝。", "⏱ （你.摆动: null → 1）", "⏱ ✗ 世界没有回应。"], state: { "player.hp": 10, "player.beats": 1, "$world.time": 1 } } },
+			{ name: "系统越权写属性：TypeError 兑为 system.crash 失败刻步，beats.tick 照跑", tick: 1, expect: { tickDenied: true, lines: ["⏱ （你.摆动: null → 1）", "⏱ ✗ 世界没有回应。"], state: { "player.hp": 10, "player.beats": 1, "$world.time": 1 } } },
 		],
 	},
 	{
@@ -386,7 +386,7 @@ const CASES: WallCase[] = [
 			systems: [boomSystem, beatsSystem],
 		}),
 		steps: [
-			{ name: "系统直接抛出：失败刻步，beats.tick 照跑，时刻照走", tick: 1, expect: { tickDenied: true, lines: ["✓ 流逝(1)：时间流逝。", "⏱ （你.摆动: null → 1）", "⏱ ✗ 世界没有回应。"], state: { "$world.time": 1, "player.beats": 1 } } },
+			{ name: "系统直接抛出：失败刻步，beats.tick 照跑，时刻照走", tick: 1, expect: { tickDenied: true, lines: ["⏱ （你.摆动: null → 1）", "⏱ ✗ 世界没有回应。"], state: { "$world.time": 1, "player.beats": 1 } } },
 		],
 	},
 	{
@@ -448,7 +448,7 @@ const CASES: WallCase[] = [
 			systems: [mechSystem],
 		}),
 		steps: [
-			{ name: "两刻：奇刻仅内务变更（internal 滤为静默）、偶刻机械变更——有言成块，静默 ×1", tick: 2, expect: { ok: true, lines: ["✓ 流逝(2)：时间流逝。", "⏱ （你.摆动: null → 1）", "⏱ 时间流逝 ×1"], state: { "player.beats": 1, "player.mechturn": 1 } } },
+			{ name: "两刻：奇刻仅内务变更（internal 滤为静默）、偶刻机械变更——有言成块，静默 ×1", tick: 2, expect: { ok: true, lines: ["⏱ （你.摆动: null → 1）", "⏱ 时间流逝 ×1"], state: { "player.beats": 1, "player.mechturn": 1 } } },
 		],
 	},
 	{

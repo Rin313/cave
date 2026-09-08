@@ -137,7 +137,7 @@ export const D = {
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
 
-type ParamKind = "ref" | "free";
+export type ParamKind = "ref" | "free";
 
 function paramKind(node: unknown): ParamKind | undefined {
 	if (typeof node !== "object" || node === null) return undefined;
@@ -145,6 +145,14 @@ function paramKind(node: unknown): ParamKind | undefined {
 	if (n.ref === true) return "ref";
 	if (n.free === true) return "free";
 	return undefined;
+}
+
+function stripKind(node: unknown): unknown {
+	if (typeof node !== "object" || node === null) return node;
+	const out = { ...(node as Record<string, unknown>) };
+	delete out.ref;
+	delete out.free;
+	return out;
 }
 
 /** 指称参数：值是实体 id，过可见性门。 */
@@ -158,8 +166,7 @@ export function free(description?: string): TString {
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
-	const props = verb.schema.properties as Record<string, unknown>;
-	return Object.keys(props).filter((k) => paramKind(props[k]) === "ref");
+	return Object.keys(verb.kinds).filter((k) => verb.kinds[k] === "ref");
 }
 
 /** 规则参数由 TypeBox schema 推导编译期类型。 */
@@ -171,11 +178,19 @@ export function defineVerb<S extends TObject>(spec: {
 	internal?: boolean;
 	rules: { id: string; judge: (q: Q, p: Static<S>) => Verdict | null }[];
 }): VerbDef {
+	const kinds: Record<string, ParamKind> = {};
+	const stripped: Record<string, unknown> = {};
+	for (const [k, node] of Object.entries(spec.schema.properties)) {
+		const kind = paramKind(node);
+		if (kind) kinds[k] = kind;
+		stripped[k] = stripKind(node);
+	}
 	return {
 		label: spec.label,
 		description: spec.description,
 		...(spec.cost !== undefined && { cost: spec.cost }),
-		schema: { ...spec.schema, additionalProperties: false },
+		schema: { ...spec.schema, properties: stripped as S["properties"], additionalProperties: false },
+		kinds,
 		...(spec.internal !== undefined && { internal: spec.internal }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as Static<S>) })),
 	};
@@ -185,6 +200,7 @@ export interface VerbDef {
 	label: string;
 	description: string;
 	schema: TObject;
+	kinds: Record<string, ParamKind>;
 	cost?: number;
 	/** 不进映射层，由代码直接 apply——同一裁决边界与审查。 */
 	internal?: boolean;
@@ -492,6 +508,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 		if (s.kind === "action") {
 			flush();
 			granted = s.ticks;
+			if (sim.def.verbs[s.action.verb]?.internal) continue;
 			const changes = narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
 				changes.length ? `（${changes.join("；")}）` : "",
@@ -550,18 +567,18 @@ export class Simulation {
 				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
 				ruleIds.add(r.id);
 			}
-			// 字符串参数的 kind 漏报在加载期失败，不可静默 fail-open
-			for (const p of Object.keys(v.schema.properties)) {
-				const node = (v.schema.properties as Record<string, { type?: string } | undefined>)[p];
+			// 形态标记只住 kinds（schema 携带即绕过 defineVerb）；字符串参数的 kind 漏报在加载期失败，不可静默 fail-open
+			const props = v.schema.properties as Record<string, { type?: string } | undefined>;
+			for (const p of Object.keys(props)) {
+				const node = props[p];
 				if (node?.type !== "string" && node?.type !== "number" && node?.type !== "boolean") {
 					throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(node?.type)}`);
 				}
-				const kind = paramKind(node);
-				if (node.type === "string") {
-					if (!kind) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
-				} else if (kind) {
-					throw new Error(`动词 ${name} 的参数「${p}」的 kind 标记只对字符串参数有意义`);
-				}
+				if (paramKind(node)) throw new Error(`动词 ${name} 的参数「${p}」的 schema 不得携带 ref/free 标记（经 defineVerb 构造，标记归 kinds）`);
+				if (node.type === "string" && !v.kinds[p]) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
+			}
+			for (const [p, kind] of Object.entries(v.kinds)) {
+				if (props[p]?.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 ${kind} 标记只对字符串参数有意义`);
 			}
 		}
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
