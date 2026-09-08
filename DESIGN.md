@@ -94,11 +94,11 @@ roll(t, src, key, sides) = 1 + ⌊h(t, src, key) · sides⌋      h : 确定性�
 
 ```
 Step ::= ActionStep | TickStep
-ActionStep = (at, ok, reason, changes, field, action, ticks, deniedBy?, denial?, facts?)
+ActionStep = (at, ok, reason?, changes, field, action, ticks, deniedBy?, denial?, facts?)
 TickStep   = (at, ok, changes, field, facts?) | (at, ok=false, denial, field)
 ```
 
-序列按构造保序，at 为钟坐标。步是纯内容，不携带出处（归因的机器诊断在 `Denial.debug`，法则归因的观察处在 probe 的裁决地图）。步入账即冻结（构造后不可变）：记录是证据而非视图。刻步无应答通道：应答（reason）是动作协议的义务，系统不回应任何尝试。
+序列按构造保序，at 为钟坐标。步是纯内容，不携带出处（归因的机器诊断在 `Denial.debug`，法则归因的观察处在 probe 的裁决地图）。步入账即冻结（构造后不可变）：记录是证据而非视图。刻步无应答通道：应答是动作协议的义务，系统不回应任何尝试。
 
 ### 感知
 

@@ -53,8 +53,6 @@ export interface Messages {
 	noResponse: string;
 	/** 指称参数不可见/不存在的统一文案：幻觉 id 与隐藏实体同一文案。 */
 	invisibleEntity?: string;
-	/** 规则授予但未提供世界腔理由时的占位文案。 */
-	defaultReason: string;
 	/** 时间流逝的文案（刻步的段头与近况渲染）。 */
 	timePassed: string;
 }
@@ -387,7 +385,7 @@ export interface ActionStep {
 	/** 裁决发生时刻的钟值；本授予的刻步为 at+1..at+ticks。 */
 	at: number;
 	ok: boolean;
-	reason: string;
+	reason?: string;
 	changes: Change[];
 	field: FieldSpan;
 	action: Action;
@@ -538,7 +536,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 				changes.length ? `（${changes.join("；")}）` : "",
 				s.facts?.length ? `〔${s.facts.join("；")}〕` : "",
 			].join("");
-			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}：${s.reason}${tail}`);
+			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}${s.reason !== undefined ? `：${s.reason}` : ""}${tail}`);
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [], denials: [] };
 			if (s.ok) {
@@ -558,10 +556,10 @@ export function relVal(world: World, from: string, to: string, type: string): Le
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 拒绝态 deniedBy/denial 必填；*.crash 无世界腔，noResponse 兜底。 */
+/** 拒绝态 deniedBy/denial/reason 必填；*.crash 无世界腔由 noResponse 兜底 */
 type RawResult =
 	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">)
-	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">);
+	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial; reason: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial" | "reason">);
 
 export class Simulation {
 	readonly def: GameDef;
@@ -703,7 +701,7 @@ export class Simulation {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
 				}
-				return { ok: true, reason: v.reason ?? msgs.defaultReason, changes: [], deltas: v.deltas, action, ...(v.facts !== undefined && { facts: v.facts }), src, ticks: v.ticks ?? cost };
+				return { ok: true, changes: [], deltas: v.deltas, action, ...(v.reason !== undefined && { reason: v.reason }), ...(v.facts !== undefined && { facts: v.facts }), src, ticks: v.ticks ?? cost };
 			}
 			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
 		}
@@ -790,7 +788,7 @@ export class Simulation {
 			if (!cc.ok) {
 				step = { kind: "action", at, ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: this.def.verbs[action.verb]!.cost };
 			} else {
-				step = { kind: "action", at, ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), ticks: r.ticks };
+				step = { kind: "action", at, ok: true, changes: cc.changes, action, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }), ticks: r.ticks };
 			}
 		} else {
 			step = { kind: "action", at, ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };

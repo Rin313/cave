@@ -72,7 +72,6 @@ export const seals: GameDef = {
 	messages: {
 		noResponse: "无人应答。",
 		invisibleEntity: "眼前没有那样的东西。",
-		defaultReason: "……",
 		timePassed: "光阴虚度",
 	},
 	verbs: {
