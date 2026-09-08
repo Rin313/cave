@@ -64,18 +64,14 @@ export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
 
-interface TurnChannel {
-	onAdjudication: ((patch: { steps?: Step[] }) => void) | null;
-}
-
 /** mapping 相位文本丢弃，narration 相位文本入账；settled/current 的归属镜像 pi 的事件语义。 */
 interface RunState {
 	phase: "mapping" | "narration";
-	acted: boolean;
 	visibleBefore: Set<string>;
 	intent?: string | undefined;
 	settled: string;
 	current: string;
+	steps: Step[];
 	proposals: { verb: string; params: unknown }[];
 	warnings: string[];
 	usage: TokenUsage[];
@@ -91,8 +87,6 @@ export class Engine {
 	/** 装载期诊断：损坏纪要截断的显形出口。 */
 	readonly loadWarnings: string[] = [];
 	private readonly run: RunState;
-	private readonly channel: TurnChannel;
-	private outcome: { steps: Step[] } = { steps: [] };
 	private listeners = new Set<(event: EngineEvent) => void>();
 
 	private constructor(
@@ -102,7 +96,6 @@ export class Engine {
 		recent: RecentEntry[],
 		records: ChronicleEntry[],
 		run: RunState,
-		channel: TurnChannel,
 	) {
 		this.sim = sim;
 		this.session = session;
@@ -110,10 +103,6 @@ export class Engine {
 		this.recent = recent;
 		this.records = records;
 		this.run = run;
-		this.channel = channel;
-		channel.onAdjudication = (patch) => {
-			if (patch.steps) this.outcome.steps = patch.steps;
-		};
 		this.repairLoadedRecords();
 		this.updateRecent();
 		session.subscribe((event) => {
@@ -166,7 +155,7 @@ export class Engine {
 
 		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", acted: false, visibleBefore: new Set(), settled: "", current: "", proposals: [], warnings: [], usage: [] };
+		const run: RunState = { phase: "mapping", visibleBefore: new Set(), settled: "", current: "", steps: [], proposals: [], warnings: [], usage: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
@@ -191,8 +180,7 @@ export class Engine {
 		});
 		await loader.reload();
 
-		const channel: TurnChannel = { onAdjudication: null };
-		const customTools = [buildActTool(def, sim, run, channel)];
+		const customTools = [buildActTool(def, sim, run)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
@@ -206,7 +194,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(sim, session, sessionManager, recent, records, run, channel);
+		return new Engine(sim, session, sessionManager, recent, records, run);
 	}
 
 	get sessionFile(): string | undefined {
@@ -216,7 +204,6 @@ export class Engine {
 	private beginRun(phase: "mapping" | "narration", intent?: string): void {
 		const r = this.run;
 		r.phase = phase;
-		r.acted = false;
 		r.visibleBefore = phase === "mapping" ? this.sim.visible() : new Set();
 		r.intent = intent;
 		r.settled = "";
@@ -224,25 +211,25 @@ export class Engine {
 		r.proposals = [];
 		r.warnings = [];
 		r.usage = [];
+		r.steps = [];
 	}
 
 	async act(action: { intent: string }): Promise<ActOutcome> {
-		this.outcome = { steps: [] };
 		this.beginRun("mapping", action.intent);
 		const state = this.sim.digest();
 		await this.session.prompt(buildTurnPrompt(state, action.intent));
 
 		let narration: string;
-		if (!this.run.acted) {
+		if (this.run.phase === "mapping") {
 			// 未调 act 的文本未经裁决，回落确定性摘要
 			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
 			narration = this.fallbackSummary([]);
 		} else {
-			narration = this.settleNarration(this.outcome.steps);
+			narration = this.settleNarration(this.run.steps);
 		}
-		this.recordTurn(action.intent, this.outcome.steps);
+		this.recordTurn(action.intent, this.run.steps);
 		return {
-			steps: this.outcome.steps,
+			steps: this.run.steps,
 			narration,
 			proposals: this.run.proposals,
 			warnings: this.run.warnings,
@@ -296,7 +283,6 @@ export class Engine {
 	}
 
 	dispose(): void {
-		this.channel.onAdjudication = null;
 		this.session.dispose();
 	}
 }
@@ -402,7 +388,7 @@ function hostParametersSchema(def: GameDef): JsonSchema {
 	};
 }
 
-function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: TurnChannel) {
+function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
 	const advertised = new Set(publicVerbs.map(([name]) => name));
 	return defineTool({
@@ -433,7 +419,6 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 				return { content: [{ type: "text", text: `${CONTRACT.form}\n${e.message}` }], details: {} };
 			}
 			run.phase = "narration";
-			run.acted = true;
 			run.proposals = [...proposed];
 			const steps: Step[] = [];
 			let crashed: string | null = null;
@@ -444,7 +429,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, channel: Tur
 				crashed = e instanceof Error ? e.message : String(e);
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}
-			if (steps.length) channel.onAdjudication?.({ steps });
+			run.steps = steps;
 			// 投影失灵时不重入 visible()：新见段缺席
 			const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
 			const text = formatTurnEvents(sim, steps, proposed.length === 0, run.intent, revealed).join("\n");
