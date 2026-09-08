@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
@@ -13,9 +13,6 @@ interface RunMeta {
 	createdAt: string;
 	turn: number;
 	sessionFile?: string;
-	provider?: string;
-	model?: string;
-	thinkingLevel?: string;
 }
 
 const RUNS_ROOT = "runs";
@@ -53,20 +50,10 @@ function appendTranscript(dir: string, entry: unknown): void {
 	appendFileSync(transcriptPath(dir), JSON.stringify(entry) + "\n", "utf8");
 }
 
-function locateRunDir(runId: string, game?: string): string | null {
-	if (game) {
-		const dir = runDir(game, runId);
-		return existsSync(metaPath(dir)) ? dir : null;
-	}
-	if (!existsSync(RUNS_ROOT)) return null;
-	const matches: string[] = [];
-	for (const g of readdirSync(RUNS_ROOT)) {
-		const dir = join(RUNS_ROOT, g, runId);
-		if (existsSync(metaPath(dir))) matches.push(dir);
-	}
-	if (matches.length === 1) return matches[0] ?? null;
-	if (matches.length > 1) throw new Error(`run "${runId}" 在多个游戏下存在，请用 --game 指定`);
-	return null;
+function requireRunDir(gameId: string, runId: string): string {
+	const dir = runDir(gameId, runId);
+	if (!existsSync(metaPath(dir))) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
+	return dir;
 }
 
 /** 引擎配置按游戏 id 命名空间读取环境变量，多游戏并存互不覆盖。 */
@@ -118,9 +105,8 @@ interface RunCtx {
 	engine: Engine;
 }
 
-async function withEngine(runId: string, gameId: string | undefined, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
-	const dir = locateRunDir(runId, gameId);
-	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
+async function withEngine(gameId: string, runId: string, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
+	const dir = requireRunDir(gameId, runId);
 	const meta = loadMeta(dir);
 	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
 		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
@@ -157,7 +143,6 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 			createdAt: new Date().toISOString(),
 			turn: 0,
 			...(engine.sessionFile !== undefined && { sessionFile: engine.sessionFile }),
-			...engineOptsFromEnv(gameId),
 		};
 		saveMeta(dir, meta);
 		saveState(dir, sim);
@@ -172,8 +157,8 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	}
 }
 
-async function cmdAct(runId: string, intent: string, selection: string | undefined, gameId: string | undefined): Promise<void> {
-	await withEngine(runId, gameId, async (ctx) => {
+async function cmdAct(gameId: string, runId: string, intent: string, selection: string | undefined): Promise<void> {
+	await withEngine(gameId, runId, async (ctx) => {
 		const { dir, meta, sim, engine } = ctx;
 		const utterance = selection === undefined ? intent : `${intent}（选中：「${selection}」）`;
 		const outcome = await engine.act({ intent: utterance });
@@ -197,7 +182,7 @@ async function cmdAct(runId: string, intent: string, selection: string | undefin
 }
 
 /** 顺序执行意图文件（一行一意图；#注释跳过）；同一引擎会话内连跑，A/B 意图集用。 */
-async function cmdBatch(runId: string, file: string, gameId: string | undefined): Promise<void> {
+async function cmdBatch(gameId: string, runId: string, file: string): Promise<void> {
 	const lines = readFileSync(file, "utf8").split(/\r?\n/)
 		.map((l) => l.trim())
 		.filter((l) => l !== "" && !l.startsWith("#"));
@@ -218,8 +203,8 @@ async function cmdBatch(runId: string, file: string, gameId: string | undefined)
 	});
 }
 
-async function cmdRender(runId: string, instruction: string, gameId: string | undefined): Promise<void> {
-	await withEngine(runId, gameId, async ({ dir, engine }) => {
+async function cmdRender(gameId: string, runId: string, instruction: string): Promise<void> {
+	await withEngine(gameId, runId, async ({ dir, engine }) => {
 		const { narration: scene, warnings, usage } = await engine.narrate(instruction);
 		appendTranscript(dir, { phase: "render", instruction, scene, warnings, usage });
 		console.log(`\n【render】${instruction}`);
@@ -230,9 +215,8 @@ async function cmdRender(runId: string, instruction: string, gameId: string | un
 	});
 }
 
-async function cmdState(runId: string, gameId: string | undefined): Promise<void> {
-	const dir = locateRunDir(runId, gameId);
-	if (!dir) throw new Error(`run "${runId}" 不存在，请先 start`);
+function cmdState(gameId: string, runId: string): void {
+	const dir = requireRunDir(gameId, runId);
 	const meta = loadMeta(dir);
 	const def = getGame(meta.game);
 	const sim = new Simulation(def, loadState(dir));
@@ -240,89 +224,9 @@ async function cmdState(runId: string, gameId: string | undefined): Promise<void
 	console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
 }
 
-async function cmdReset(runId: string, game?: string): Promise<void> {
-	const dir = locateRunDir(runId, game);
-	if (!dir) {
-		process.stdout.write(`run "${runId}" 不存在，无需重置\n`);
-		return;
-	}
-	rmSync(dir, { recursive: true, force: true });
+function cmdReset(gameId: string, runId: string): void {
+	rmSync(requireRunDir(gameId, runId), { recursive: true, force: true });
 	process.stdout.write(`已重置 run "${runId}"\n`);
-}
-
-interface ReportRow {
-	dir: string;
-	provider?: string;
-	model?: string;
-	acts: number;
-	tin: number;
-	tout: number;
-	cread: number;
-	firstIn: number | null;
-	lastIn: number | null;
-}
-
-function collectReport(gameId: string | undefined): ReportRow[] {
-	const rows: ReportRow[] = [];
-	if (!existsSync(RUNS_ROOT)) return rows;
-	for (const g of readdirSync(RUNS_ROOT).sort()) {
-		if (gameId && g !== gameId) continue;
-		const gdir = join(RUNS_ROOT, g);
-		for (const id of readdirSync(gdir).sort()) {
-			const dir = join(gdir, id);
-			const tp = transcriptPath(dir);
-			if (!existsSync(tp)) continue;
-			const row: ReportRow = { dir: `${g}/${id}`, acts: 0, tin: 0, tout: 0, cread: 0, firstIn: null, lastIn: null };
-			try {
-				const meta = readJson<Partial<RunMeta>>(metaPath(dir));
-				if (meta.provider !== undefined) row.provider = meta.provider;
-				if (meta.model !== undefined) row.model = meta.model;
-			} catch { }
-			for (const l of readFileSync(tp, "utf8").split(/\r?\n/)) {
-				if (!l.trim()) continue;
-				let e: { phase?: string; usage?: TokenUsage[] };
-				try {
-					e = JSON.parse(l);
-				} catch {
-					continue;
-				}
-				if (e.phase === "act") row.acts++;
-				for (const u of Array.isArray(e.usage) ? e.usage : []) {
-					row.tin += u.input;
-					row.tout += u.output;
-					row.cread += u.cacheRead;
-					row.lastIn = u.input;
-					row.firstIn ??= u.input;
-				}
-			}
-			rows.push(row);
-		}
-	}
-	return rows;
-}
-
-function printReport(rows: ReportRow[], gameId: string | undefined): void {
-	const scope = gameId ?? "全部游戏";
-	if (!rows.length) {
-		console.log(`runs/ 下没有可汇总的 transcript（scope: ${scope}）。`);
-		return;
-	}
-	console.log(`=== loop report（${scope}）===`);
-	for (const r of rows) {
-		// provider 的 usage.input 不含缓存命中，缓存份额分母 = input + cacheRead
-		const cache = r.tin + r.cread ? `${Math.round((r.cread / (r.tin + r.cread)) * 100)}%` : "-";
-		const trend = r.firstIn != null ? `${k(r.firstIn)}→${k(r.lastIn ?? 0)}` : "-";
-		const model = [r.provider, r.model].filter(Boolean).join("/") || "-";
-		console.log(
-			`${r.dir.padEnd(26)} ${model.padEnd(24)} act=${r.acts}  入 ${trend}  出 ${k(r.tout)}  缓读 ${cache}`,
-		);
-	}
-	if (rows.length > 1) {
-		const sum = (f: (r: ReportRow) => number): number => rows.reduce((a, r) => a + f(r), 0);
-		console.log(
-			`${"TOTAL".padEnd(26)} ${"-".padEnd(24)} act=${sum((r) => r.acts)}  出 ${k(sum((r) => r.tout))}`,
-		);
-	}
 }
 
 /** 解析位置参数为完整意图文本（支持不带引号的多词意图）。 */
@@ -337,56 +241,50 @@ async function main() {
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
   loop start --run <id> --game <id>
-  loop act <意图文本> --run <id> [--select <选中文本>] [--game <id>]
-  loop batch <intents.txt> --run <id> [--game <id>]
-  loop render --run <id> [--instruction <指令>] [--game <id>]
-  loop state --run <id> [--game <id>]
-  loop report [--game <id>]
-  loop reset --run <id> [--game <id>]
+  loop act <意图文本> --run <id> --game <id> [--select <选中文本>]
+  loop batch <intents.txt> --run <id> --game <id>
+  loop render --run <id> --game <id> [--instruction <指令>]
+  loop state --run <id> --game <id>
+  loop reset --run <id> --game <id>
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过。
 --select 由本工具并合进意图（transcript 记 raw/selection 分解）——引擎的意志输入只有 intent 一段不透明文本。
 render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合），引擎无第二条提案通道。
-report 汇总 runs/ 各 run 的回合数与 token 用量（入列首→末展示裁剪后的输入趋势；缓读% 依赖 provider 的 usage 口径）。
---game 在 act/batch/render/state 上为可选（用于跨游戏同名 run 消歧）；start 必须显式 --game。
+--game 恒必填：run 按游戏分目录，无跨游戏消歧。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
 `);
 		return;
 	}
 
-	const gameId = flagStr(a, "game");
+	const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
 	const positionals = a.positionals;
-	// report 不绑定具体 run；其余命令都需要 --run
-	const runId = cmd === "report" ? "" : requireFlag(a, "run", "用 --run <id> 指定回合记录");
+	const runId = requireFlag(a, "run", "用 --run <id> 指定回合记录");
 
 	switch (cmd) {
 		case "start":
-			await cmdStart(requireFlag(a, "game", "用 --game <id> 指定游戏"), runId);
+			await cmdStart(gameId, runId);
 			return;
 		case "act": {
 			const intent = flagStr(a, "intent") ?? joinIntent(positionals);
 			if (!intent) throw new Error("act 需要意图文本（位置参数或 --intent）");
-			await cmdAct(runId, intent, flagStr(a, "select"), gameId);
+			await cmdAct(gameId, runId, intent, flagStr(a, "select"));
 			return;
 		}
 		case "batch": {
 			const file = positionals[0];
 			if (!file) throw new Error("batch 需要意图文件路径（位置参数）");
-			await cmdBatch(runId, file, gameId);
+			await cmdBatch(gameId, runId, file);
 			return;
 		}
 		case "render":
-			await cmdRender(runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。", gameId);
+			await cmdRender(gameId, runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。");
 			return;
 		case "state":
-			await cmdState(runId, gameId);
-			return;
-		case "report":
-			printReport(collectReport(gameId), gameId);
+			cmdState(gameId, runId);
 			return;
 		case "reset":
-			await cmdReset(runId, gameId);
+			cmdReset(gameId, runId);
 			return;
 		default:
 			throw new Error(`未知命令: ${cmd}`);

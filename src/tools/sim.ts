@@ -1,10 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProtocolViolation, Simulation, fmtChange, refParamsOf, renderDenial, shownDepartedNames, spineLines } from "../core/sim.ts";
+import { ProtocolViolation, Simulation, refParamsOf, renderDenial, spineLines } from "../core/sim.ts";
 import type { Action, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
-import { flagBool, flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
+import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 // —— 场景运行器（契约锁） ——
 
@@ -52,7 +52,6 @@ interface StepReport {
 	index: number;
 	name: string;
 	pass: boolean;
-	expected: string;
 	actual: string;
 	detail: string;
 }
@@ -168,7 +167,6 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
-			expected: JSON.stringify(step.expect),
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
 				: a?.kind === "action"
@@ -197,18 +195,10 @@ export function printReports(reports: ScenarioReport[]): void {
 		console.log(`\n【${sc.name}】`);
 		for (const r of sc.steps) {
 			console.log(`  ${r.pass ? "[PASS]" : "[FAIL]"} ${r.index}. ${r.name}`);
-			console.log(`    expected: ${r.expected}`);
 			console.log(`    actual:   ${r.actual}`);
 			if (!r.pass) console.log(`    problems: ${r.detail}`);
 		}
 	}
-}
-
-async function cmdScenario(scenarioPath: string): Promise<void> {
-	const { reports, passed, total } = loadScenarioFile(scenarioPath);
-	printReports(reports);
-	console.log(`\nRESULT: ${passed}/${total} PASS`);
-	process.exit(passed === total ? 0 : 1);
 }
 
 /** 自动发现 scenarios/*.json，跳过未注册游戏（归档场景保留作参考）。 */
@@ -247,39 +237,7 @@ async function cmdVerify(): Promise<void> {
 	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
-// —— 手动研究（run） ——
-
-function parseScalar(s: string): Scalar {
-	if (s === "true") return true;
-	if (s === "false") return false;
-	if (s.trim() !== "" && !Number.isNaN(Number(s))) return Number(s);
-	return s;
-}
-
-function resolveEntity(v: string, sim: Simulation): string {
-	const hit = sim.world.entities.find((e) => e.name === v || e.id === v);
-	return hit ? hit.id : v;
-}
-
-function parseActionToken(token: string, sim: Simulation): Action {
-	const [verbName, ...rest] = token.split(/\s+/);
-	const verb = sim.def.verbs[verbName!];
-	if (!verb) {
-		throw new Error(`未知动词：${verbName}（可用：${Object.keys(sim.def.verbs).join(" / ")}；advance n 研究摇钟；指称参数可用名称或 id）`);
-	}
-	const paramOrder = Object.keys(verb.schema.properties);
-	if (rest.length > paramOrder.length) {
-		throw new Error(`动词「${verbName}」最多接受 ${paramOrder.length} 个参数（${paramOrder.join(" ")}），得到 ${rest.length} 个`);
-	}
-	const refs = new Set(refParamsOf(verb));
-	const params: Record<string, Scalar> = {};
-	rest.forEach((raw, i) => {
-		const p = paramOrder[i];
-		if (p === undefined) return;
-		params[p] = refs.has(p) ? resolveEntity(raw, sim) : parseScalar(raw);
-	});
-	return { verb: verbName!, params };
-}
+// —— 裁决地图（probe） ——
 
 type DenialBearer = { ok: boolean; deniedBy?: "rule" | "invariant"; denial?: Denial };
 
@@ -288,46 +246,6 @@ function bugOf(s: DenialBearer): string | undefined {
 	if (s.ok || s.deniedBy !== "invariant" || !s.denial || s.denial.reason != null) return undefined;
 	return s.denial.debug ?? s.denial.law;
 }
-
-function tickText(def: GameDef, s: TickStep): string {
-	return s.ok ? (s.facts?.join(" ") ?? "") : renderDenial(def, s.denial);
-}
-
-async function cmdRun(tokens: string[], gameId: string, opts: { world: boolean }): Promise<void> {
-	const def = getGame(gameId);
-	const sim = new Simulation(withDevWait(def));
-	const steps: Step[] = [];
-	for (const token of tokens) {
-		const parts = token.split(/\s+/);
-		const action = parts[0] === "advance" ? devWait(Number(parts[1] ?? 1)) : parseActionToken(token, sim);
-		const res = sim.apply(action);
-		const results: Step[] = [res.step, ...res.elapsed];
-		steps.push(...results);
-		console.log(`\n>>> ${token}`);
-		if (!results.length) {
-			console.log("（时间流逝，什么也没发生）");
-			continue;
-		}
-		const departed = shownDepartedNames(results);
-		for (const r of results) {
-			const ticks = r.kind === "action" && r.ticks > 0 ? `（裁决授予 ${r.ticks} 刻）` : "";
-			const bug = bugOf(r);
-			console.log(`  ${r.ok ? "✓" : "✗"} ${r.kind === "action" ? r.reason : tickText(sim.def, r)}${ticks}${bug ? ` ⚠ ${bug}` : ""}`);
-			for (const ch of r.changes) console.log(`     ${fmtChange(sim, ch, departed)}`);
-		}
-	}
-	if (opts.world) {
-		console.log("\n=== 状态视图 ===");
-		console.log(sim.digest());
-	}
-	console.log("\n=== 变更日志 ===");
-	for (const s of steps) {
-		const head = s.kind === "action" ? JSON.stringify(s.action) : `tick@${s.at}`;
-		console.log(`  ${head} → ${s.kind === "action" ? s.reason : tickText(sim.def, s)}`);
-	}
-}
-
-// —— 裁决地图（probe） ——
 
 interface MapRow {
 	verb: string;
@@ -486,29 +404,13 @@ async function main(): Promise<void> {
 	const a: ParsedArgs = parseArgs(argv);
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
-  sim scenario <scenario.json>    运行单个法则引擎场景验证（场景文件内声明 game）
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
-  sim run <action> [<action>...] --game <id> [--world]    按顺序执行动作并展示结果
-    action: <动词> <参数>... | advance <n>    动词与参数顺序见游戏的动词表（指称参数可用名称或 id）
-    动作按裁决授予的刻数自动流逝；advance n 为研究摇钟（dev.wait 合成动词，过同一裁决边界）
   sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可见实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）+ 逐输入拒绝行；核心级不变拒绝单列为 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}
-	const positionals = a.positionals;
-	if (cmd === "scenario") {
-		const path = positionals[0];
-		if (!path) throw new Error("scenario 需要场景文件路径");
-		await cmdScenario(path);
-		return;
-	}
 	if (cmd === "verify") {
 		await cmdVerify();
-		return;
-	}
-	if (cmd === "run") {
-		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
-		await cmdRun(positionals, gameId, { world: flagBool(a, "world") });
 		return;
 	}
 	if (cmd === "probe") {
