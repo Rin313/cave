@@ -286,7 +286,7 @@ export const seals: GameDef = {
 		{
 			id: "post.deliver",
 			run: (q) => {
-				if (q.time % 4 !== 0) return null;
+				if (q.world.time % 4 !== 0) return null;
 				const deltas: Delta[] = [];
 				const facts: Fact[] = [];
 				// 猜疑按收信人聚合为一次写：同址叠加增量按序覆盖
@@ -315,7 +315,7 @@ export const seals: GameDef = {
 		{
 			id: "post.arrive",
 			run: (q) => {
-				if (q.time % 4 !== 1 || entity(q.world, "letter_night")) return null;
+				if (q.world.time % 4 !== 1 || entity(q.world, "letter_night")) return null;
 				// 首轮交割后的下一刻；判据取账本状态（信在收信人处）而非绝对钟点（存档恢复、变体开局同义）
 				const delivered = q.world.entities.some((e) => e.props.kind === "letter" && e.props.recipient != null && e.props.in === e.props.recipient);
 				if (!delivered) return null;
@@ -330,7 +330,7 @@ export const seals: GameDef = {
 		{
 			id: "salon.gossip",
 			run: (q) => {
-				if (q.time % 4 !== 2) return null;
+				if (q.world.time % 4 !== 2) return null;
 				let best: { from: string; to: string; v: number } | null = null;
 				for (const r of q.world.relations) {
 					if (r.type !== "信任" || r.from === q.player || r.to === q.player) continue;
@@ -346,13 +346,13 @@ export const seals: GameDef = {
 			run: (q) => {
 				const g = entity(q.world, "guest");
 				if (!g) return null;
-				if (q.time % 8 === 6 && g.props.in === "study") {
+				if (q.world.time % 8 === 6 && g.props.in === "study") {
 					return {
 						deltas: [D.set("guest", "in", "parlor"), D.relSet("guest", "steward", "信任", Number(relVal(q.world, "guest", "steward", "信任") ?? 0) + 1)],
 						facts: ["灰衣人踱进了正厅，与管家寒暄。"],
 					};
 				}
-				if (q.time % 8 === 2 && g.props.in === "parlor") {
+				if (q.world.time % 8 === 2 && g.props.in === "parlor") {
 					return { deltas: [D.set("guest", "in", "study")], facts: [`${nameOf(q.world, "guest")}携着酒盏，踱回了书房。`] };
 				}
 				return null;

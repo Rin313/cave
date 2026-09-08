@@ -263,17 +263,21 @@ export class Engine {
 		if (this.archive.dead !== null) throw new Error(`引擎已毒化（${this.archive.dead}）：须重启进程由日志对账`);
 	}
 
+	/** 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载。 */
+	private limitRecords(): void {
+		const excess = this.archive.records.length - this.sim.def.recentWindow;
+		if (excess > 0) this.archive.records.splice(0, excess);
+	}
+
 	/** 装载修复：窗口裁剪后逐条试投影（完好判据是消费本身），损坏使近况截断至其后完好子后缀；后续写入的记录已经过消费，无需复检。 */
 	private repairLoadedRecords(): void {
-		const limit = this.sim.def.recentWindow;
-		if (this.archive.records.length > limit) this.archive.records.splice(0, this.archive.records.length - limit);
+		this.limitRecords();
 		repairRecords(this.sim, this.archive.records, this.loadWarnings);
 	}
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
-		const limit = this.sim.def.recentWindow;
-		if (this.archive.records.length > limit) this.archive.records.splice(0, this.archive.records.length - limit);
+		this.limitRecords();
 		this.recent.length = 0;
 		this.recent.push(...projectWindow(this.sim, this.archive.records));
 	}

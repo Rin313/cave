@@ -15,7 +15,7 @@ export interface RecentEntry {
 export const TURN_RECORD_TYPE = "cave.turn";
 export const CHECKPOINT_RECORD_TYPE = "cave.checkpoint";
 
-export interface CheckpointEntry {
+interface CheckpointEntry {
 	seq: number;
 	world: World;
 }
@@ -44,7 +44,7 @@ export interface LogEntries {
 }
 
 /** 信封粗筛：损坏条目在此离场（无 seq 的旧格式同弃、显形）；最终完好判据是装载对账与试投影。 */
-export function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries {
+function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries {
 	const out: LogEntries = { records: [] };
 	let broken = 0;
 	for (const e of entries) {

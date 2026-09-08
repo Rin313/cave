@@ -65,7 +65,7 @@ genesis 是实际起点世界的冻结快照（存档恢复、变体开局同义
 verb = (label, description, schema, cost ∈ ℕ, internal?, rules)
 a    = (verb, params)      params : P ⇀ S      一次尝试 = 一次裁决 = 一个时价 = 一个拒绝单位
 ref(a) ⊆ P                指称参数键集（ref 声明的字符串参数）
-Q   = (world, player, t, params, roll)        world 为深冻结快照，params 冻结——attempt 入界即不可变，越权写即抛
+Q   = (world, player, params, roll)           world 为深冻结快照，params 冻结——attempt 入界即不可变，越权写即抛
 J   : Q → Grant ⊎ Deny ⊎ ⊥
 Grant ::= (Δ*, reason?, facts?, ticks ∈ ℕ?)
 Deny  ::= (law, reason?, debug?)

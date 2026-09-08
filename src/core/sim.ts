@@ -94,7 +94,6 @@ export class ProtocolViolation extends Error {
 export interface Q {
 	readonly world: World;
 	readonly player: string;
-	readonly time: number;
 	readonly params: Record<string, Scalar>;
 	/** 确定性骰子；key 以出处路径限定，重名不共享命运。 */
 	roll(key: string, sides: number): number;
@@ -353,7 +352,7 @@ export function integrityInvariant(): Invariant {
 	};
 }
 
-export function internalPropsOf(def: GameDef): Set<string> {
+function internalPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
 	for (const [k, p] of Object.entries(def.props ?? {})) if (p.internal) s.add(k);
 	return s;
@@ -364,7 +363,7 @@ export function viewCard(def: GameDef, e: Entity, perceiveProp?: (e: Entity, pro
 	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k) && (!perceiveProp || perceiveProp(e, k)))) };
 }
 
-export function propLabelOf(def: GameDef, prop: string): string | undefined {
+function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
@@ -412,10 +411,10 @@ export interface ChronicleEntry {
 	steps: Step[];
 }
 
-/** 一刻内某个系统的产出；失败刻只来自必要性通道。 */
+/** 一刻内某个系统的产出；失败刻结构性属于必要性通道（invariant 否决）。 */
 export type TickStep =
 	| { kind: "tick"; at: number; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
-	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; deniedBy: "invariant"; denial: Denial };
+	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; denial: Denial };
 
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
@@ -455,7 +454,7 @@ function refProp(sim: Simulation, prop: string): boolean {
 	return sim.def.props?.[prop]?.type === "id";
 }
 
-export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>, sides?: { prev: boolean; next: boolean }): string {
+function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>, sides?: { prev: boolean; next: boolean }): string {
 	const val = (v: PropValue, ok: boolean, ref: boolean): string => (ok ? renderValue(sim, v, ref, departed).text : "?");
 	if (c.kind === "spawn") return `+ ${c.entity.name}`;
 	if (c.kind === "despawn") return `- ${c.name}`;
@@ -471,7 +470,7 @@ export function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<str
 	return `${name}.${label}: ${val(c.prev, sides?.prev ?? true, refProp(sim, c.prop))} → ${val(c.next, sides?.next ?? true, refProp(sim, c.prop))}`;
 }
 
-export function narratableChanges(def: GameDef, changes: Change[]): Change[] {
+function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	const internal = internalPropsOf(def);
 	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
 }
@@ -638,6 +637,28 @@ export class Simulation {
 		return out;
 	}
 
+	/** 跨度开口：前侧截面于裁决/提交前采集（键截面仅于对应钩子声明时存在）。 */
+	private openField(world: World, vis: Set<string>): { edges?: string[] | undefined; props?: string[] | undefined } {
+		return { edges: this.edgeField(world, vis), props: this.propField(world) };
+	}
+
+	/** 跨度闭合：后侧仅在世界实际变更时重算，无变更则后侧即前侧（同一截面不再枚举）。 */
+	private closeField(before: Set<string>, open: { edges?: string[] | undefined; props?: string[] | undefined }, changed: boolean): FieldSpan {
+		let after = before;
+		let edges = open.edges;
+		let props = open.props;
+		if (changed) {
+			const w1 = this.readState();
+			after = this.visibleIn(w1);
+			edges = this.edgeField(w1, after);
+			props = this.propField(w1);
+		}
+		const field: FieldSpan = { before: [...before], after: [...after] };
+		if (open.edges && edges) field.edges = { before: open.edges, after: edges };
+		if (open.props && props) field.props = { before: open.props, after: props };
+		return field;
+	}
+
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
 	private readState(): World {
 		return deepFreeze(this.snapshot());
@@ -694,7 +715,6 @@ export class Simulation {
 		return {
 			world,
 			player: this.player,
-			time: world.time,
 			params,
 			roll: (key, sides) => rollDice(world, tupleKey([...path, key]), sides),
 		};
@@ -762,8 +782,7 @@ export class Simulation {
 	private applyInner(action: Action, s0: World): Resolution {
 		const at = s0.time;
 		const before = this.visibleIn(s0);
-		const edgesBefore = this.edgeField(s0, before);
-		const propsBefore = this.propField(s0);
+		const open = this.openField(s0, before);
 		const r = this.adjudicateRaw(action, before, s0);
 		let step: Omit<ActionStep, "field">;
 		if (r.ok) {
@@ -776,19 +795,7 @@ export class Simulation {
 		} else {
 			step = { kind: "action", at, ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
 		}
-		// 可见快照在落钟前闭合；无提交则边界未跨越，after 即 before
-		let afterVis = before;
-		let afterEdges = edgesBefore;
-		let afterProps = propsBefore;
-		if (step.ok) {
-			const w1 = this.readState();
-			afterVis = this.visibleIn(w1);
-			afterEdges = this.edgeField(w1, afterVis);
-			afterProps = this.propField(w1);
-		}
-		const field: FieldSpan = { before: [...before], after: [...afterVis] };
-		if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
-		if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
+		const field = this.closeField(before, open, step.ok && step.changes.length > 0);
 		const elapsed = step.ticks > 0 ? this.tick(step.ticks) : [];
 		return { step: { ...step, field }, elapsed };
 	}
@@ -883,32 +890,20 @@ export class Simulation {
 			const src = `system:${sys.id}`;
 			const s0 = this.readState();
 			const before = this.visibleIn(s0);
-			const edgesBefore = this.edgeField(s0, before);
-			const propsBefore = this.propField(s0);
+			const open = this.openField(s0, before);
 			let res: ReturnType<SystemRule["run"]> = null;
 			try {
 				res = sys.run(this.query(s0, {}, ["system", sys.id]));
 			} catch (e) {
-				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], deniedBy: "invariant", denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, field: { before: [...before], after: [...before] } });
+				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, field: this.closeField(before, open, false) });
 				continue;
 			}
 			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
 			const cc = this.commitChecked(s0, res.deltas, src);
-			let afterVis = before;
-			let afterEdges = edgesBefore;
-			let afterProps = propsBefore;
-			if (cc.ok) {
-				const w1 = this.readState();
-				afterVis = this.visibleIn(w1);
-				afterEdges = this.edgeField(w1, afterVis);
-				afterProps = this.propField(w1);
-			}
-			const field: FieldSpan = { before: [...before], after: [...afterVis] };
-			if (edgesBefore && afterEdges) field.edges = { before: edgesBefore, after: afterEdges };
-			if (propsBefore && afterProps) field.props = { before: propsBefore, after: afterProps };
+			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
 			const at = this.world.time;
 			if (!cc.ok) {
-				out.push({ kind: "tick", at, ok: false, changes: [], deniedBy: "invariant", denial: cc.denial, field });
+				out.push({ kind: "tick", at, ok: false, changes: [], denial: cc.denial, field });
 				continue;
 			}
 			out.push({

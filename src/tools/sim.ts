@@ -243,6 +243,11 @@ function bugOf(s: DenialBearer): string | undefined {
 	return s.denial.debug ?? s.denial.law;
 }
 
+/** 刻步失败结构性属于必要性通道（TickStep 无 deniedBy），只查世界腔理由。 */
+function tickBugOf(t: Extract<TickStep, { ok: false }>): string | undefined {
+	return t.denial.reason != null ? undefined : t.denial.debug ?? t.denial.law;
+}
+
 interface MapRow {
 	verb: string;
 	op: string;
@@ -342,7 +347,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			else rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason, ...(bug !== undefined && { bug }) });
 			for (const t of elapsed) {
 				if (t.ok) continue;
-				const b = bugOf(t);
+				const b = tickBugOf(t);
 				if (b) rows.push({ verb: action.verb, op, law: t.denial.law, reason: renderDenial(def, t.denial), bug: b });
 			}
 		} catch (e) {

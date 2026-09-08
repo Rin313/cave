@@ -273,7 +273,7 @@ const mechSystem: SystemRule = {
 	id: "mech.tick",
 	run: (q) => {
 		const me = entity(q.world, q.player)!;
-		return q.time % 2 === 1
+		return q.world.time % 2 === 1
 			? { deltas: [D.set(q.player, "mechturn", Number(me.props.mechturn ?? 0) + 1)] }
 			: { deltas: [D.set(q.player, "beats", num(me.props.beats) + 1)] };
 	},
