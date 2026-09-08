@@ -80,6 +80,7 @@ export const seals: GameDef = {
 			label: "拿取",
 			description: "把书案上的一封信拿到手里（持者是你的躯体）。",
 			params: { entity: ref("信件 id") },
+			cost: 0,
 			rules: [{
 				id: "desk",
 				judge: (q, p) => {
@@ -94,6 +95,7 @@ export const seals: GameDef = {
 			label: "拆读",
 			description: "细读手里的一封信：拆封会留下断口，信文自此为你所知。",
 			params: { entity: ref("信件 id") },
+			cost: 0,
 			rules: [{
 				id: "held",
 				judge: (q, p) => {
@@ -112,6 +114,7 @@ export const seals: GameDef = {
 			label: "誊写",
 			description: "借着拆封的工夫重写手里这封信的信文（text 为新信文全文）——断口无法掩饰。",
 			params: { entity: ref("信件 id"), text: free("新信文全文") },
+			cost: 0,
 			rules: [{
 				id: "held",
 				judge: (q, p) => {
@@ -131,6 +134,7 @@ export const seals: GameDef = {
 			label: "放回",
 			description: "把手里的一封信放回书案（信件将照常送抵收信人）。",
 			params: { entity: ref("信件 id") },
+			cost: 0,
 			rules: [{
 				id: "held",
 				judge: (q, p) => {
@@ -148,6 +152,7 @@ export const seals: GameDef = {
 				target: ref("交谈对象 id"),
 				words: free("要说的话"),
 			},
+			cost: 0,
 			rules: [{
 				id: "person",
 				judge: (q, p) => {
@@ -166,6 +171,7 @@ export const seals: GameDef = {
 			label: "揭面",
 			description: "揭下一位戴面具者的面具。",
 			params: { target: ref("对方 id") },
+			cost: 0,
 			rules: [{
 				id: "masked",
 				judge: (q, p) => {
@@ -199,6 +205,7 @@ export const seals: GameDef = {
 			label: "附身",
 			description: "把神魂迁入一件能容魂的器皿（占据＝居所的迁移，一条 delta 过门）。",
 			params: { entity: ref("器皿 id") },
+			cost: 0,
 			rules: [{
 				id: "vessel",
 				judge: (q, p) => {
@@ -213,6 +220,7 @@ export const seals: GameDef = {
 			label: "掷火",
 			description: "把一样东西掷进火盆（被信或魂系着的东西，得先解开）。",
 			params: { entity: ref("目标 id") },
+			cost: 0,
 			rules: [{
 				id: "tied",
 				judge: (q, p) => {
@@ -226,6 +234,7 @@ export const seals: GameDef = {
 			label: "占问",
 			description: "把一枚铜钱掷进火盆，看这一问的吉凶。",
 			params: {},
+			cost: 0,
 			rules: [{
 				id: "lot",
 				judge: (q) => grant([], `铜钱落进灰里：${q.roll("lot", 2) === 1 ? "吉" : "凶"}。`),
@@ -235,6 +244,7 @@ export const seals: GameDef = {
 			label: "等候",
 			description: "在廊下站着：说等多久（span 为刻数，1–12，缺省一刻）。",
 			params: { span: { type: "number", optional: true, description: "刻数（1–12），缺省一刻" } },
+			cost: 0,
 			rules: [{
 				id: "pass",
 				judge: (_q, p) => {

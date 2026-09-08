@@ -236,7 +236,7 @@ export class Engine {
 		if (!this.run.acted) {
 			// 未调 act 的文本未经裁决，回落确定性摘要
 			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
-			narration = this.sim.summarize([]);
+			narration = this.fallbackSummary([]);
 		} else {
 			narration = this.settleNarration(this.outcome.steps);
 		}
@@ -284,8 +284,14 @@ export class Engine {
 		const text = this.run.settled + this.run.current;
 		if (text.trim() === "") {
 			this.run.warnings.push("散文为空。");
-			return this.sim.summarize(steps);
+			return this.fallbackSummary(steps);
 		}
+		return text;
+	}
+
+	private fallbackSummary(steps: Step[]): string {
+		const text = this.sim.summarize(steps);
+		this.run.warnings.push(...this.sim.warnings.splice(0));
 		return text;
 	}
 

@@ -58,6 +58,7 @@ const touch = defineVerb({
 	label: "触及",
 	description: "干净动作：touched +1（冻结与回滚的对照步）。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "ok", judge: (q) => grant([D.set(q.player, "touched", num(entity(q.world, q.player)!.props.touched) + 1)], "你触到了世界。") }],
 });
 
@@ -65,6 +66,7 @@ const poke = defineVerb({
 	label: "戳",
 	description: "规则直改 hp 后授予（冻结读态上写入即抛，授予不存在）。",
 	params: {},
+	cost: 0,
 	rules: [{
 		id: "leak",
 		judge: (q) => {
@@ -79,6 +81,7 @@ const clockpoke = defineVerb({
 	label: "拨钟",
 	description: "规则直改 q.world.time（钟的唯一写者是落钟循环）。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: (q) => { q.world.time += 1; return grant([], "钟被拨了。"); } }],
 });
 
@@ -86,6 +89,7 @@ const trip = defineVerb({
 	label: "触封印",
 	description: "合法授予被守恒不变式否决（原子回滚后账本仍可提交）。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "grant", judge: (q) => grant([D.set(q.player, "vault", true)], "你碰了封印。") }],
 });
 
@@ -101,6 +105,7 @@ const sneakpoke = defineVerb({
 	label: "触潜标",
 	description: "授予后触发审查者直改账本（冻结读态上写入即抛）。",
 	params: {},
+	cost: 0,
 	rules: [{
 		id: "grant",
 		judge: (q) => {
@@ -114,6 +119,7 @@ const smuggle = defineVerb({
 	label: "夹带",
 	description: "铸出对象形状的 delta——提交翼拒为非账本值，整提交回滚。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: () => grant([D.set("player", "note", { a: 1 } as unknown as PropValue)], "你夹带了。") }],
 });
 
@@ -121,6 +127,7 @@ const tag = defineVerb({
 	label: "标记",
 	description: "字面与引用同值写入：字面保持字面，id 型属性解析为展示名。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "ok", judge: () => grant([D.set("player", "note", "thing"), D.set("player", "ref", "thing")], "你写下了标记。") }],
 });
 
@@ -128,6 +135,7 @@ const junkspawn = defineVerb({
 	label: "夹带生灭",
 	description: "spawn 带实体形状外的顶层键——形状封闭拒绝。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: () => grant([D.spawn({ id: "junk", name: "杂物", props: {}, extra: 1 } as unknown as Entity)], "你夹带了。") }],
 });
 
@@ -135,6 +143,7 @@ const nullspawn = defineVerb({
 	label: "空壳生灭",
 	description: "spawn 的属性含 null——账本值不含 null，提交翼拒绝。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: () => grant([D.spawn({ id: "hollow", name: "空壳", props: { hp: null } } as unknown as Entity)], "你召唤了空壳。") }],
 });
 
@@ -142,6 +151,7 @@ const clear = defineVerb({
 	label: "抹除",
 	description: "set null 即清（删键）——账本不存 null，缺席读为 null。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "ok", judge: () => grant([D.set("player", "note", null), D.set("player", "ref", null)], "你抹去了字迹。") }],
 });
 
@@ -149,6 +159,7 @@ const blank = defineVerb({
 	label: "置空引用",
 	description: "id 引用写空串——无哨兵惯例，integrity 拒绝。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: () => grant([D.set("player", "ref", "")], "你写下了一段空白。") }],
 });
 
@@ -156,6 +167,7 @@ const edgearr = defineVerb({
 	label: "数组边",
 	description: "边值与属性值同一账本形状——标量数组合法入账。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "ok", judge: () => grant([D.relSet("player", "thing", "标记", ["甲"])], "你系了一条带标记的边。") }],
 });
 
@@ -163,6 +175,7 @@ const mistype = defineVerb({
 	label: "误型",
 	description: "relSet 的关系类型为数字——type 是边身份的组成，执行翼拒绝。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: () => grant([D.relSet("player", "thing", 123 as unknown as string, "甲")], "你系了一条无名边。") }],
 });
 
@@ -170,6 +183,7 @@ const edgeobj = defineVerb({
 	label: "对象边",
 	description: "对象形状不是账本值——提交翼拒绝，整提交回滚。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "leak", judge: () => grant([D.relSet("player", "thing", "暗边", { a: 1 } as unknown as LedgerValue)], "你夹带了。") }],
 });
 
@@ -177,6 +191,7 @@ const bond = defineVerb({
 	label: "缔结",
 	description: "与那件东西结一条带值的关系边（弱引用的建立）。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "ok", judge: () => grant([D.relSet("player", "thing", "标记", "甲")], "你与那件东西结下纽带。") }],
 });
 
@@ -184,6 +199,7 @@ const sever = defineVerb({
 	label: "断绝",
 	description: "despawn 那件东西——级联删边逐条入账（despawn 记录在前，边消散紧随）。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "ok", judge: () => grant([D.despawn("thing")], "你斩断了那件东西。") }],
 });
 
@@ -191,6 +207,7 @@ const stack = defineVerb({
 	label: "叠写",
 	description: "同一值地址的叠加增量按序覆盖——两个从冻结读态派生的 +1 只落一次。",
 	params: {},
+	cost: 0,
 	rules: [{
 		id: "ok",
 		judge: (q) => {
@@ -216,6 +233,7 @@ const blindfold = defineVerb({
 	label: "蒙眼",
 	description: "授予 gaze=true——提交后感知快照崩溃，apply 原子回滚后重抛。",
 	params: {},
+	cost: 0,
 	rules: [{ id: "grant", judge: () => grant([D.set("player", "gaze", true)], "你蒙上了眼。") }],
 });
 
@@ -223,6 +241,7 @@ const beckon = defineVerb({
 	label: "召唤",
 	description: "对参照域内的实体召唤（干净授予）；域外 id 由可见性门拒绝。",
 	params: { target: ref("目标实体 id") },
+	cost: 0,
 	rules: [{ id: "ok", judge: () => grant([], "你朝那东西招了招手。") }],
 });
 
@@ -230,6 +249,7 @@ const rewrite = defineVerb({
 	label: "改判",
 	description: "法则改写裁决入参（q.params）——attempt 入界即冻结，越权写即抛。",
 	params: {},
+	cost: 0,
 	rules: [{
 		id: "tamper",
 		judge: (q) => {
@@ -279,6 +299,7 @@ function grudgeDef(): GameDef {
 				label: "记仇",
 				description: "法则保留拒绝对象并于下次裁决改写它——步入账即冻结，越权写即抛。",
 				params: {},
+				cost: 0,
 				rules: [{
 					id: "hold",
 					judge: () => {

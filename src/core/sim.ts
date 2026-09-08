@@ -119,10 +119,6 @@ export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: 
 	return { ok: true, deltas, ...(reason !== undefined && { reason }), ...(facts !== undefined && { facts }), ...(ticks !== undefined && { ticks }) };
 }
 
-function attemptCost(verb: VerbDef | undefined): number {
-	return verb?.cost ?? 0;
-}
-
 export function deny(law: string, o: { reason?: string } = {}): Verdict {
 	return { ok: false, denial: { law, ...o } };
 }
@@ -172,7 +168,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	label: string;
 	description: string;
 	params: P;
-	cost?: number;
+	cost: number;
 	internal?: boolean;
 	rules: { id: string; judge: (q: Q, p: ParamsOf<P>) => Verdict | null }[];
 }): VerbDef {
@@ -180,7 +176,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 		label: spec.label,
 		description: spec.description,
 		params: spec.params,
-		...(spec.cost !== undefined && { cost: spec.cost }),
+		cost: spec.cost,
 		...(spec.internal !== undefined && { internal: spec.internal }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q, q.params as ParamsOf<P>) })),
 	};
@@ -190,7 +186,7 @@ export interface VerbDef {
 	label: string;
 	description: string;
 	params: Record<string, ParamSpec>;
-	cost?: number;
+	cost: number;
 	/** 不进映射层，由代码直接 apply——同一裁决边界与审查。 */
 	internal?: boolean;
 	rules: Rule[];
@@ -550,6 +546,8 @@ type RawResult =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
+	/** 呈现回落的显形出口；消费方取走（splice 清空）后随回合诊断显形。 */
+	readonly warnings: string[] = [];
 	/** 实际起点读态的冻结副本，首次提交前惰性捕获。 */
 	private genesisCache?: World;
 
@@ -567,7 +565,7 @@ export class Simulation {
 			invariantIds.add(inv.id);
 		}
 		for (const [name, v] of Object.entries(def.verbs)) {
-			if (v.cost !== undefined && (!Number.isInteger(v.cost) || v.cost < 0)) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
+			if (!Number.isInteger(v.cost) || v.cost < 0) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
 			const ruleIds = new Set<string>();
 			for (const r of v.rules) {
 				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
@@ -640,7 +638,7 @@ export class Simulation {
 	private adjudicateRaw(action: Action, curVis: Set<string>, world: World): RawResult {
 		const msgs = this.def.messages;
 		const verb = this.staticForm(action);
-		const cost = attemptCost(verb);
+		const cost = verb.cost;
 		const invalid = refParamsOf(verb)
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && !curVis.has(id));
@@ -750,7 +748,7 @@ export class Simulation {
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.src);
 			if (!cc.ok) {
-				step = { kind: "action", at, ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: attemptCost(this.def.verbs[action.verb]) };
+				step = { kind: "action", at, ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: this.def.verbs[action.verb]!.cost };
 			} else {
 				step = { kind: "action", at, ok: true, reason: r.reason, changes: cc.changes, action, ...(r.facts !== undefined && { facts: r.facts }), ticks: r.ticks };
 			}
@@ -865,12 +863,14 @@ export class Simulation {
 		return JSON.stringify(view);
 	}
 
-	/** 声音钩子崩溃回落缺省：呈现缺陷不得丢弃账目。 */
+	/** 声音钩子崩溃回落缺省：呈现缺陷不得丢弃账目，也不得无痕。 */
 	summarize(steps: Step[]): string {
 		if (this.def.summarize) {
 			try {
 				return this.def.summarize({ world: this.readState(), player: this.player, steps: deepFreeze(steps) });
-			} catch { /* 回落缺省 */ }
+			} catch (e) {
+				this.warnings.push(`summarize 崩溃回落缺省：${e instanceof Error ? e.message : String(e)}`);
+			}
 		}
 		const lines = spineLines(this, steps);
 		return lines.length ? lines.join("\n") : this.def.messages.noResponse;
