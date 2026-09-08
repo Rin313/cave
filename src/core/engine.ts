@@ -23,8 +23,6 @@ export interface EngineOptions {
 
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
-const ACT_TOOL = "act";
-
 const CONTRACT = {
 	once: "act 每回合恰一个裁决窗口，提案进入裁决后本回合不再受理",
 	retry: "被形态校验拒绝的调用不占窗口，按反馈修正后重新提交",
@@ -189,7 +187,7 @@ export class Engine {
 			resourceLoader: loader,
 			settingsManager,
 			sessionManager,
-			tools: [ACT_TOOL],
+			tools: ["act"],
 			customTools,
 		};
 
@@ -392,7 +390,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
 	const advertised = new Set(publicVerbs.map(([name]) => name));
 	return defineTool({
-		name: ACT_TOOL,
+		name: "act",
 		label: "世界提案",
 		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.once}；${CONTRACT.retry}；世界法则按顺序裁决每个动作并返回结果。`,
 		parameters: {
