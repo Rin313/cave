@@ -62,7 +62,7 @@ export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
 
-/** mapping 相位文本丢弃，narration 相位文本入账；settled/current 的归属镜像 pi 的事件语义。 */
+/** mapping 相位文本丢弃，narration 相位文本留作回合叙述（不入账）；settled/current 的归属镜像 pi 的事件语义。 */
 interface RunState {
 	phase: "mapping" | "narration";
 	visibleBefore: Set<string>;

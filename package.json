@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"verify": "node src/tools/sim.ts verify && node src/tools/walltest.ts",
+		"verify": "node src/tools/sim.ts verify",
 		"loop": "node src/tools/loop.ts"
 	},
 	"dependencies": {

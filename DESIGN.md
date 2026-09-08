@@ -9,35 +9,49 @@ AI 尝试将意图映射为状态机的输入 → 用自然语言表达当前状
 ### 值
 
 ```
-S   ::= String ⊎ 有限数 ⊎ Bool      标量
-V   ::= S ⊎ S*                      存储形态（S* 为有限标量序列）
-V⊥  ::= V ⊎ {null}                  值语言
+Scalar ::= String | Num | Bool      -- 标量
+Seq    ::= ε | Scalar · Seq         -- 有限标量序列（含 ε）
+V      ::= one(Scalar) | many(Seq)  -- 状态值（存储形态）
+V?     ::= some(V) | none           -- 可选状态值
+-- Num ::= 有限实数，排除 NaN/±∞
 ```
 
 ### 世界
 
 ```
-w = (t, E, R)          t ∈ ℕ，单调
-e = (id, name, props)  id, name ∈ String⁺，props : K ⇀ V
-r = (a, b, τ, v)       τ ∈ String⁺，v ∈ V；边身份 (a, b, τ) 在 R 内两两相异
+World  ::= (t, E, R)             -- t ∈ ℕ，单调
+Entity ::= (id, name, props)     -- id, name ∈ String⁺，props : K ⇀ V
+Edge   ::= (a, b, τ, v)          -- a, b 为实体 id，τ ∈ String⁺，v ∈ V；身份 (a, b, τ) 在 R 内两两相异
 ```
 
-- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`，`type ∈ {string, number, boolean, id, tags, any}`。词汇闭合：`keys(e.props) ⊆ K`；动态键值对走关系边（关系类型与 tag 是开口 token，无注册表）。
-- `type: id` 的属性值（标量或标量数组）是强引用：被指实体须在世，「无引用」由缺席表达。关系边是弱引用。
+- 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于写载荷（δ 的 `v ∈ V?`）。
+- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`。type 是值形状契约：
+
+  | type | 值形状 |
+  |---|---|
+  | string | one(String) |
+  | number | one(Num) |
+  | boolean | one(Bool) |
+  | id | one(String) 或 many(Seq)，元素恒 String |
+  | tags | many(Seq)，元素恒 String |
+  | any | V |
+
+  词汇闭合：`keys(e.props) ⊆ K`；动态键值对走关系边（关系类型与 tag 是开口 token，无注册表）。
+- `id` 型值是强引用（标量与序列内逐项）：被指实体须在世，「无引用」由缺席表达；关系边是弱引用，端点在世由提交审查把门。
 - `internal` 的属性与动词不进任何呈现面；裁决侧照常读世界真相。
 - id 与 name 是实体的必备字段：id 承担协议指称（提案参数、键控），name 承担呈现。
 
 ### 变更与门
 
 ```
-δ ::= set(e,k,v) | relSet(a,b,τ,v) | rename(e,n) | spawn(ê) | despawn(e)       v ∈ V⊥
+δ ::= set(e,k,v) | relSet(a,b,τ,v) | rename(e,n) | spawn(ê) | despawn(e)       v ∈ V?
 ```
 
-绝对写，后态自含；`set/relSet` 取 null 即删。幂等跳过限于状态写（set/relSet/rename）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。
+绝对写，后态自含；`set/relSet` 写 none 即删。幂等跳过限于状态写（set/relSet/rename）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。
 
 ```
 G : Δ* × Src → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
-Src ::= rule:⟨verb⟩.⟨rule⟩ | system:⟨id⟩ | def
+Src ::= rule:⟨verb⟩.⟨rule⟩ | system:⟨id⟩ | replay:⟨seq⟩ | def
 ```
 
 `𝒞` 是变更记录序列，后态的完整 diff：prev/next 自含，spawn 携带完整后态实体，despawn 携带展示名（离场名的唯一来源）。
@@ -54,13 +68,13 @@ despawn 级联删边，逐条入账且紧随 despawn 记录（弱引用随主消
 ι : (w, ctx) → msg?      ctx = (genesis, changes, src)
 ```
 
-genesis 是实际起点世界的冻结快照（存档恢复、变体开局同义）；changes 是本次提交的全部变更。integrity 恒挂：id 唯一、必备字段非空、钟为非负整数、锚在世、词汇闭合、存储值 ∈ V、type 契约（id 引用在世——标量与数组；tags 为字符串阵列；其余按声明标量类型；any 豁免标量类型、不豁免账本值形状）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 message 即玩家文案，integrity 违反只有 debug（回落 noResponse）。
+genesis 是实际起点世界的冻结快照（存档恢复、变体开局同义）；changes 是本次提交的全部变更。integrity 恒挂：id 唯一、必备字段非空、钟为非负整数、锚在世、词汇闭合、存储值 ∈ V、type 契约（值形状按世界节 type 表；id 引用在世——标量与序列内逐项）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 message 即玩家文案，integrity 违反只有 debug（回落 noResponse）。
 
 ### 裁决
 
 ```
 verb = (label, description, schema, cost ∈ ℕ, internal?, rules)
-a    = (verb, params)      params : P ⇀ S      一次尝试 = 一次裁决 = 一个时价 = 一个拒绝单位
+a    = (verb, params)      params : P ⇀ Scalar      一次尝试 = 一次裁决 = 一个时价 = 一个拒绝单位
 ref(a) ⊆ P                指称参数键集（ref 声明的字符串参数）
 Q   = (world, player, params, roll)           world 为深冻结快照，params 冻结——attempt 入界即不可变，越权写即抛
 J   : Q → Grant ⊎ Deny ⊎ ⊥
@@ -91,10 +105,10 @@ TickStep   = (at, ok, changes, field, facts?) | (at, ok=false, denial, field)
 投影钩子住 def 不住账本，签名统一收意志锚而非其推导值（如宿主）：锚的自见排除、按锚键控的知识都以锚为变元，体验者由钩子自行推导，反向不可；钩子可无视锚（上帝视角即常函数）：
 
 ```
-g   : W × Player → 𝒫(id)              参照域，缺省全见
-πₑ  : W × Player → (R → Bool)         边感知，缺省恒真
-πₚ  : W × Player → (E × K → Bool)     属性感知（槽谓词），缺省恒真
-x   : W × Player → ViewValue          派生纹理，形态自由，无指称声明面
+g   : World × Player → 𝒫(id)              参照域，缺省全见
+πₑ  : World × Player → (R → Bool)         边感知，缺省恒真
+πₚ  : World × Player → (E × K → Bool)     属性感知（槽谓词），缺省恒真
+x   : World × Player → ViewValue          派生纹理，形态自由，无指称声明面
 ```
 
 状态视图与可见性门同源（参照域判定 `refdom(w, player) = g(w, player) ∩ E`）：
@@ -192,7 +206,7 @@ ticks(s) = ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb)
 
 **映射契约**　纯语义解析：无关键词、正则、别名表、语言限制。构造不出合法提案时提交空提案，不写理由；「预计被拒」是提交的理由，合理性的判断属于世界。
 
-**表达契约**　`voice` 是静态世界语言文档，原样注入 system prompt，缺省无契约。散文对已锚定内容的转写与渲染自由。`spineLines` 是事件流的规范单行渲染：符号承担结构（✓/✗/⏱/×n），语言词全部来自 messages/label/规则文案。`summarize` 是可选的声音覆写，崩溃回落缺省——呈现缺陷不得丢弃已发生的账目。叙述不回流：回合输入 = 状态视图 + 变更 + 近况。
+**表达契约**　`voice` 是静态世界语言文档，原样注入 system prompt，缺省无契约。散文对已锚定内容的转写与渲染自由。`spineLines` 是事件流的规范单行渲染：符号承担结构（✓/✗/⏱/×n），语言词全部来自 messages/label/规则文案。`summarize` 是可选的声音覆写，崩溃回落缺省——呈现缺陷不得丢弃已发生的账目。回合输入 = 状态视图 + 变更 + 近况。
 
 **呈现服务**　narrate 无提案通道、无 act 通道、无时间流逝，不是回合；输出不入账、不进投影。用途：开场与仪器的场景重渲。
 
@@ -235,7 +249,7 @@ core 的机制增长只由「无法表达」驱动。「无法表达」的判定
 ## 架构决策
 - pi agent SDK：进程内集成，`node_modules/@earendil-works/pi-coding-agent/docs/`
 - **IPC 形态**：主进程 → 渲染层推送事件流（`narration_delta` / `narration_reset`），渲染层 → 主进程请求（invoke）。原始 pi 流（映射期文本、thinking）不出 Engine。
-- **回合编排（单 pass）**：每回合一次 `session.prompt()`——模型先调 `act`，工具结果即世界回应（骨架行 + 未解析行 + 新见卡），其后输出散文。相位 mapping（文本丢弃）→ narration（入账）；重试作废在途生成（`narration_reset`），镜像 pi 语义。
+- **回合编排（单 pass）**：每回合一次 `session.prompt()`——模型先调 `act`，工具结果即世界回应（骨架行 + 未解析行 + 新见卡），其后输出散文。相位 mapping（文本丢弃）→ narration（留作回合叙述，不入账）；重试作废在途生成（`narration_reset`），镜像 pi 语义。
 - **上下文裁剪**：每次调用经 `context` 扩展（`core/context.ts` 为策略单一来源）裁剪为「近况投影 + 最后一条 user 消息起的后缀」（工具结果存为独立 toolResult 角色、不并入 user 消息，回合内该锚恒为回合提示，叙述续行因此保住裁决前缀；context 事件的消息是深拷贝，就地改写不污会话文件）；会话文件累积全量消息作审计；持久化事实是回合记录，近况是其纯函数投影，只在窗口更新点（装载 / 回合边界）整体重算——回合协议使该点与映射消费点观察等价，进程重启由记录重建。装载纪要按消费判据（逐条试投影存活）定完好：损坏使近况截断至其后完好子后缀并告警显形，会话文件不动——纪要只喂投影与审计，门不读纪要；截断而非逐条剔除，因名字闭合依赖完整时间后缀。档案是单一追加日志（会话文件），条目两种：回合（证据，每回合恰一，定稿写点）与检查点（缓存，声称已含前 n 条回合）——日志的任意前缀都是一致档案，跨文件写序不复存在；state.json 降格为 shell 侧导出物，不参与装载。装载即对账：取最后检查点为主侧锚（缺失或损坏则自变体开局全量重放），其后记录走 𝒞 重放——不重裁决、不掷骰（命运已入账），逐变更 prev 校验加 integrity，authored 不变式不重审（历史由当时的法则裁判过）；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断并告警显形，检查点领先于证据即拒绝装载——丢失由不可检升级为可检。检查点每回合随定稿追加，写失败仅告警（缓存可迟到），装载后落后即补写。
 - **缓存稳定性**：状态每回合重注入使跨回合消息前缀不稳定，复用只剩 [tools+system] 头块——系统提示与工具数组字节级稳定，不做 setActiveTools 相位切换；回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变）。compaction 保持关闭：pi 缺省摘要把旧叙述重新注入，与「模拟层唯一真相源」相悖。
 
