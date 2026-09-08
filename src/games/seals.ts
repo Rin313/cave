@@ -66,7 +66,7 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 
 export const seals: GameDef = {
 	id: "seals",
-	title: "封缄·宅邸夜（统一探针）",
+	title: "统一探针",
 	playerId: "player",
 	recentWindow: 6,
 	messages: {
