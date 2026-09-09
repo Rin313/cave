@@ -262,7 +262,6 @@ export interface GameDef {
 	messages: Messages;
 	prompt?: {
 		system?: string;
-		act?: string;
 		turn?: (kit: PromptKit & { view: string; intent: string }) => string;
 		narrate?: (kit: PromptKit & { view: string; events: string[]; instruction: string }) => string;
 		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];

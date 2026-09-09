@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
-import { ProtocolViolation, Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type PromptKit, type RecentEntry, type Step } from "./sim.ts";
+import { ProtocolViolation, Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type PromptKit, type RecentEntry, type Step, type VerbDef } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -342,8 +342,7 @@ type JsonSchema = {
 };
 
 /** 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
-function hostParametersSchema(def: GameDef): JsonSchema {
-	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
+function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
 	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type, ...(spec.description !== undefined && { description: spec.description }) });
 	return {
 		anyOf: publicVerbs.map(([name, v]) => {
@@ -372,12 +371,12 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 	const advertised = new Set(publicVerbs.map(([name]) => name));
 	return defineTool({
 		name: "act",
-		label: "World proposal",
-		description: def.prompt?.act ?? publicVerbs.map(([n]) => n).join("/"),
+		label: "act",
+		description: `Propose actions to the world (${publicVerbs.map(([n]) => n).join("/")}); the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; referential params take ids of visible entities; an empty actions array is a refusal.`,
 		parameters: {
 			type: "object",
 			properties: {
-				actions: { type: "array", items: hostParametersSchema(def) },
+				actions: { type: "array", items: hostParametersSchema(publicVerbs) },
 			},
 		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {

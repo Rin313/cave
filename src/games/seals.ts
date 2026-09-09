@@ -426,7 +426,6 @@ export const seals: GameDef = {
 	...base,
 	prompt: {
 		system: sealsSystemPrompt(base),
-		act: `Propose actions to the world (${Object.entries(base.verbs).filter(([, v]) => !v.internal).map(([n]) => n).join("/")}). World laws adjudicate the actions in order and return the results; referential params take ids of visible entities; an empty actions array is a refusal.`,
 		turn: sealsTurnPrompt,
 		narrate: sealsNarratePrompt,
 	},
