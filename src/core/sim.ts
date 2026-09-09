@@ -248,7 +248,6 @@ export interface GameDef {
 	world: World;
 	systems?: SystemRule[];
 	props?: Record<string, PropDef>;
-	summarize?: (input: { world: World; player: string; steps: Step[] }) => string;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
 	grounding?: (world: World, player: string) => string[];
@@ -952,19 +951,6 @@ export class Simulation {
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
 		if (Object.keys(extra).length) view.extra = extra;
 		return JSON.stringify(view);
-	}
-
-	/** 声音钩子崩溃回落缺省：呈现缺陷不得丢弃账目，也不得无痕。 */
-	summarize(steps: Step[]): string {
-		if (this.def.summarize) {
-			try {
-				return this.def.summarize({ world: this.readState(), player: this.player, steps: deepFreeze(steps) });
-			} catch (e) {
-				this.warnings.push(`summarize 崩溃回落缺省：${e instanceof Error ? e.message : String(e)}`);
-			}
-		}
-		const lines = spineLines(this, steps);
-		return lines.length ? lines.join("\n") : this.def.messages.noResponse;
 	}
 
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */

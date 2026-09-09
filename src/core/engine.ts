@@ -269,7 +269,7 @@ export class Engine {
 	}
 
 	private fallbackSummary(steps: Step[]): string {
-		const text = this.sim.summarize(steps);
+		const text = skeletonSummary(this.sim, steps);
 		this.run.warnings.push(...this.sim.warnings.splice(0));
 		return text;
 	}
@@ -303,6 +303,16 @@ function formatTurnEvents(sim: Simulation, steps: Step[], revealed: string[]): s
 		}
 	}
 	return lines;
+}
+
+function skeletonSummary(sim: Simulation, steps: Step[]): string {
+	try {
+		const lines = spineLines(sim, steps);
+		return lines.length ? lines.join("\n") : sim.def.messages.noResponse;
+	} catch (e) {
+		sim.warnings.push(`骨架渲染失败：${errorText(e)}`);
+		return sim.def.messages.noResponse;
+	}
 }
 
 /** 逐动作落钟：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
@@ -414,13 +424,8 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			} catch (e) {
 				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
 				run.warnings.push(`结果投影抛错：${errorText(e)}`);
-				try {
-					text = sim.summarize(steps);
-					run.warnings.push(...sim.warnings.splice(0));
-				} catch (e2) {
-					text = def.messages.noResponse;
-					run.warnings.push(`摘要回落失败：${errorText(e2)}`);
-				}
+				text = skeletonSummary(sim, steps);
+				run.warnings.push(...sim.warnings.splice(0));
 			}
 			return {
 				content: [{ type: "text", text }],
