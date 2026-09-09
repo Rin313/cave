@@ -24,17 +24,17 @@ export interface EngineOptions {
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 const CONTRACT = {
-	once: "act 每回合恰一个裁决窗口，提案进入裁决后本回合不再受理",
-	retry: "被形态校验拒绝的调用不占窗口，按反馈修正后重新提交",
-	form: "提案未通过形态校验，未进入裁决：按以下违约点修正后重新提交",
-	commit: "能构造出合法提案（动词承载意图、指称参数都取自可见实体的 id）就提交 actions，预计被世界拒绝也照常提交——意图是否合理由世界法则裁决，不由你判断",
-	empty: "构造不出合法提案就提交空 actions（空提案即拒绝，不写任何理由），不要硬套承载不了意图的动词或不相干的实体",
-	follow: "act 返回世界裁决结果后，基于它把本回合写成面向玩家的文学散文",
+	once: "act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn",
+	retry: "a call rejected by static form checks does not occupy the window; fix the reported violations and resubmit",
+	form: "The proposal failed the static form checks and never entered adjudication: fix the violations below and resubmit",
+	commit: "if you can form a legal proposal (the verb carries the intent, referential params take ids of visible entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you",
+	empty: "if you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities",
+	follow: "after act returns the world's adjudication results, write the turn as literary prose for the player based on them",
 } as const;
 
-const ACT_LATCH_MSG = `行动窗口已关闭：${CONTRACT.once}。请忽略本次调用，基于回合内已有内容继续输出散文。`;
+const ACT_LATCH_MSG = `The action window is closed: ${CONTRACT.once}. Ignore this call and continue writing prose from what the turn already contains.`;
 
-const STATE_HEADER = "[状态视图]（你可见的世界截面；不在其中者，无从指称）：";
+const STATE_HEADER = "[State view] (the slice of the world visible to you; what is not in it cannot be referred to):";
 
 export interface ActOutcome {
 	steps: Step[];
@@ -301,37 +301,37 @@ function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExte
 }
 
 function buildTurnPrompt(state: string, intent: string): string {
-	return `${STATE_HEADER}\n${state}\n\n玩家意图：${verbatim(intent)}\n\n解析意图并调用 act 工具提交动作提案（${CONTRACT.empty}）；${CONTRACT.follow}。`;
+	return `${STATE_HEADER}\n${state}\n\nPlayer intent: ${verbatim(intent)}\n\nParse the intent and call the act tool to submit an action proposal (${CONTRACT.empty}); ${CONTRACT.follow}.`;
 }
 
 function buildSystemPrompt(def: GameDef): string {
 	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
 		.map(([name, v]) => {
 			const refs = refParamsOf(v);
-			return `- ${name}「${v.label}」：${v.description}${refs.length ? `（指称参数：${refs.join("/")}——只能取可见实体 id）` : ""}`;
+			return `- ${name} "${v.label}": ${v.description}${refs.length ? ` (reference params: ${refs.join("/")} — must be ids of visible entities)` : ""}`;
 		})
 		.join("\n");
-	const protocol = `把玩家的操作意图解析为动作提案，调用 act 工具提交（${CONTRACT.once}；${CONTRACT.retry}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.follow}。
-呈现调用（开场、时间流逝后的场景描写）没有行动窗口：prompt 顶部标注「呈现服务」，此时不要调用 act，直接输出散文正文。
-世界说明：entities 是当前所有可见实体，relations 是可见的关系边（from/to 为实体 id，type 为关系名）。id 是唯一标识，name 是展示名。extra（存在时）是游戏派生的场景纹理。
-可用动词（模拟层强制执行）：
+	const protocol = `Parse the player's operational intent into action proposals and submit them via the act tool (${CONTRACT.once}; ${CONTRACT.retry}). ${CONTRACT.commit}; ${CONTRACT.empty}. ${CONTRACT.follow}.
+Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly.
+World notes: entities lists every currently visible entity; relations lists the visible relation edges (from/to are entity ids, type is the relation name). id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
+Available verbs (enforced by the simulation layer):
 ${verbs}
 
-表达纪律：
-- 叙述只能跟随 act 返回的裁决结果（尝试、变更、法则事实、新见）与世界状态中的实体和属性。
-- 状态与裁决中不存在的物体、人物、现象、后果不得出现——后果由世界法则产生，不由你创造；对已有内容的转写与渲染（措辞、视角、氛围、文学手法）一律自由，只须不与状态矛盾。
-- 一律使用实体的名称（name），不得写出实体 id、属性名、工具调用或决策过程。
-- 被拒绝的尝试只写尝试本身与世界的拒绝理由，不写未发生的后果。`;
+Expression discipline:
+- Narration may only follow the adjudication results returned by act (attempts, changes, law facts, newly visible entities) and the entities and properties in the world state.
+- Objects, people, phenomena, and consequences absent from the state and the adjudication must not appear — consequences are produced by world laws, not invented by you; transcribing and rendering existing content (wording, perspective, atmosphere, literary devices) is entirely free, as long as it does not contradict the state.
+- Always refer to entities by name; never expose entity ids, property names, tool calls, or the decision process.
+- For a denied attempt, write only the attempt itself and the world's denial reason; never write consequences that did not happen.`;
 	return def.voice ? `${def.voice}\n\n${protocol}` : protocol;
 }
 
 function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string[] {
 	const lines = spineLines(sim, steps);
-	if (refused) lines.unshift(`玩家的意图 ${verbatim(intent ?? "")} 未被解析为可执行的操作，世界没有回应。`);
+	if (refused) lines.unshift(`The player's intent ${verbatim(intent ?? "")} was not parsed into an executable action; the world gives no response.`);
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
 		const perceiveProp = sim.def.propPerception?.(w, sim.player);
-		lines.push("本回合新见：");
+		lines.push("Newly visible this turn:");
 		for (const id of revealed) {
 			const e = entity(w, id);
 			if (e) lines.push(`  ${JSON.stringify(viewCard(sim.def, e, perceiveProp))}`);
@@ -341,7 +341,7 @@ function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, inte
 }
 
 function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string): string {
-	const lines = ["[呈现服务] 本次调用没有行动窗口，不调用 act，直接输出散文正文。", "", STATE_HEADER, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
+	const lines = ["[Rendering service] This call has no action window; do not call act; write the prose text directly.", "", STATE_HEADER, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
 	lines.push("", instruction);
 	return lines.join("\n");
 }
@@ -413,12 +413,12 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 	const advertised = new Set(publicVerbs.map(([name]) => name));
 	return defineTool({
 		name: "act",
-		label: "世界提案",
-		description: `向世界提出动作（${publicVerbs.map(([n]) => n).join("/")}）。${CONTRACT.commit}；${CONTRACT.empty}。${CONTRACT.once}；${CONTRACT.retry}；世界法则按顺序裁决每个动作并返回结果。`,
+		label: "World proposal",
+		description: `Propose actions to the world (${publicVerbs.map(([n]) => n).join("/")}). ${CONTRACT.commit}; ${CONTRACT.empty}. ${CONTRACT.once}; ${CONTRACT.retry}; world laws adjudicate the actions in order and return the results.`,
 		parameters: {
 			type: "object",
 			properties: {
-				actions: { type: "array", items: hostParametersSchema(def), description: "按顺序执行的动作提案列表；构造不出合法提案时省略本字段" },
+				actions: { type: "array", items: hostParametersSchema(def), description: "Ordered action proposals to execute; omit this field when no legal proposal can be formed" },
 			},
 		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
@@ -430,7 +430,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			try {
 				for (const a of proposed) {
 					if (!advertised.has(a.verb)) {
-						throw new ProtocolViolation("action.unknown", `verb:${a.verb}（可用动词：${[...advertised].join("、")}）`);
+						throw new ProtocolViolation("action.unknown", `verb:${a.verb} (available verbs: ${[...advertised].join(", ")})`);
 					}
 				}
 				sim.validateBatch(proposed);
@@ -453,7 +453,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			try {
 				finalizeTurn(sim, sessionManager, run, archive);
 			} catch (e) {
-				archive.dead = `回合条目落盘失败：${errorText(e)}`;
+				archive.dead = `turn record persistence failed: ${errorText(e)}`;
 				run.warnings.push(archive.dead);
 			}
 			let text: string;
@@ -461,8 +461,8 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				// 投影失灵时不重入 visible()：新见段缺席
 				const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
 				text = formatTurnEvents(sim, steps, proposed.length === 0, run.intent, revealed).join("\n");
-				if (crashed) text += `\n内部缺陷：以上是中断前已发生的后果；中断的提案已整体回滚，其余不得虚构。`;
-				if (archive.dead) text += `\n内部缺陷：${archive.dead}`;
+				if (crashed) text += `\nInternal defect: the above are the consequences that occurred before the interruption; the interrupted proposal was rolled back in full; do not invent the rest.`;
+				if (archive.dead) text += `\nInternal defect: ${archive.dead}`;
 			} catch (e) {
 				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
 				run.warnings.push(`结果投影抛错：${errorText(e)}`);

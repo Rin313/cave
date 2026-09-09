@@ -82,7 +82,7 @@ export class ProtocolViolation extends Error {
 	readonly debug: string;
 
 	constructor(law: "action.unknown" | "action.schema", debug: string) {
-		super(`协议违约 ${law}：${debug}`);
+		super(`Protocol violation ${law}: ${debug}`);
 		this.law = law;
 		this.debug = debug;
 	}
@@ -202,19 +202,19 @@ export interface VerbDef {
 
 /** 内核形态检查（裁决面全集）：指名违约点并携带参数描述，报错措辞走通道语言单源。 */
 function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[] {
-	if (params === null || typeof params !== "object" || Array.isArray(params)) return ["params：须为对象"];
+	if (params === null || typeof params !== "object" || Array.isArray(params)) return ["params: must be an object"];
 	const out: string[] = [];
-	const desc = (s: ParamSpec): string => (s.description !== undefined ? `（${s.description}）` : "");
+	const desc = (s: ParamSpec): string => (s.description !== undefined ? ` (${s.description})` : "");
 	for (const name of Object.keys(params)) {
-		if (!Object.hasOwn(verb.params, name)) out.push(`params.${name}：未知参数（可用：${Object.keys(verb.params).join("、") || "无"}）`);
+		if (!Object.hasOwn(verb.params, name)) out.push(`params.${name}: unknown parameter (available: ${Object.keys(verb.params).join(", ") || "none"})`);
 	}
 	for (const [name, s] of Object.entries(verb.params)) {
 		const v = (params as Record<string, unknown>)[name];
 		if (v === undefined) {
-			if (!s.optional) out.push(`params.${name}：缺少必填参数${desc(s)}`);
+			if (!s.optional) out.push(`params.${name}: missing required parameter${desc(s)}`);
 			continue;
 		}
-		if (typeof v !== s.type) out.push(`params.${name}：须为 ${s.type}${desc(s)}`);
+		if (typeof v !== s.type) out.push(`params.${name}: must be ${s.type}${desc(s)}`);
 	}
 	return out;
 }
@@ -444,7 +444,7 @@ function renderValue(sim: Simulation, v: PropValue, ref: boolean, departed?: Rea
 		ids.push(item);
 		texts.push(entity(sim.world, item)?.name ?? departed?.get(item) ?? item);
 	}
-	return { text: texts.join("、"), ids };
+	return { text: texts.join(", "), ids };
 }
 
 /** 注册表 type:"id" 的属性值是引用；关系值与未声明值一律字面。 */
@@ -517,8 +517,8 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 	const flush = (): void => {
 		for (const { changes, facts, denials } of said.values()) {
 			if (changes.length || facts.length) lines.push(`⏱ ${[
-				changes.length ? `（${changes.join("；")}）` : "",
-				facts.length ? `〔${facts.join("；")}〕` : "",
+				changes.length ? `(${changes.join("; ")})` : "",
+				facts.length ? `[${facts.join("; ")}]` : "",
 			].join("")}`);
 			for (const d of denials) lines.push(`⏱ ✗ ${d}`);
 		}
@@ -533,8 +533,8 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 			if (sim.def.verbs[s.action.verb]?.internal) continue;
 			const changes = narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
-				changes.length ? `（${changes.join("；")}）` : "",
-				s.facts?.length ? `〔${s.facts.join("；")}〕` : "",
+				changes.length ? `(${changes.join("; ")})` : "",
+				s.facts?.length ? `[${s.facts.join("; ")}]` : "",
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}${s.reason !== undefined ? `：${s.reason}` : ""}${tail}`);
 		} else {

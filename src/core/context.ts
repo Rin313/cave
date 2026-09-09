@@ -168,9 +168,9 @@ function renderRecent(recent: readonly RecentEntry[]): string {
 	for (const m of recent) {
 		lines.push(`- t${m.time} ${verbatim(m.intent)}`);
 		if (m.moves.length) for (const l of m.moves) lines.push(`  ${l}`);
-		else lines.push("  未解析");
+		else lines.push("  no visible events");
 	}
-	return ["[近况] 最近几步的世界结果（供指代与续接）：", ...lines].join("\n");
+	return ["[Recent] World results of the last few turns (for reference and continuation):", ...lines].join("\n");
 }
 
 /** 只保留最后一条 user 消息起的后缀，近况并入其头部；不改会话持久化。 */
