@@ -197,7 +197,6 @@ export function printReports(reports: ScenarioReport[]): void {
 	}
 }
 
-/** 自动发现 scenarios/*.json，跳过未注册游戏（归档场景保留作参考）。 */
 async function cmdVerify(): Promise<void> {
 	let files: string[];
 	try {

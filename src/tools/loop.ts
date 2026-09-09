@@ -1,5 +1,5 @@
 // 编译通过、场景通过、e2e 映射与表达准确都是伪信号，不证明设计正确；验证靠阅读 e2e 会话与分析源码。e2e 的 provider 用 `opencode-go`，model 用 `mimo-v2.5`。
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
@@ -8,48 +8,20 @@ import { spineLines, type Simulation } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
-interface RunMeta {
-	game: string;
-	runId: string;
-	createdAt: string;
-	turn: number;
-	sessionFile?: string;
-}
-
 const runDir = (game: string, runId: string): string => join("runs", game, runId);
-const metaPath = (dir: string): string => join(dir, "meta.json");
-const statePath = (dir: string): string => join(dir, "state.json");
+/** 会话文件固定名：run 的存在性即此文件的存在性，路径无需 sidecar 记载。 */
+const sessionPath = (dir: string): string => join(dir, "session.jsonl");
 const transcriptPath = (dir: string): string => join(dir, "transcript.jsonl");
-
-function readJson<T>(path: string): T {
-	return JSON.parse(readFileSync(path, "utf8")) as T;
-}
-
-function writeJson(path: string, value: unknown): void {
-	writeFileSync(path, JSON.stringify(value, null, 2), "utf8");
-}
-
-function loadMeta(dir: string): RunMeta {
-	return readJson(metaPath(dir));
-}
-
-function saveMeta(dir: string, meta: RunMeta): void {
-	writeJson(metaPath(dir), meta);
-}
-
-/** state.json 是导出物（机械 diff 用），不参与装载：档案主侧是会话日志。 */
-function saveState(dir: string, sim: Simulation): void {
-	writeJson(statePath(dir), sim.snapshot());
-}
 
 function appendTranscript(dir: string, entry: unknown): void {
 	appendFileSync(transcriptPath(dir), JSON.stringify(entry) + "\n", "utf8");
 }
 
-function requireRunDir(gameId: string, runId: string): string {
+function requireRunDir(gameId: string, runId: string): { dir: string; sessionFile: string } {
 	const dir = runDir(gameId, runId);
-	if (!existsSync(metaPath(dir))) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
-	return dir;
+	const sessionFile = sessionPath(dir);
+	if (!existsSync(sessionFile)) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
+	return { dir, sessionFile };
 }
 
 /** 引擎配置按游戏 id 命名空间读取环境变量，多游戏并存互不覆盖。 */
@@ -95,50 +67,30 @@ function printAct(sim: Simulation, o: {
 
 interface RunCtx {
 	dir: string;
-	meta: RunMeta;
 	sim: Simulation;
 	engine: Engine;
 }
 
 async function withEngine(gameId: string, runId: string, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
-	const dir = requireRunDir(gameId, runId);
-	const meta = loadMeta(dir);
-	if (!meta.sessionFile || !existsSync(meta.sessionFile)) {
-		throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
-	}
-	const def = getGame(meta.game);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(meta.game), sessionManager: SessionManager.open(meta.sessionFile) });
+	const { dir, sessionFile } = requireRunDir(gameId, runId);
+	const def = getGame(gameId);
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sessionManager: SessionManager.open(sessionFile) });
 	for (const w of engine.loadWarnings) console.log(`  ⚠ ${w}`);
 	try {
-		await fn({ dir, meta, sim: engine.sim, engine });
+		await fn({ dir, sim: engine.sim, engine });
 	} finally {
 		engine.dispose();
 	}
 }
 
-function persistRun(ctx: RunCtx): void {
-	if (ctx.engine.sessionFile !== undefined) ctx.meta.sessionFile = ctx.engine.sessionFile;
-	saveMeta(ctx.dir, ctx.meta);
-	saveState(ctx.dir, ctx.sim);
-}
-
 async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
-	mkdirSync(dir, { recursive: true });
-	const sessionManager = SessionManager.create(process.cwd(), dir);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sessionManager });
+	const sessionFile = sessionPath(dir);
+	if (existsSync(sessionFile)) throw new Error(`run "${runId}" 已存在（game: ${gameId}），loop reset 后再 start`);
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sessionManager: SessionManager.open(sessionFile) });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
-		const meta: RunMeta = {
-			game: gameId,
-			runId,
-			createdAt: new Date().toISOString(),
-			turn: 0,
-			...(engine.sessionFile !== undefined && { sessionFile: engine.sessionFile }),
-		};
-		saveMeta(dir, meta);
-		saveState(dir, engine.sim);
 		appendTranscript(dir, { phase: "start", scene, warnings, usage });
 		console.log(`【${runId}·start】${def.title}`);
 		console.log(scene);
@@ -152,14 +104,12 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 
 async function cmdAct(gameId: string, runId: string, intent: string, selection: string | undefined): Promise<void> {
 	await withEngine(gameId, runId, async (ctx) => {
-		const { dir, meta, sim, engine } = ctx;
+		const { dir, sim, engine } = ctx;
 		const utterance = selection === undefined ? intent : `${intent}（选中：「${selection}」）`;
 		const outcome = await engine.act({ intent: utterance });
-
-		meta.turn += 1;
-		persistRun(ctx);
+		const turn = engine.turn;
 		appendTranscript(dir, {
-			turn: meta.turn,
+			turn,
 			phase: "act",
 			raw: intent,
 			selection: selection ?? null,
@@ -169,7 +119,7 @@ async function cmdAct(gameId: string, runId: string, intent: string, selection: 
 			warnings: outcome.warnings,
 			usage: outcome.usage,
 		});
-		printAct(sim, { turn: meta.turn, intent: utterance, outcome });
+		printAct(sim, { turn, intent: utterance, outcome });
 	});
 }
 
@@ -180,17 +130,16 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 		.filter((l) => l !== "" && !l.startsWith("#"));
 	if (!lines.length) throw new Error(`意图文件 ${file} 为空`);
 	await withEngine(gameId, runId, async (ctx) => {
-		const { dir, meta, sim, engine } = ctx;
+		const { dir, sim, engine } = ctx;
 		for (const line of lines) {
 			const outcome = await engine.act({ intent: line });
-			meta.turn += 1;
+			const turn = engine.turn;
 			appendTranscript(dir, {
-				turn: meta.turn, phase: "act", raw: line, selection: null, intent: line,
+				turn, phase: "act", raw: line, selection: null, intent: line,
 				steps: outcome.steps,
 				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
 			});
-			printAct(sim, { turn: meta.turn, intent: line, outcome, brief: true });
-			persistRun(ctx);
+			printAct(sim, { turn, intent: line, outcome, brief: true });
 		}
 	});
 }
@@ -207,19 +156,23 @@ async function cmdRender(gameId: string, runId: string, instruction: string): Pr
 	});
 }
 
-function cmdState(gameId: string, runId: string): void {
-	const dir = requireRunDir(gameId, runId);
-	const meta = loadMeta(dir);
-	if (!meta.sessionFile || !existsSync(meta.sessionFile)) throw new Error(`run "${runId}" 缺少 session 文件，请重新 start`);
-	const def = getGame(meta.game);
-	const { sim, warnings } = resume(def, SessionManager.open(meta.sessionFile).getEntries());
-	console.log(`【${runId}】${meta.game} 已进行 ${meta.turn} 回合`);
+function cmdState(gameId: string, runId: string, out: string | undefined): void {
+	const { sessionFile } = requireRunDir(gameId, runId);
+	const def = getGame(gameId);
+	const { sim, lastSeq, warnings } = resume(def, SessionManager.open(sessionFile).getEntries());
+	console.log(`【${runId}】${gameId} 已进行 ${lastSeq} 回合`);
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
-	console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
+	if (out === undefined) {
+		console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
+		return;
+	}
+	writeFileSync(out, `${JSON.stringify(sim.snapshot(), null, 1)}\n`, "utf8");
+	console.log(`世界快照已导出 → ${out}`);
 }
 
 function cmdReset(gameId: string, runId: string): void {
-	rmSync(requireRunDir(gameId, runId), { recursive: true, force: true });
+	const { dir } = requireRunDir(gameId, runId);
+	rmSync(dir, { recursive: true, force: true });
 	process.stdout.write(`已重置 run "${runId}"\n`);
 }
 
@@ -238,13 +191,14 @@ async function main() {
   loop act <意图文本> --run <id> --game <id> [--select <选中文本>]
   loop batch <intents.txt> --run <id> --game <id>
   loop render --run <id> --game <id> [--instruction <指令>]
-  loop state --run <id> --game <id>
+  loop state --run <id> --game <id> [--out <file>]
   loop reset --run <id> --game <id>
 
-输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）；结构化数据以 transcript.jsonl / state.json / meta.json 落盘在 runs/ 下，供 A/B 对照与机械 diff。
+输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：session.jsonl 是机器全量档案（回合记录与检查点，装载对账的主侧），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过。
 --select 由本工具并合进意图（transcript 记 raw/selection 分解）——引擎的意志输入只有 intent 一段不透明文本。
 render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合），引擎无第二条提案通道。
+state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用）。
 --game 恒必填：run 按游戏分目录，无跨游戏消歧。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
 `);
@@ -275,7 +229,7 @@ render 是研究仪器操作（回合计数不增）：调用场景呈现服务�
 			await cmdRender(gameId, runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。");
 			return;
 		case "state":
-			cmdState(gameId, runId);
+			cmdState(gameId, runId, flagStr(a, "out"));
 			return;
 		case "reset":
 			cmdReset(gameId, runId);

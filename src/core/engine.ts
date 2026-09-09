@@ -192,6 +192,11 @@ export class Engine {
 		return this.session.sessionFile;
 	}
 
+	/** 已定稿回合数；档案链截断后等于存活回合数。 */
+	get turn(): number {
+		return this.archive.lastSeq;
+	}
+
 	private beginRun(phase: "mapping" | "narration", intent?: string): void {
 		const r = this.run;
 		r.phase = phase;
