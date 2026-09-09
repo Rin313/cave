@@ -381,10 +381,11 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
 			if (run.phase !== "mapping") {
-				return { content: [{ type: "text", text: " " }], details: {} };
+				// 占用后的再次调用：空白结果加 terminate，防模型无界空转
+				return { content: [{ type: "text", text: " " }], details: {}, terminate: true };
 			}
 			const proposed = (params.actions ?? []) as Action[];
-			// 形态校验先于窗口占用；act 通道的动词全集是广告面——内核检查裁决面全集，internal 动词由直连 apply 合法使用
+			// 通道次序的执行者是 pi 的宿主面校验（execute 前整批拦截）；此处为纵深防御——内核按裁决面全集检查，internal 动词由直连 apply 合法使用
 			try {
 				for (const a of proposed) {
 					if (!advertised.has(a.verb)) {
@@ -418,9 +419,10 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			try {
 				// 投影失灵时不重入 visible()：新见段缺席
 				const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
-				text = formatTurnEvents(sim, steps, revealed).join("\n");
-				if (crashed) text += `\napply.crash: ${crashed}`;
-				if (archive.dead) text += `\n${archive.dead}`;
+				const lines = formatTurnEvents(sim, steps, revealed);
+				if (crashed) lines.push(def.messages.noResponse);
+				text = lines.join("\n");
+				if (text === "") text = def.messages.noResponse;
 			} catch (e) {
 				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
 				run.warnings.push(`结果投影抛错：${errorText(e)}`);

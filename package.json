@@ -3,8 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"verify": "node src/tools/sim.ts verify",
-		"loop": "node src/tools/loop.ts"
+		"verify": "node src/tools/sim.ts verify"
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "^0.85.1"
