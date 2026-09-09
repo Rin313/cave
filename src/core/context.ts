@@ -66,8 +66,6 @@ export interface Resumed {
 	/** 近况窗口内的回合记录（已过完好判据）。 */
 	records: ChronicleEntry[];
 	lastSeq: number;
-	/** 生效检查点的 seq；null＝日志无可用的检查点条目（自变体开局起算）。 */
-	checkpointSeq: number | null;
 	warnings: string[];
 }
 
@@ -142,7 +140,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 		warnings.push(`近况截断：弃前 ${cut + 1}/${records.length} 条`);
 		records.splice(0, cut + 1);
 	}
-	return { sim, records, lastSeq, checkpointSeq: checkpoint ? boundary : null, warnings };
+	return { sim, records, lastSeq, warnings };
 }
 
 /** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底 */
@@ -152,7 +150,7 @@ export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[
 }
 
 export function verbatim(s: string): string {
-	return JSON.stringify(s).replace(/[\u0085\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+	return JSON.stringify(s);
 }
 
 /** 只保留最后一条 user 消息起的后缀 */

@@ -16,9 +16,7 @@ interface RunMeta {
 	sessionFile?: string;
 }
 
-const RUNS_ROOT = "runs";
-
-const runDir = (game: string, runId: string): string => join(RUNS_ROOT, game, runId);
+const runDir = (game: string, runId: string): string => join("runs", game, runId);
 const metaPath = (dir: string): string => join(dir, "meta.json");
 const statePath = (dir: string): string => join(dir, "state.json");
 const transcriptPath = (dir: string): string => join(dir, "transcript.jsonl");

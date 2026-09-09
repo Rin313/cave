@@ -588,8 +588,6 @@ type RawResult =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 呈现回落的显形出口；消费方取走（splice 清空）后随回合诊断显形。 */
-	readonly warnings: string[] = [];
 	/** 实际起点读态的冻结副本，首次提交前惰性捕获。 */
 	private genesisCache?: World;
 

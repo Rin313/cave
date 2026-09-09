@@ -143,14 +143,6 @@ export class Engine {
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const resumed = resume(def, sessionManager.getEntries());
 		const archive: Archive = { records: resumed.records, lastSeq: resumed.lastSeq, dead: null };
-		// 检查点自愈：日志缺检查点或落后于证据时补写（缓存写，失败仅告警）
-		if (resumed.checkpointSeq === null || resumed.checkpointSeq < resumed.lastSeq) {
-			try {
-				sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: resumed.lastSeq, world: resumed.sim.snapshot() });
-			} catch (e) {
-				resumed.warnings.push(`检查点补写失败（缓存迟到）：${errorText(e)}`);
-			}
-		}
 
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
 		const modelDef = modelRuntime.getModel(options.provider, options.model);
@@ -269,8 +261,8 @@ export class Engine {
 	}
 
 	private fallbackSummary(steps: Step[]): string {
-		const text = skeletonSummary(this.sim, steps);
-		this.run.warnings.push(...this.sim.warnings.splice(0));
+		const { text, warning } = skeletonSummary(this.sim, steps);
+		if (warning) this.run.warnings.push(warning);
 		return text;
 	}
 
@@ -305,13 +297,12 @@ function formatTurnEvents(sim: Simulation, steps: Step[], revealed: string[]): s
 	return lines;
 }
 
-function skeletonSummary(sim: Simulation, steps: Step[]): string {
+function skeletonSummary(sim: Simulation, steps: Step[]): { text: string; warning?: string } {
 	try {
 		const lines = spineLines(sim, steps);
-		return lines.length ? lines.join("\n") : sim.def.messages.noResponse;
+		return { text: lines.length ? lines.join("\n") : sim.def.messages.noResponse };
 	} catch (e) {
-		sim.warnings.push(`骨架渲染失败：${errorText(e)}`);
-		return sim.def.messages.noResponse;
+		return { text: sim.def.messages.noResponse, warning: `骨架渲染失败：${errorText(e)}` };
 	}
 }
 
@@ -410,7 +401,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			try {
 				finalizeTurn(sim, sessionManager, run, archive);
 			} catch (e) {
-				archive.dead = `turn record persistence failed: ${errorText(e)}`;
+				archive.dead = `定稿落盘失败：${errorText(e)}`;
 				run.warnings.push(archive.dead);
 			}
 			let text: string;
@@ -424,8 +415,9 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			} catch (e) {
 				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
 				run.warnings.push(`结果投影抛错：${errorText(e)}`);
-				text = skeletonSummary(sim, steps);
-				run.warnings.push(...sim.warnings.splice(0));
+				const fallback = skeletonSummary(sim, steps);
+				if (fallback.warning) run.warnings.push(fallback.warning);
+				text = fallback.text;
 			}
 			return {
 				content: [{ type: "text", text }],

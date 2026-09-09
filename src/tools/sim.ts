@@ -233,17 +233,10 @@ async function cmdVerify(): Promise<void> {
 	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
-type DenialBearer = { ok: boolean; deniedBy?: "rule" | "invariant"; denial?: Denial };
-
-/** bug 判据：invariant 否决且无世界腔理由。 */
-function bugOf(s: DenialBearer): string | undefined {
-	if (s.ok || s.deniedBy !== "invariant" || !s.denial || s.denial.reason != null) return undefined;
-	return s.denial.debug ?? s.denial.law;
-}
-
-/** 刻步失败结构性属于必要性通道（TickStep 无 deniedBy），只查世界腔理由。 */
-function tickBugOf(t: Extract<TickStep, { ok: false }>): string | undefined {
-	return t.denial.reason != null ? undefined : t.denial.debug ?? t.denial.law;
+/** bug 判据：必要性通道否决（deniedBy=invariant 的动作步、失败刻步）且无世界腔理由。 */
+function bugOf(denial: Denial | undefined): string | undefined {
+	if (!denial || denial.reason != null) return undefined;
+	return denial.debug ?? denial.law;
 }
 
 interface MapRow {
@@ -332,7 +325,6 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		const op = opLabel(action);
 		try {
 			const { step, elapsed } = new Simulation(instrumented).apply(action);
-			const bug = bugOf(step);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
 				const rule = trace.find((t) => t.ok === true)!.rule;
@@ -342,10 +334,13 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 				if (row) row.count += 1;
 				else grantRows.set(key, { verb: action.verb, rule, shape, count: 1, rep: op });
 			}
-			else rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason ?? "", ...(bug !== undefined && { bug }) });
+			else {
+				const bug = step.deniedBy === "invariant" ? bugOf(step.denial) : undefined;
+				rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason ?? "", ...(bug !== undefined && { bug }) });
+			}
 			for (const t of elapsed) {
 				if (t.ok) continue;
-				const b = tickBugOf(t);
+				const b = bugOf(t.denial);
 				if (b) rows.push({ verb: action.verb, op, law: t.denial.law, reason: renderDenial(def, t.denial), bug: b });
 			}
 		} catch (e) {
