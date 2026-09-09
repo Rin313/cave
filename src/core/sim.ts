@@ -201,7 +201,7 @@ export interface VerbDef {
 	rules: Rule[];
 }
 
-/** 内核形态检查（裁决面全集）：指名违约点并携带参数描述，报错措辞走通道语言单源。 */
+/** 内核形态检查（裁决面全集） */
 function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[] {
 	if (params === null || typeof params !== "object" || Array.isArray(params)) return ["params: must be an object"];
 	const out: string[] = [];
@@ -256,7 +256,7 @@ export interface GameDef {
 	edgePerception?: (world: World, player: string) => (r: Rel) => boolean;
 	/** 槽谓词（实体×注册表键，含缺席槽）；同一谓词约束状态视图 props 块与事件投影 prop 行，缺省恒真。 */
 	propPerception?: (world: World, player: string) => (e: Entity, prop: string) => boolean;
-	/** 状态视图的派生纹理，入 extra 键（顶层装配字段不可覆写）；无指称声明面。 */
+	/** 状态视图的派生纹理；无指称声明面。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	invariants?: Invariant[];
 	messages: Messages;
@@ -271,7 +271,7 @@ export interface GameDef {
 
 export interface InvariantCtx {
 	def: GameDef;
-	/** 起点世界的冻结副本；存档恢复时 ≠ def.world。 */
+	/** 起点世界的冻结副本 */
 	genesis: World;
 	changes: Change[];
 	src: string;
@@ -435,7 +435,7 @@ export interface ChronicleEntry {
 	steps: Step[];
 }
 
-/** 一刻内某个系统的产出；失败刻结构性属于必要性通道（invariant 否决）。 */
+/** 一刻内某个系统的产出；失败刻结构性属于必要性通道 */
 export type TickStep =
 	| { kind: "tick"; at: number; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
 	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; denial: Denial };
