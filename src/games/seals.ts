@@ -64,7 +64,7 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 	return out;
 }
 
-const base: GameDef = {
+const base: Omit<GameDef, "prompt"> = {
 	id: "seals",
 	title: "统一探针",
 	playerId: "player",
@@ -375,7 +375,7 @@ const base: GameDef = {
 
 const stateHeader = "[State view] (the slice of the world visible to you; what is not in it cannot be referred to):";
 
-const sealsSystemPrompt = (def: GameDef): string => {
+const sealsSystemPrompt = (def: Pick<GameDef, "verbs">): string => {
 	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
 		.map(([name, v]) => {
 			const refs = refParamsOf(v);
@@ -385,7 +385,7 @@ const sealsSystemPrompt = (def: GameDef): string => {
 	return `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。
 
 Parse the player's operational intent into action proposals and submit them via the act tool. act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn. A call rejected by static form checks does not occupy the window; fix the reported violations and resubmit. If you can form a legal proposal (the verb carries the intent, referential params take ids of visible entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you. If you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities. After act returns the world's adjudication results, write the turn as literary prose for the player based on them.
-Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly. A prompt may open with recent world results (verbatim player intents and the world's skeletal responses) for reference and continuation.
+Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly. A prompt may open with recent world results (player intents and the world's skeletal responses) for reference and continuation.
 World notes: entities lists every currently visible entity; relations lists the visible relation edges (from/to are entity ids, type is the relation name). id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
 Available verbs (enforced by the simulation layer):
 ${verbs}

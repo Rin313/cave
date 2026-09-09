@@ -137,6 +137,7 @@ export class Engine {
 	/** 装载即对账（resume），档案单侧：引擎自日志组装世界，不经第二档案侧。 */
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
 		if (def.recentWindow === undefined) throw new Error("GameDef.recentWindow 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
+		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 		if (!Number.isInteger(def.recentWindow) || def.recentWindow < 0) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
@@ -168,8 +169,7 @@ export class Engine {
 			cwd: process.cwd(),
 			agentDir: getAgentDir(),
 			settingsManager,
-			// pi 把 falsy customPrompt 回落为其 coding-agent 缺省提示
-			systemPrompt: def.prompt?.system ?? " ",
+			systemPrompt: def.prompt.system,
 			extensionFactories: [buildContextExtension(def, () => recent)],
 			noExtensions: true,
 			noSkills: true,

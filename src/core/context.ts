@@ -152,7 +152,7 @@ export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[
 }
 
 export function verbatim(s: string): string {
-	return JSON.stringify(s).replace(/[\u2028\u2029]/g, (c) => (c === "\u2028" ? "\\u2028" : "\\u2029"));
+	return JSON.stringify(s).replace(/[\u0085\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 /** 只保留最后一条 user 消息起的后缀 */

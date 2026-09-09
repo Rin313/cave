@@ -260,8 +260,8 @@ export interface GameDef {
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	invariants?: Invariant[];
 	messages: Messages;
-	prompt?: {
-		system?: string;
+	prompt: {
+		system: string;
 		turn?: (kit: PromptKit & { view: string; intent: string }) => string;
 		narrate?: (kit: PromptKit & { view: string; events: string[]; instruction: string }) => string;
 		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];
