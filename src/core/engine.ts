@@ -60,7 +60,7 @@ interface RunState {
 	usage: TokenUsage[];
 }
 
-/** 装载与定稿共享的档案态：records 是近况窗口源，lastSeq 是定稿序位，dead 非空即引擎毒化。 */
+/** 装载与定稿共享的档案态：records 是近况窗口源，lastSeq 是定稿序位 */
 interface Archive {
 	records: ChronicleEntry[];
 	lastSeq: number;
@@ -241,7 +241,6 @@ export class Engine {
 		};
 	}
 
-	/** 毒化后的引擎拒绝一切回合与呈现：世界领先于档案时，进程内任何走向都不安全，裁决权移交装载对账。 */
 	private assertLive(): void {
 		if (this.archive.dead !== null) throw new Error(`引擎已毒化（${this.archive.dead}）：须重启进程由日志对账`);
 	}
@@ -314,7 +313,7 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 	}
 }
 
-/** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到）。回合条目写点失败原样抛出，由调用方毒化。 */
+/** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到） */
 function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
 	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, intent: run.intent ?? "", steps: deepFreeze(run.steps) };
 	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
@@ -404,12 +403,12 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			try {
 				applyBatch(sim, proposed, steps);
 			} catch (e) {
-				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛代谢为可审计回合——已裁决步照常入账，其余不得虚构
+				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛代谢为可审计回合——已裁决步照常入账
 				crashed = errorText(e);
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}
 			run.steps = steps;
-			// 定稿先于一切呈现：窗口关闭即落条目；写点失败即毒化（世界领先于档案，进程内无安全走向）
+			// 定稿先于一切呈现：窗口关闭即落条目
 			try {
 				finalizeTurn(sim, sessionManager, run, archive);
 			} catch (e) {
