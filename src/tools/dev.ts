@@ -1,6 +1,5 @@
 import { defineVerb, grant, type GameDef } from "../core/sim.ts";
 
-/** 工具合成的时间通道：摇出的刻同样过裁决边界与审查。 */
 const DEV_WAIT = "dev.wait";
 
 export function withDevWait(def: GameDef): GameDef {

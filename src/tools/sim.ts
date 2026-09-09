@@ -8,7 +8,6 @@ import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli
 
 interface StepExpect {
 	ok?: boolean;
-	/** reason 子串匹配。 */
 	reason?: string;
 	/** 动作步的否决律（Denial.law）。 */
 	law?: string;

@@ -57,7 +57,7 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 			}
 		}
 	}
-	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 的旧格式），粗筛弃置`);
+	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 的旧格式）`);
 	return out;
 }
 
