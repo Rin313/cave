@@ -1,3 +1,4 @@
+import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { deepFreeze, errorText, roll as rollDice } from "./util.ts";
 
 export type Scalar = string | number | boolean;
@@ -219,6 +220,25 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 	return out;
 }
 
+/** 近况窗口内一条回合的呈现切片 */
+export interface RecentEntry {
+	time: number;
+	intent: string;
+	moves: string[];
+}
+
+export interface PromptKit {
+	/** 近况 */
+	recent: RecentEntry[];
+	/** 状态视图 */
+	view?: string;
+	intent?: string;
+	/** 事件骨架行 */
+	events?: string[];
+	/** 渲染指令 */
+	instruction?: string;
+}
+
 export interface GameDef {
 	id: string;
 	title: string;
@@ -240,7 +260,13 @@ export interface GameDef {
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	invariants?: Invariant[];
 	messages: Messages;
-	voice?: string;
+	prompt?: {
+		system?: string;
+		act?: string;
+		turn?: (kit: PromptKit & { view: string; intent: string }) => string;
+		narrate?: (kit: PromptKit & { view: string; events: string[]; instruction: string }) => string;
+		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];
+	};
 }
 
 export interface InvariantCtx {

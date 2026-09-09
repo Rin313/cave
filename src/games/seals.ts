@@ -1,5 +1,5 @@
-import type { Delta, Fact, GameDef, PropDef, Q, ViewValue, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, free, grant, ref, relVal } from "../core/sim.ts";
+import type { Delta, Fact, GameDef, PropDef, PromptKit, Q, ViewValue, World } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, free, grant, ref, refParamsOf, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
 const SEALS_PROPS: Record<string, PropDef> = {
@@ -64,7 +64,7 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 	return out;
 }
 
-export const seals: GameDef = {
+const base: GameDef = {
 	id: "seals",
 	title: "统一探针",
 	playerId: "player",
@@ -359,7 +359,6 @@ export const seals: GameDef = {
 		},
 	],
 	props: SEALS_PROPS,
-	voice: `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。`,
 	// 社会真相只经桶级披露与法则代笔流动（被测通道）
 	edgePerception: () => (r) => r.type !== "信任" && r.type !== "猜疑" && r.type !== "知晓",
 	// 信文只对知晓者可感（判据 = 知晓边）
@@ -372,4 +371,63 @@ export const seals: GameDef = {
 		return [...vis];
 	},
 	digestExtra: extraOf,
+};
+
+const stateHeader = "[State view] (the slice of the world visible to you; what is not in it cannot be referred to):";
+
+const sealsSystemPrompt = (def: GameDef): string => {
+	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
+		.map(([name, v]) => {
+			const refs = refParamsOf(v);
+			return `- ${name} "${v.label}": ${v.description}${refs.length ? ` (reference params: ${refs.join("/")} — must be ids of visible entities)` : ""}`;
+		})
+		.join("\n");
+	return `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。
+
+Parse the player's operational intent into action proposals and submit them via the act tool. act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn. A call rejected by static form checks does not occupy the window; fix the reported violations and resubmit. If you can form a legal proposal (the verb carries the intent, referential params take ids of visible entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you. If you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities. After act returns the world's adjudication results, write the turn as literary prose for the player based on them.
+Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly. A prompt may open with recent world results (verbatim player intents and the world's skeletal responses) for reference and continuation.
+World notes: entities lists every currently visible entity; relations lists the visible relation edges (from/to are entity ids, type is the relation name). id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
+Available verbs (enforced by the simulation layer):
+${verbs}
+
+Expression discipline:
+- Narration may only follow the adjudication results returned by act (attempts, changes, law facts, newly visible entities) and the entities and properties in the world state.
+- Objects, people, phenomena, and consequences absent from the state and the adjudication must not appear — consequences are produced by world laws, not invented by you; transcribing and rendering existing content (wording, perspective, atmosphere, literary devices) is entirely free, as long as it does not contradict the state.
+- Always refer to entities by name; never expose entity ids, property names, tool calls, or the decision process.
+- For a denied attempt, write only the attempt itself and the world's denial reason; never write consequences that did not happen.`;
+};
+
+const sealsRecentLines = (kit: PromptKit): string[] => {
+	if (!kit.recent.length) return [];
+	const lines = [`${kit.recent.length} recent turn(s), oldest last:`];
+	for (const r of kit.recent) {
+		lines.push(`- t${r.time} ${r.intent}`);
+		if (r.moves.length) for (const l of r.moves) lines.push(`  ${l}`);
+		else lines.push("  no visible events");
+	}
+	return lines;
+};
+
+const sealsTurnPrompt = (kit: PromptKit & { view: string; intent: string }): string => {
+	const lines = sealsRecentLines(kit);
+	if (lines.length) lines.push("");
+	lines.push(stateHeader, kit.view, "", `Player intent: ${kit.intent}`, "", "Parse the intent and call the act tool to submit an action proposal; after act returns the world's adjudication results, write the turn as literary prose for the player based on them.");
+	return lines.join("\n");
+};
+
+const sealsNarratePrompt = (kit: PromptKit & { view: string; events: string[]; instruction: string }): string => {
+	const lines = sealsRecentLines(kit);
+	if (lines.length) lines.push("");
+	lines.push("[Rendering service] This call has no action window; do not call act; write the prose text directly.", "", stateHeader, kit.view, "", ...kit.events, "", kit.instruction);
+	return lines.join("\n");
+};
+
+export const seals: GameDef = {
+	...base,
+	prompt: {
+		system: sealsSystemPrompt(base),
+		act: `Propose actions to the world (${Object.entries(base.verbs).filter(([, v]) => !v.internal).map(([n]) => n).join("/")}). World laws adjudicate the actions in order and return the results; referential params take ids of visible entities; an empty actions array is a refusal.`,
+		turn: sealsTurnPrompt,
+		narrate: sealsNarratePrompt,
+	},
 };

@@ -9,9 +9,9 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim, type RecentEntry } from "./context.ts";
+import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
-import { ProtocolViolation, Simulation, entity, refParamsOf, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Step } from "./sim.ts";
+import { ProtocolViolation, Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type PromptKit, type RecentEntry, type Step } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -22,19 +22,6 @@ export interface EngineOptions {
 }
 
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
-
-const CONTRACT = {
-	once: "act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn",
-	retry: "a call rejected by static form checks does not occupy the window; fix the reported violations and resubmit",
-	form: "The proposal failed the static form checks and never entered adjudication: fix the violations below and resubmit",
-	commit: "if you can form a legal proposal (the verb carries the intent, referential params take ids of visible entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you",
-	empty: "if you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities",
-	follow: "after act returns the world's adjudication results, write the turn as literary prose for the player based on them",
-} as const;
-
-const ACT_LATCH_MSG = `The action window is closed: ${CONTRACT.once}. Ignore this call and continue writing prose from what the turn already contains.`;
-
-const STATE_HEADER = "[State view] (the slice of the world visible to you; what is not in it cannot be referred to):";
 
 export interface ActOutcome {
 	steps: Step[];
@@ -181,8 +168,9 @@ export class Engine {
 			cwd: process.cwd(),
 			agentDir: getAgentDir(),
 			settingsManager,
-			systemPrompt: buildSystemPrompt(def),
-			extensionFactories: [buildContextExtension(() => recent)],
+			// pi 把 falsy customPrompt 回落为其 coding-agent 缺省提示
+			systemPrompt: def.prompt?.system ?? " ",
+			extensionFactories: [buildContextExtension(def, () => recent)],
 			noExtensions: true,
 			noSkills: true,
 			noPromptTemplates: true,
@@ -227,9 +215,9 @@ export class Engine {
 	async act(action: { intent: string }): Promise<ActOutcome> {
 		this.assertLive();
 		this.beginRun("mapping", action.intent);
-		const state = this.sim.digest();
+		const kit: PromptKit & { view: string; intent: string } = { view: this.sim.digest(), intent: verbatim(action.intent), recent: this.recent };
 		try {
-			await this.session.prompt(buildTurnPrompt(state, action.intent));
+			await this.session.prompt(this.sim.def.prompt?.turn?.(kit) ?? kit.intent);
 		} catch (e) {
 			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
 			if (this.run.phase === "mapping") throw e;
@@ -267,7 +255,8 @@ export class Engine {
 	async narrate(instruction: string, steps: Step[] = []): Promise<NarrationOutcome> {
 		this.assertLive();
 		this.beginRun("narration");
-		await this.session.prompt(buildNarratePrompt(this.sim, steps, instruction));
+		const kit: PromptKit & { view: string; events: string[]; instruction: string } = { view: this.sim.digest(), events: spineLines(this.sim, steps), instruction, recent: this.recent };
+		await this.session.prompt(this.sim.def.prompt?.narrate?.(kit) ?? kit.instruction);
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
 	}
 
@@ -291,59 +280,30 @@ export class Engine {
 	}
 }
 
-function buildContextExtension(recent: () => readonly RecentEntry[]): InlineExtension {
+function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): InlineExtension {
 	return {
 		name: "context",
 		factory: (pi) => {
-			pi.on("context", async (event) => ({ messages: pruneContext(event.messages, recent()) }));
+			pi.on("context", async (event) => {
+				const pruned = pruneContext(event.messages);
+				const kit: PromptKit = { recent: recent() };
+				return { messages: def.prompt?.context?.(pruned, kit) ?? pruned };
+			});
 		},
 	};
 }
 
-function buildTurnPrompt(state: string, intent: string): string {
-	return `${STATE_HEADER}\n${state}\n\nPlayer intent: ${verbatim(intent)}\n\nParse the intent and call the act tool to submit an action proposal (${CONTRACT.empty}); ${CONTRACT.follow}.`;
-}
-
-function buildSystemPrompt(def: GameDef): string {
-	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.internal)
-		.map(([name, v]) => {
-			const refs = refParamsOf(v);
-			return `- ${name} "${v.label}": ${v.description}${refs.length ? ` (reference params: ${refs.join("/")} — must be ids of visible entities)` : ""}`;
-		})
-		.join("\n");
-	const protocol = `Parse the player's operational intent into action proposals and submit them via the act tool (${CONTRACT.once}; ${CONTRACT.retry}). ${CONTRACT.commit}; ${CONTRACT.empty}. ${CONTRACT.follow}.
-Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly.
-World notes: entities lists every currently visible entity; relations lists the visible relation edges (from/to are entity ids, type is the relation name). id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
-Available verbs (enforced by the simulation layer):
-${verbs}
-
-Expression discipline:
-- Narration may only follow the adjudication results returned by act (attempts, changes, law facts, newly visible entities) and the entities and properties in the world state.
-- Objects, people, phenomena, and consequences absent from the state and the adjudication must not appear — consequences are produced by world laws, not invented by you; transcribing and rendering existing content (wording, perspective, atmosphere, literary devices) is entirely free, as long as it does not contradict the state.
-- Always refer to entities by name; never expose entity ids, property names, tool calls, or the decision process.
-- For a denied attempt, write only the attempt itself and the world's denial reason; never write consequences that did not happen.`;
-	return def.voice ? `${def.voice}\n\n${protocol}` : protocol;
-}
-
-function formatTurnEvents(sim: Simulation, steps: Step[], refused: boolean, intent: string | undefined, revealed: string[]): string[] {
+function formatTurnEvents(sim: Simulation, steps: Step[], revealed: string[]): string[] {
 	const lines = spineLines(sim, steps);
-	if (refused) lines.unshift(`The player's intent ${verbatim(intent ?? "")} was not parsed into an executable action; the world gives no response.`);
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
 		const perceiveProp = sim.def.propPerception?.(w, sim.player);
-		lines.push("Newly visible this turn:");
 		for (const id of revealed) {
 			const e = entity(w, id);
-			if (e) lines.push(`  ${JSON.stringify(viewCard(sim.def, e, perceiveProp))}`);
+			if (e) lines.push(JSON.stringify(viewCard(sim.def, e, perceiveProp)));
 		}
 	}
 	return lines;
-}
-
-function buildNarratePrompt(sim: Simulation, steps: Step[], instruction: string): string {
-	const lines = ["[Rendering service] This call has no action window; do not call act; write the prose text directly.", "", STATE_HEADER, sim.digest(), "", ...formatTurnEvents(sim, steps, false, undefined, [])];
-	lines.push("", instruction);
-	return lines.join("\n");
 }
 
 /** 逐动作落钟：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
@@ -414,16 +374,16 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 	return defineTool({
 		name: "act",
 		label: "World proposal",
-		description: `Propose actions to the world (${publicVerbs.map(([n]) => n).join("/")}). ${CONTRACT.commit}; ${CONTRACT.empty}. ${CONTRACT.once}; ${CONTRACT.retry}; world laws adjudicate the actions in order and return the results.`,
+		description: def.prompt?.act ?? publicVerbs.map(([n]) => n).join("/"),
 		parameters: {
 			type: "object",
 			properties: {
-				actions: { type: "array", items: hostParametersSchema(def), description: "Ordered action proposals to execute; omit this field when no legal proposal can be formed" },
+				actions: { type: "array", items: hostParametersSchema(def) },
 			},
 		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
 			if (run.phase !== "mapping") {
-				return { content: [{ type: "text", text: ACT_LATCH_MSG }], details: {} };
+				return { content: [{ type: "text", text: " " }], details: {} };
 			}
 			const proposed = (params.actions ?? []) as Action[];
 			// 形态校验先于窗口占用；act 通道的动词全集是广告面——内核检查裁决面全集，internal 动词由直连 apply 合法使用
@@ -436,7 +396,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				sim.validateBatch(proposed);
 			} catch (e) {
 				if (!(e instanceof ProtocolViolation)) throw e;
-				return { content: [{ type: "text", text: `${CONTRACT.form}\n${e.message}` }], details: {} };
+				return { content: [{ type: "text", text: e.message }], details: {} };
 			}
 			run.phase = "narration";
 			const steps: Step[] = [];
@@ -460,9 +420,9 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			try {
 				// 投影失灵时不重入 visible()：新见段缺席
 				const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
-				text = formatTurnEvents(sim, steps, proposed.length === 0, run.intent, revealed).join("\n");
-				if (crashed) text += `\nInternal defect: the above are the consequences that occurred before the interruption; the interrupted proposal was rolled back in full; do not invent the rest.`;
-				if (archive.dead) text += `\nInternal defect: ${archive.dead}`;
+				text = formatTurnEvents(sim, steps, revealed).join("\n");
+				if (crashed) text += `\napply.crash: ${crashed}`;
+				if (archive.dead) text += `\n${archive.dead}`;
 			} catch (e) {
 				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
 				run.warnings.push(`结果投影抛错：${errorText(e)}`);

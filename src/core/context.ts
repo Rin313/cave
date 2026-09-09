@@ -1,16 +1,10 @@
-// 每次调用只见「近况投影 + 当前运行后缀」；会话文件保存全量审计。
+// 会话文件保存全量审计。
 // 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, shownDepartedNames, spineLines, type ChronicleEntry, type GameDef, type Step, type World } from "./sim.ts";
+import { Simulation, shownDepartedNames, spineLines, type ChronicleEntry, type GameDef, type RecentEntry, type Step, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
-
-export interface RecentEntry {
-	time: number;
-	intent: string;
-	moves: string[];
-}
 
 export const TURN_RECORD_TYPE = "turn";
 export const CHECKPOINT_RECORD_TYPE = "checkpoint";
@@ -151,30 +145,18 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	return { sim, records, lastSeq, checkpointSeq: checkpoint ? boundary : null, warnings };
 }
 
-/** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底。 */
+/** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
-	return records.map((r) => ({ time: r.time, intent: r.intent, moves: spineLines(sim, r.steps, { departed }) }));
+	return records.map((r) => ({ time: r.time, intent: verbatim(r.intent), moves: spineLines(sim, r.steps, { departed }) }));
 }
 
-/** 玩家文本进机械投影的唯一合法形态：JSON 串编码——内容逐字、结构惰性。stringify 不转义的行分隔符（U+2028/9）手动补转义。 */
 export function verbatim(s: string): string {
 	return JSON.stringify(s).replace(/[\u2028\u2029]/g, (c) => (c === "\u2028" ? "\\u2028" : "\\u2029"));
 }
 
-function renderRecent(recent: readonly RecentEntry[]): string {
-	if (!recent.length) return "";
-	const lines: string[] = [];
-	for (const m of recent) {
-		lines.push(`- t${m.time} ${verbatim(m.intent)}`);
-		if (m.moves.length) for (const l of m.moves) lines.push(`  ${l}`);
-		else lines.push("  no visible events");
-	}
-	return ["[Recent] World results of the last few turns (for reference and continuation):", ...lines].join("\n");
-}
-
-/** 只保留最后一条 user 消息起的后缀，近况并入其头部；不改会话持久化。 */
-export function pruneContext(messages: CtxMessages, recent: readonly RecentEntry[]): CtxMessages {
+/** 只保留最后一条 user 消息起的后缀 */
+export function pruneContext(messages: CtxMessages): CtxMessages {
 	let last = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		if (messages[i]?.role === "user") {
@@ -183,10 +165,5 @@ export function pruneContext(messages: CtxMessages, recent: readonly RecentEntry
 		}
 	}
 	if (last < 0) return messages;
-	const suffix = [...messages.slice(last)];
-	const head = renderRecent(recent);
-	const first = suffix[0] as (CtxMessages[number] & { content?: unknown }) | undefined;
-	if (!head || !first || typeof first.content !== "string") return suffix;
-	first.content = `${head}\n\n${first.content}`;
-	return suffix;
+	return messages.slice(last);
 }
