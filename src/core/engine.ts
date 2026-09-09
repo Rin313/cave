@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
-import { ProtocolViolation, Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type PromptKit, type RecentEntry, type Step, type VerbDef } from "./sim.ts";
+import { Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type PromptKit, type RecentEntry, type Step, type VerbDef } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -368,7 +368,6 @@ function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
 
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Archive, sessionManager: SessionManager) {
 	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
-	const advertised = new Set(publicVerbs.map(([name]) => name));
 	return defineTool({
 		name: "act",
 		label: "act",
@@ -385,18 +384,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				return { content: [{ type: "text", text: " " }], details: {}, terminate: true };
 			}
 			const proposed = (params.actions ?? []) as Action[];
-			// 通道次序的执行者是 pi 的宿主面校验（execute 前整批拦截）；此处为纵深防御——内核按裁决面全集检查，internal 动词由直连 apply 合法使用
-			try {
-				for (const a of proposed) {
-					if (!advertised.has(a.verb)) {
-						throw new ProtocolViolation("action.unknown", `verb:${a.verb} (available verbs: ${[...advertised].join(", ")})`);
-					}
-				}
-				sim.validateBatch(proposed);
-			} catch (e) {
-				if (!(e instanceof ProtocolViolation)) throw e;
-				return { content: [{ type: "text", text: e.message }], details: {} };
-			}
+			// 形态校验完全托付宿主面（execute 前整批拦截）
 			run.phase = "narration";
 			const steps: Step[] = [];
 			let crashed: string | null = null;
