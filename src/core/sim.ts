@@ -296,18 +296,18 @@ function sameLedger(a: PropValue, b: PropValue): boolean {
 	return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-export function integrityInvariant(): Invariant {
-	const got = (v: PropValue): string => {
-		if (v === null) return "null";
-		if (typeof v === "number") return Number.isFinite(v) ? "number" : "non-finite number";
-		if (Array.isArray(v)) return "array";
-		if (typeof v === "object") return "object";
-		return typeof v;
-	};
-	return {
-		id: "integrity",
-		check: (world, ctx) => {
-			if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
+const got = (v: PropValue): string => {
+	if (v === null) return "null";
+	if (typeof v === "number") return Number.isFinite(v) ? "number" : "non-finite number";
+	if (Array.isArray(v)) return "array";
+	if (typeof v === "object") return "object";
+	return typeof v;
+};
+
+const integrityInvariant: Invariant = {
+	id: "integrity",
+	check: (world, ctx) => {
+		if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
 			if (!Array.isArray(world.relations)) return "integrity: world.relations must be an array";
 			for (const k of Object.keys(world)) {
 				if (k !== "time" && k !== "entities" && k !== "relations") return `integrity: world.${k} is not part of the ledger shape`;
@@ -367,12 +367,11 @@ export function integrityInvariant(): Invariant {
 				const eid = tupleKey([r.from, r.to, r.type]);
 				if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
 				edgeIds.add(eid);
-				if (r.value === null || !isLedgerValue(r.value)) return `integrity: relation ${r.type} -> value is not a ledger value (stored edges never hold null)`;
-			}
-			return null;
-		},
-	};
-}
+			if (r.value === null || !isLedgerValue(r.value)) return `integrity: relation ${r.type} -> value is not a ledger value (stored edges never hold null)`;
+		}
+		return null;
+	},
+};
 
 function internalPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
@@ -404,21 +403,10 @@ function tupleKey(parts: readonly string[]): string {
 
 export type Step = ActionStep | TickStep;
 
-export interface ActionStep {
-	kind: "action";
-	/** 裁决发生时刻的钟值；本授予的刻步为 at+1..at+ticks。 */
-	at: number;
-	ok: boolean;
-	reason?: string;
-	changes: Change[];
-	field: FieldSpan;
-	action: Action;
-	ticks: number;
-	/** rule＝卫语句链或可见性门（含 unanswered 闭合）；invariant＝必要性拦截。 */
-	deniedBy?: "rule" | "invariant";
-	denial?: Denial;
-	facts?: Fact[];
-}
+/** 本授予的刻步为 at+1..at+ticks；法则之声（reason/facts）只住授予分支，拒绝的声音由 denial 派生。deniedBy: rule＝卫语句链或可见性门（含 unanswered 闭合），invariant＝必要性拦截。 */
+export type ActionStep =
+	| { kind: "action"; at: number; ok: true; changes: Change[]; field: FieldSpan; action: Action; ticks: number; reason?: string; facts?: Fact[] }
+	| { kind: "action"; at: number; ok: false; changes: []; field: FieldSpan; action: Action; ticks: number; deniedBy: "rule" | "invariant"; denial: Denial };
 
 export interface Resolution {
 	step: ActionStep;
@@ -558,9 +546,10 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 			const changes = narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
 				changes.length ? `(${changes.join("; ")})` : "",
-				s.facts?.length ? `[${s.facts.join("; ")}]` : "",
+				s.ok && s.facts?.length ? `[${s.facts.join("; ")}]` : "",
 			].join("");
-			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}${s.reason !== undefined ? `：${s.reason}` : ""}${tail}`);
+			const voice = s.ok ? s.reason : renderDenial(sim.def, s.denial);
+			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}${voice !== undefined ? `：${voice}` : ""}${tail}`);
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [], denials: [] };
 			if (s.ok) {
@@ -580,10 +569,10 @@ export function relVal(world: World, from: string, to: string, type: string): Le
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 拒绝态 deniedBy/denial/reason 必填；*.crash 无世界腔由 noResponse 兜底 */
+/** 裁决表态的引擎侧补全（出处、deniedBy）：无记录字段，step 与时价公式住在 applyInner 的唯一汇编点 */
 type RawResult =
-	| ({ ok: true; deltas: Delta[]; src: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial">)
-	| ({ ok: false; deltas: Delta[]; deniedBy: "rule" | "invariant"; denial: Denial; reason: string } & Omit<ActionStep, "kind" | "at" | "field" | "ok" | "deltas" | "deniedBy" | "denial" | "reason">);
+	| { ok: true; deltas: Delta[]; src: string; reason?: string; facts?: Fact[]; ticks?: number }
+	| { ok: false; deniedBy: "rule" | "invariant"; denial: Denial };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -692,17 +681,14 @@ export class Simulation {
 		return verb;
 	}
 
-	private adjudicateRaw(action: Action, curVis: Set<string>, world: World): RawResult {
-		const msgs = this.def.messages;
-		const verb = this.staticForm(action);
-		const cost = verb.cost;
+	private adjudicateRaw(action: Action, verb: VerbDef, curVis: Set<string>, world: World): RawResult {
 		const invalid = refParamsOf(verb)
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && !curVis.has(id));
 		if (invalid.length) {
 			// 幻觉 id 与隐藏实体同一文案：门对参照域外零泄漏
-			const reason = msgs.invisibleEntity ?? msgs.noResponse;
-			return { ok: false, reason, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.invisible", reason, debug: invalid.join(",") }, ticks: cost };
+			const invisible = this.def.messages.invisibleEntity;
+			return { ok: false, deniedBy: "rule", denial: { law: "action.invisible", ...(invisible !== undefined && { reason: invisible }), debug: invalid.join(",") } };
 		}
 		for (const r of verb.rules) {
 			const src = `rule:${action.verb}.${r.id}`;
@@ -711,18 +697,18 @@ export class Simulation {
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${src}: ${e instanceof Error ? e.message : String(e)}` }, ticks: cost };
+				return { ok: false, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${src}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
 			if (v.ok) {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
-					return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` }, ticks: cost };
+					return { ok: false, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
 				}
-				return { ok: true, changes: [], deltas: v.deltas, action, ...(v.reason !== undefined && { reason: v.reason }), ...(v.facts !== undefined && { facts: v.facts }), src, ticks: v.ticks ?? cost };
+				return { ok: true, deltas: v.deltas, src, ...(v.reason !== undefined && { reason: v.reason }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, reason: renderDenial(this.def, v.denial), changes: [], deltas: [], action, deniedBy: "rule", denial: v.denial, ticks: cost };
+			return { ok: false, deniedBy: "rule", denial: v.denial };
 		}
-		return { ok: false, reason: msgs.noResponse, changes: [], deltas: [], action, deniedBy: "rule", denial: { law: "action.unanswered" }, ticks: cost };
+		return { ok: false, deniedBy: "rule", denial: { law: "action.unanswered" } };
 	}
 
 	/** path 是骰子地址的机器身份，src 是其可读渲染，成对构造。 */
@@ -731,7 +717,7 @@ export class Simulation {
 			world,
 			player: this.player,
 			params,
-			roll: (key, sides) => rollDice(world, tupleKey([...path, key]), sides),
+			roll: (key, sides) => rollDice(world.time, tupleKey([...path, key]), sides),
 		};
 	}
 
@@ -745,14 +731,13 @@ export class Simulation {
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
-	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial; reason: string } {
+	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
 		const genesis = this.genesis();
-		const msgs = this.def.messages;
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
-				return { ok: false, denial: out.refusal, reason: msgs.noResponse };
+				return { ok: false, denial: out.refusal };
 			}
 			const inv = this.checkInvariants(src, genesis, out.changes);
 			if (inv) {
@@ -760,21 +745,21 @@ export class Simulation {
 				const denial: Denial = inv.authored
 					? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
 					: { law: `invariant.${inv.id}`, debug: inv.message };
-				return { ok: false, denial, reason: denial.reason ?? msgs.noResponse };
+				return { ok: false, denial };
 			}
 			return { ok: true, changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
-			return { ok: false, denial: { law: "invariant.crash", debug }, reason: msgs.noResponse };
+			return { ok: false, denial: { law: "invariant.crash", debug } };
 		}
 	}
 
 	private checkInvariants(src: string, genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
 		const world = this.readState();
 		const frozen = deepFreeze(changes);
-		const integrity = integrityInvariant().check(world, { def: this.def, genesis, changes: frozen, src });
-		if (integrity) return { id: "integrity", message: integrity, authored: false };
+		const broken = integrityInvariant.check(world, { def: this.def, genesis, changes: frozen, src });
+		if (broken) return { id: "integrity", message: broken, authored: false };
 		for (const inv of this.def.invariants ?? []) {
 			const msg = inv.check(world, { def: this.def, genesis, changes: frozen, src });
 			if (msg) return { id: inv.id, message: msg, authored: true };
@@ -796,23 +781,22 @@ export class Simulation {
 
 	private applyInner(action: Action, s0: World): Resolution {
 		const at = s0.time;
+		const verb = this.staticForm(action);
 		const before = this.visibleIn(s0);
 		const open = this.openField(s0, before);
-		const r = this.adjudicateRaw(action, before, s0);
-		let step: Omit<ActionStep, "field">;
+		const r = this.adjudicateRaw(action, verb, before, s0);
+		let step: ActionStep;
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.src);
-			if (!cc.ok) {
-				step = { kind: "action", at, ok: false, reason: cc.reason, changes: [], action, deniedBy: "invariant", denial: cc.denial, ticks: this.def.verbs[action.verb]!.cost };
-			} else {
-				step = { kind: "action", at, ok: true, changes: cc.changes, action, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }), ticks: r.ticks };
-			}
+			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
+			step = cc.ok
+				? { kind: "action", at, field, ok: true, changes: cc.changes, action, ticks: r.ticks ?? verb.cost, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) }
+				: { kind: "action", at, field, ok: false, changes: [], action, ticks: verb.cost, deniedBy: "invariant", denial: cc.denial };
 		} else {
-			step = { kind: "action", at, ok: false, reason: r.reason, changes: [], action, deniedBy: r.deniedBy, denial: r.denial, ticks: r.ticks };
+			const field = this.closeField(before, open, false);
+			step = { kind: "action", at, field, ok: false, changes: [], action, ticks: verb.cost, deniedBy: r.deniedBy, denial: r.denial };
 		}
-		const field = this.closeField(before, open, step.ok && step.changes.length > 0);
-		const elapsed = step.ticks > 0 ? this.tick(step.ticks) : [];
-		return { step: { ...step, field }, elapsed };
+		return { step, elapsed: step.ticks > 0 ? this.tick(step.ticks) : [] };
 	}
 
 	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态参照域判，出域引用恒原样回显（在世名与离场名都不查）。 */
@@ -854,8 +838,8 @@ export class Simulation {
 				}
 			}
 			this.world.time = record.time;
-			const inv = integrityInvariant().check(this.readState(), { def: this.def, genesis: s0, changes: [], src: `replay:${record.seq}` });
-			if (inv) return fail(`integrity：${inv}`);
+			const broken = integrityInvariant.check(this.readState(), { def: this.def, genesis: s0, changes: [], src: `replay:${record.seq}` });
+			if (broken) return fail(`integrity：${broken}`);
 			return null;
 		} catch (e) {
 			return fail(errorText(e));

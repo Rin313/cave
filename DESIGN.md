@@ -94,7 +94,7 @@ roll(t, src, key, sides) = 1 + ⌊h(t, src, key) · sides⌋      h : 确定性�
 
 ```
 Step ::= ActionStep | TickStep
-ActionStep = (at, ok, reason?, changes, field, action, ticks, deniedBy?, denial?, facts?)
+ActionStep = (at, ok, reason?, changes, field, action, ticks, facts?) | (at, ok=false, deniedBy, denial, field, action, ticks)
 TickStep   = (at, ok, changes, field, facts?) | (at, ok=false, denial, field)
 ```
 

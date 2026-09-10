@@ -69,7 +69,7 @@ export interface Resumed {
 	warnings: string[];
 }
 
-/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要，截断而非剔除（名字闭合依赖完整时间后缀）。 */
+/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要（试投影辖全窗口，序位检查只辖覆盖段——重放段的连续性由对账强制），截断而非剔除（名字闭合依赖完整时间后缀）。 */
 export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const warnings: string[] = [];
 	const log = loadLog(entries, warnings);
@@ -119,11 +119,11 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
 	const excess = records.length - def.recentWindow;
 	if (excess > 0) records.splice(0, excess);
-	// 纪要完好按消费判据：seq 连续加试投影存活；坏点使近况截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
+	// 纪要完好按消费判据：试投影辖全窗口，序位检查只辖覆盖段（重放段的连续性由对账强制）；坏点使近况截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
 	let cut = -1;
 	records.forEach((r, i) => {
 		const prev = records[i - 1];
-		const gap = prev !== undefined && r.seq !== prev.seq + 1 ? `序位断裂 ${prev.seq}→${r.seq}` : null;
+		const gap = prev !== undefined && prev.seq <= boundary && r.seq !== prev.seq + 1 ? `序位断裂 ${prev.seq}→${r.seq}` : null;
 		let reason = gap;
 		if (!reason) {
 			try {

@@ -127,9 +127,10 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Step[]; er
 		const a = ex.steps[0];
 		if (a?.kind !== "action") return ["（无动作步）"];
 		const denied = ex.steps.filter((s): s is Extract<TickStep, { ok: false }> => s.kind === "tick" && !s.ok);
+		const voice = a.ok ? a.reason : renderDenial(sim.def, a.denial);
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
-		if (e.reason !== undefined && !(a.reason ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${a.reason ?? ""}」`);
-		if (e.law !== undefined && (a.denial?.law ?? null) !== e.law) p.push(`law: expected ${e.law} got ${a.denial?.law ?? null}`);
+		if (e.reason !== undefined && !(voice ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${voice ?? ""}」`);
+		if (e.law !== undefined && (a.ok ? null : a.denial.law) !== e.law) p.push(`law: expected ${e.law} got ${a.ok ? null : a.denial.law}`);
 		if (e.tickDenied === true && denied.length === 0) p.push("tickDenied: 期望刻步被必要性通道拦截，未发生");
 		if (e.tickDenied !== true) for (const t of denied) p.push(`刻步被硬墙拦截: ${t.denial.debug}`);
 	}
@@ -166,7 +167,7 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
 				: a?.kind === "action"
-					? `ok=${a.ok}${a.denial ? ` law=${a.denial.law}` : ""} reason="${a.reason ?? ""}"${denied ? ` 拦截刻×${denied}` : ""}`
+					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.reason ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
 					: "（无动作步）",
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
@@ -335,7 +336,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			}
 			else {
 				const bug = step.deniedBy === "invariant" ? bugOf(step.denial) : undefined;
-				rows.push({ verb: action.verb, op, law: step.denial?.law ?? "-", reason: step.reason ?? "", ...(bug !== undefined && { bug }) });
+				rows.push({ verb: action.verb, op, law: step.denial.law, reason: renderDenial(def, step.denial), ...(bug !== undefined && { bug }) });
 			}
 			for (const t of elapsed) {
 				if (t.ok) continue;
