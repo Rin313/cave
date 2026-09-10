@@ -60,15 +60,17 @@ export interface Messages {
 /** 规则铸造的世界腔，进结果视图供叙述跟随。 */
 export type Fact = string;
 
-/** 槽的意义种类：ref 的载体是 string 且元素须在世，string 是字面；any 是任意。 */
-export type Kind = "string" | "ref" | "number" | "boolean" | "any";
+/** 载体：值的运行时域；any 为不约束载体的顶。 */
+export type Kind = "string" | "number" | "boolean" | "any";
 
-/** 标量意义种类（参数面不含 any）。 */
+/** 参数载体（参数面无 any）。 */
 export type ScalarKind = Exclude<Kind, "any">;
 
 export interface PropDef {
-	/** 意义种类；值的形状 = 载体 × 重数，引用解释附于载体 string。 */
+	/** 载体；存储形状 = 载体 × 重数。 */
 	type: Kind;
+	/** string 载体上的引用解释：值为实体 id 且须在世。 */
+	ref?: true;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: boolean;
 	/** 模型面的槽名：非 internal、非 designated 的槽须全域且两两相异；key 不进模型面。 */
@@ -148,8 +150,10 @@ function deltaOf(c: Change): Delta {
 
 /** 动词参数的声明面。 */
 export interface ParamSpec {
-	/** 意义种类：ref＝实体 id（过可见性门），string＝字面。 */
+	/** 载体（参数面无 any）。 */
 	type: ScalarKind;
+	/** string 载体上的引用解释：值为实体 id，过可见性门。 */
+	ref?: true;
 	optional?: true;
 	description?: string;
 }
@@ -164,8 +168,8 @@ export type ParamsOf<P extends Record<string, ParamSpec>> = {
 };
 
 /** 指称参数：值是实体 id，过可见性门。 */
-export function ref(description?: string): { type: "ref"; description?: string } {
-	return { type: "ref", ...(description !== undefined && { description }) };
+export function ref(description?: string): { type: "string"; ref: true; description?: string } {
+	return { type: "string", ref: true, ...(description !== undefined && { description }) };
 }
 
 /** 自由字符串：值按字面进入裁决。 */
@@ -174,7 +178,7 @@ export function free(description?: string): { type: "string"; description?: stri
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
-	return Object.keys(verb.params).filter((k) => verb.params[k]?.type === "ref");
+	return Object.keys(verb.params).filter((k) => verb.params[k]?.ref === true);
 }
 
 /** 规则参数由 params 声明推导编译期类型。 */
@@ -222,8 +226,7 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 			if (!s.optional) out.push(`params.${name}: missing required parameter${desc(s)}`);
 			continue;
 		}
-		const carrier = s.type === "ref" ? "string" : s.type;
-		if (typeof v !== carrier) out.push(`params.${name}: must be ${s.type}${desc(s)}`);
+		if (typeof v !== s.type) out.push(`params.${name}: must be ${s.ref ? "ref" : s.type}${desc(s)}`);
 	}
 	return out;
 }
@@ -370,7 +373,7 @@ const integrityInvariant: Invariant = {
 					if (p === ctx.def.designationKey && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
 					for (const x of Array.isArray(v) ? v : [v]) {
 						if (pd.type === "any") continue;
-						if (pd.type === "ref") {
+						if (pd.ref) {
 							if (typeof x !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(x)}`;
 							if (!ids.has(x)) return `integrity: ${e.id}.${p} -> missing entity ${x}`;
 							continue;
@@ -451,17 +454,10 @@ function tupleKey(parts: readonly string[]): string {
 /** 步的来源：意志（玩家经广告面提案）、时钟（泵逐刻自鸣）、代码（internal 动词直连）。于构造时由 (泵?, 动词.internal?) 定，随步入账——记录自含分类，投影不复依赖 def。 */
 export type Origin = "will" | "clock" | "code";
 
-/** 携提案的源（意志或代码直连）；时钟无提案。 */
-type ProposedOrigin = Exclude<Origin, "clock">;
-
-/** 步的来源归属：will/code 携提案（proposal.verb 即动词），clock 无提案故自带 verb。价 = granted ?? cost；时钟步恒 0。声：授予带 reason?/facts?，否决带 denial。src 是发言者地址：rule:<verb>.<rule> 或 gate:<law>。deniedBy: rule＝卫语句链/可见性门/unanswered，invariant＝必要性拦截。 */
+/** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）；origin 只分流行为。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。声：授予带 reason?/facts?，否决带 deniedBy + denial。src 是发言者地址：rule:<verb>.<rule> 或 gate:<law>。deniedBy: rule＝卫语句链/可见性门/unanswered，invariant＝必要性拦截。 */
 export type Commit =
-	| { at: number; src: string; origin: ProposedOrigin; proposal: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
-	| { at: number; src: string; origin: ProposedOrigin; proposal: Action; price: number; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial }
-	| { at: number; src: string; origin: "clock"; verb: string; price: 0; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
-	| { at: number; src: string; origin: "clock"; verb: string; price: 0; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial };
-
-export type Attempt = Extract<Commit, { proposal: Action }>;
+	| { at: number; src: string; origin: Origin; action: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
+	| { at: number; src: string; origin: Origin; action: Action; price: number; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial };
 
 export interface Resolution {
 	step: Commit;
@@ -525,9 +521,9 @@ function renderValue(face: Face, v: Payload, ref: boolean): { text: string; ids:
 	return { text: texts.join(", "), ids };
 }
 
-/** 注册表 ref 型的属性值是引用；关系值与未声明值一律字面。 */
+/** 注册表 ref 声明的属性值是引用；关系值与未声明值一律字面。 */
 function refProp(def: Pick<GameDef, "props">, prop: string): boolean {
-	return def.props?.[prop]?.type === "ref";
+	return def.props?.[prop]?.ref === true;
 }
 
 /** 值位指称与边端点同过参照门：目标不在参照域则整槽遮蔽——披露的指称必有卡。 */
@@ -665,7 +661,8 @@ export class Simulation {
 				ruleIds.add(r.id);
 			}
 			for (const [p, s] of Object.entries(v.params)) {
-				if (s.type !== "string" && s.type !== "ref" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/ref/number/boolean），得到 ${String(s.type)}`);
+				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量载体（string/number/boolean），得到 ${String(s.type)}`);
+				if (s.ref && s.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 ref 解释仅限 string 载体`);
 			}
 			if (v.clock) {
 				const required = Object.values(v.params).filter((s) => !s.optional);
@@ -673,13 +670,14 @@ export class Simulation {
 			}
 		}
 		for (const [k, pd] of Object.entries(def.props ?? {})) {
-			if (pd.type !== "string" && pd.type !== "ref" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "any") throw new Error(`属性「${k}」的 type 须为 string/ref/number/boolean/any，得到 ${String(pd.type)}`);
+			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "any") throw new Error(`属性「${k}」的 type 须为 string/number/boolean/any，得到 ${String(pd.type)}`);
+			if (pd.ref && pd.type !== "string") throw new Error(`属性「${k}」的 ref 解释仅限 string 载体`);
 			if (pd.many !== undefined && typeof pd.many !== "boolean") throw new Error(`属性「${k}」的 many 须为布尔，得到 ${String(pd.many)}`);
 		}
 		if (typeof def.designationKey !== "string" || def.designationKey === "") throw new Error("GameDef.designationKey 必填：指称呈现的键");
 		const designated = def.props?.[def.designationKey];
 		if (!designated) throw new Error(`designated 键「${def.designationKey}」未注册于 props`);
-		if (designated.type !== "string" || designated.many === true) throw new Error(`designated 键「${def.designationKey}」须为标量 string 型`);
+		if (designated.type !== "string" || designated.ref || designated.many === true) throw new Error(`designated 键「${def.designationKey}」须为标量 string 型（非 ref）`);
 		if (designated.internal) throw new Error(`designated 键「${def.designationKey}」不得 internal`);
 		// 模型面的槽名唯一：key 不进模型面，可渲染槽须携非空且两两相异的 label
 		const labels = new Map<string, string>();
@@ -880,7 +878,7 @@ export class Simulation {
 	private attempt(s0: World, action: Action, pump: boolean): Commit {
 		const at = s0.time;
 		const verb = this.staticForm(action);
-		const source = verb.internal ? "code" : "will";
+		const origin: Origin = pump ? "clock" : verb.internal ? "code" : "will";
 		const before = this.visibleIn(s0);
 		const open = this.openField(s0, before);
 		const r = this.adjudicateRaw(action, verb, before, s0, pump);
@@ -888,17 +886,11 @@ export class Simulation {
 			const cc = this.commitChecked(s0, r.deltas, r.src);
 			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
 			if (!cc.ok)
-				return pump
-					? { at, src: r.src, origin: "clock", verb: action.verb, price: 0, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial }
-					: { at, src: r.src, origin: source, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial };
-			return pump
-				? { at, src: r.src, origin: "clock", verb: action.verb, price: 0, ok: true, changes: cc.changes, field, ...(r.facts !== undefined && { facts: r.facts }) }
-				: { at, src: r.src, origin: source, proposal: action, price: r.ticks ?? verb.cost, ok: true, changes: cc.changes, field, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
+				return { at, src: r.src, origin, action, price: pump ? 0 : verb.cost, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial };
+			return { at, src: r.src, origin, action, price: pump ? 0 : (r.ticks ?? verb.cost), ok: true, changes: cc.changes, field, ...(!pump && r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
 		}
 		const field = this.closeField(before, open, false);
-		return pump
-			? { at, src: r.src, origin: "clock", verb: action.verb, price: 0, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial }
-			: { at, src: r.src, origin: source, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial };
+		return { at, src: r.src, origin, action, price: pump ? 0 : verb.cost, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial };
 	}
 
 	private pump(price: number): Commit[] {
@@ -915,8 +907,8 @@ export class Simulation {
 	}
 
 	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态参照域判，过门者取 πₚ 可读之脸，否则原样回显——幻觉、隐藏、离场同一回显。 */
-	describeAction(s: Attempt, face: Face): string {
-		const action = s.proposal;
+	describeAction(s: Commit, face: Face): string {
+		const action = s.action;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
 		const legal = new Set(s.field.before);

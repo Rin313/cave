@@ -30,11 +30,11 @@ interface RawTurn {
 /** 信封粗筛：损坏条目在此离场（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; src?: unknown; price?: unknown; ok?: unknown; origin?: unknown; verb?: unknown; proposal?: unknown };
-	if (typeof c.at !== "number" || typeof c.src !== "string" || typeof c.ok !== "boolean") return false;
-	if (c.origin === "clock") return typeof c.verb === "string" && c.price === 0;
-	if (c.origin === "will" || c.origin === "code") return c.proposal !== null && typeof c.proposal === "object" && typeof c.price === "number";
-	return false;
+	const c = s as { at?: unknown; src?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown };
+	if (typeof c.at !== "number" || typeof c.src !== "string" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
+	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
+	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
+	return a !== null && typeof a === "object" && typeof a.verb === "string" && a.params !== null && typeof a.params === "object";
 }
 
 interface RawCheckpoint {

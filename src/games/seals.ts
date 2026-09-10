@@ -5,11 +5,11 @@ import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 const SEALS_PROPS: Record<string, PropDef> = {
 	name: { type: "string" },
 	kind: { type: "string", label: "类别" },
-	in: { type: "ref", label: "持者" },
+	in: { type: "string", ref: true, label: "持者" },
 	space: { type: "boolean", label: "场景" },
 	seal: { type: "boolean", label: "火漆" },
-	sender: { type: "ref", label: "寄信人" },
-	recipient: { type: "ref", label: "收信人" },
+	sender: { type: "string", ref: true, label: "寄信人" },
+	recipient: { type: "string", ref: true, label: "收信人" },
 	content: { type: "string", label: "信文" },
 	introduced: { type: "boolean", internal: true },
 	vessel: { type: "boolean", internal: true },
@@ -39,7 +39,7 @@ const host = (q: Q): string => hostOf(q.world, q.player);
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
 		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
-			if (pd.type !== "ref") continue;
+			if (pd.ref !== true) continue;
 			const v = e.props[k];
 			if (v === id || (Array.isArray(v) && v.includes(id))) return e.id;
 		}
