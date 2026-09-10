@@ -49,7 +49,7 @@ export interface Action {
 export interface Messages {
 	/** 所有法则未表态时的兜底回应。 */
 	noResponse: string;
-	/** 指称参数不可见/不存在的统一文案：幻觉 id 与隐藏实体同一文案。 */
+	/** 指称参数不可见/不存在的统一文案 */
 	invisibleEntity?: string;
 	/** 时间流逝的文案（刻步的段头与近况渲染）。 */
 	timePassed: string;
@@ -720,7 +720,6 @@ export class Simulation {
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && !curVis.has(id));
 		if (invalid.length) {
-			// 幻觉 id 与隐藏实体同一文案：门对参照域外零泄漏
 			const invisible = this.def.messages.invisibleEntity;
 			return { ok: false, src: "gate:action.invisible", deniedBy: "rule", denial: { law: "action.invisible", ...(invisible !== undefined && { reason: invisible }), debug: invalid.join(",") } };
 		}
