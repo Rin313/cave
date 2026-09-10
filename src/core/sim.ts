@@ -12,7 +12,6 @@ export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: s
 
 export interface Entity {
 	id: string;
-	name: string;
 	props: Record<string, LedgerValue>;
 }
 
@@ -32,17 +31,15 @@ export interface World {
 export type Delta =
 	| { op: "set"; entity: string; prop: string; value: PropValue }
 	| { op: "relSet"; from: string; to: string; type: string; value: LedgerValue | null }
-	| { op: "rename"; entity: string; value: string }
 	| { op: "spawn"; entity: Entity }
 	| { op: "despawn"; entity: string };
 
-/** 后态完整 diff；despawn.name 是离场名的唯一来源。 */
+/** 后态完整 diff；despawn.entity 是离场终态 */
 export type Change =
 	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue }
-	| { kind: "rename"; entity: string; prev: string; next: string }
 	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue }
 	| { kind: "spawn"; entity: Entity }
-	| { kind: "despawn"; entity: string; name: string };
+	| { kind: "despawn"; entity: Entity };
 
 export interface Action {
 	verb: string;
@@ -124,7 +121,6 @@ export function deny(law: string, o: { reason?: string } = {}): Verdict {
 export const D = {
 	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
 	relSet: (from: string, to: string, type: string, value: LedgerValue | null): Delta => ({ op: "relSet", from, to, type, value }),
-	rename: (entity: string, value: string): Delta => ({ op: "rename", entity, value }),
 	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
 	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
 };
@@ -133,8 +129,7 @@ export const D = {
 function deltaOf(c: Change): Delta {
 	switch (c.kind) {
 		case "spawn": return D.spawn(JSON.parse(JSON.stringify(c.entity)) as Entity);
-		case "despawn": return D.despawn(c.entity);
-		case "rename": return D.rename(c.entity, c.next);
+		case "despawn": return D.despawn(c.entity.id);
 		case "prop": return D.set(c.entity, c.prop, c.next);
 		case "rel": return D.relSet(c.from, c.to, c.type, c.next);
 	}
@@ -244,6 +239,8 @@ export interface GameDef {
 	title: string;
 	/** 指向普通实体的锚引用，integrity 恒查其在世；Q.player 即其值。 */
 	playerId: string;
+	/** 指称呈现的键 */
+	designationKey: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
 	systems?: SystemRule[];
@@ -296,6 +293,13 @@ function sameLedger(a: PropValue, b: PropValue): boolean {
 	return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
+function sameEntity(a: Entity, b: Entity): boolean {
+	if (a.id !== b.id) return false;
+	const ka = Object.keys(a.props);
+	const kb = Object.keys(b.props);
+	return ka.length === kb.length && ka.every((k) => sameLedger(a.props[k] ?? null, b.props[k] ?? null));
+}
+
 const got = (v: PropValue): string => {
 	if (v === null) return "null";
 	if (typeof v === "number") return Number.isFinite(v) ? "number" : "non-finite number";
@@ -324,9 +328,8 @@ const integrityInvariant: Invariant = {
 			const vocabulary = new Set(registry.map(([k]) => k));
 			for (const e of world.entities) {
 				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
-				if (typeof e.name !== "string" || e.name === "") return `integrity: ${e.id}.name must be non-empty string`;
 				for (const k of Object.keys(e)) {
-					if (k !== "id" && k !== "name" && k !== "props") return `integrity: ${e.id}.${k} is not part of the entity shape`;
+					if (k !== "id" && k !== "props") return `integrity: ${e.id}.${k} is not part of the entity shape`;
 				}
 				if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return `integrity: ${e.id}.props must be a record`;
 				for (const k of Object.keys(e.props)) {
@@ -336,6 +339,7 @@ const integrityInvariant: Invariant = {
 					const v = e.props[p];
 					if (v === undefined) continue;
 					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (non-null scalar or scalar array; absence is a missing key)`;
+					if (p === ctx.def.designationKey && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
 					if (pd.type === "any") continue;
 					if (pd.type === "id") {
 						for (const ref of Array.isArray(v) ? v : [v]) {
@@ -379,9 +383,25 @@ function internalPropsOf(def: GameDef): Set<string> {
 	return s;
 }
 
-export function viewCard(def: GameDef, e: Entity, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name: string; props: Record<string, LedgerValue> } {
+/** designated 槽的值 */
+export function designation(def: Pick<GameDef, "designationKey">, e: Entity): string | undefined {
+	const v = e.props[def.designationKey];
+	return typeof v === "string" && v !== "" ? v : undefined;
+}
+
+/** 指称呈现，没有时回落 id。 */
+export function designationOf(def: Pick<GameDef, "designationKey">, e: Entity): string {
+	return designation(def, e) ?? e.id;
+}
+
+export function viewCard(def: GameDef, e: Entity, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, LedgerValue> } {
 	const internal = internalPropsOf(def);
-	return { id: e.id, name: e.name, props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k) && (!perceiveProp || perceiveProp(e, k)))) };
+	const name = perceiveProp && !perceiveProp(e, def.designationKey) ? undefined : designation(def, e);
+	return {
+		id: e.id,
+		...(name !== undefined && { name }),
+		props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k) && k !== def.designationKey && (!perceiveProp || perceiveProp(e, k)))),
+	};
 }
 
 function propLabelOf(def: GameDef, prop: string): string | undefined {
@@ -435,15 +455,31 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return def.messages.noResponse;
 }
 
-/** 离场名表：窗口内一切 despawn 记录入表。只可查合法指称；出域引用恒不查。 */
-export function shownDepartedNames(steps: readonly { changes: Change[] }[]): Map<string, string> {
+/** 离场名表：窗口内 despawn 记录的 designated 槽入表。 */
+export function shownDepartedNames(def: GameDef, steps: readonly { changes: Change[] }[]): Map<string, string> {
 	const m = new Map<string, string>();
-	for (const s of steps) for (const c of s.changes) if (c.kind === "despawn") m.set(c.entity, c.name);
+	for (const s of steps)
+		for (const c of s.changes) {
+			if (c.kind !== "despawn") continue;
+			const v = designation(def, c.entity);
+			if (v !== undefined) m.set(c.entity.id, v);
+		}
 	return m;
 }
 
-/** 渲染与投影共用的解析点：ref=true 解析为展示名（在世读态或离场名表），解析不出原样回显。 */
-function renderValue(sim: Simulation, v: PropValue, ref: boolean, departed?: ReadonlyMap<string, string>): { text: string; ids: string[] } {
+/** 脸 token：id 的呈现词。在世且 πₚ 可读其 designated 槽者以 designated 呈现（无名回落 id），离场者取冻结离场脸，其余原样回显。 */
+type Face = (id: string) => string;
+
+function faceOf(sim: Simulation, departed: ReadonlyMap<string, string>, perceive?: (e: Entity, prop: string) => boolean): Face {
+	return (id) => {
+		const e = entity(sim.world, id);
+		if (!e) return departed.get(id) ?? id;
+		if (perceive && !perceive(e, sim.def.designationKey)) return id;
+		return designationOf(sim.def, e);
+	};
+}
+
+function renderValue(face: Face, v: PropValue, ref: boolean): { text: string; ids: string[] } {
 	if (!ref) return { text: String(v), ids: [] };
 	const items = Array.isArray(v) ? v : [v];
 	const texts: string[] = [];
@@ -454,7 +490,7 @@ function renderValue(sim: Simulation, v: PropValue, ref: boolean, departed?: Rea
 			continue;
 		}
 		ids.push(item);
-		texts.push(entity(sim.world, item)?.name ?? departed?.get(item) ?? item);
+		texts.push(face(item));
 	}
 	return { text: texts.join(", "), ids };
 }
@@ -464,18 +500,17 @@ function refProp(sim: Simulation, prop: string): boolean {
 	return sim.def.props?.[prop]?.type === "id";
 }
 
-function fmtChange(sim: Simulation, c: Change, departed?: ReadonlyMap<string, string>, sides?: { prev: boolean; next: boolean }): string {
-	const val = (v: PropValue, ok: boolean, ref: boolean): string => (ok ? renderValue(sim, v, ref, departed).text : "?");
-	if (c.kind === "spawn") return `+ ${c.entity.name}`;
-	if (c.kind === "despawn") return `- ${c.name}`;
-	if (c.kind === "rename") return `~ ${c.prev} → ${c.next}`;
+function fmtChange(sim: Simulation, c: Change, face: Face, sides?: { prev: boolean; next: boolean }): string {
+	const val = (v: PropValue, ok: boolean, ref: boolean): string => (ok ? renderValue(face, v, ref).text : "?");
+	if (c.kind === "spawn") return `+ ${face(c.entity.id)}`;
+	if (c.kind === "despawn") return `- ${face(c.entity.id)}`;
 	if (c.kind === "rel") {
 		// 空侧（创生/消散）随行广播、豁免截面；? 只占位有值未读
 		const readable = (v: PropValue, side: boolean | undefined): boolean => v === null || (side ?? true);
-		return `${renderValue(sim, c.from, true, departed).text}.${c.type}.${renderValue(sim, c.to, true, departed).text}: ${val(c.prev, readable(c.prev, sides?.prev), false)} → ${val(c.next, readable(c.next, sides?.next), false)}`;
+		return `${face(c.from)}.${c.type}.${face(c.to)}: ${val(c.prev, readable(c.prev, sides?.prev), false)} → ${val(c.next, readable(c.next, sides?.next), false)}`;
 	}
-	const e = sim.world.entities.find((x) => x.id === c.entity);
-	const name = e?.name ?? departed?.get(c.entity) ?? c.entity;
+	if (c.prop === sim.def.designationKey) return `~ ${val(c.prev, sides?.prev ?? true, false)} → ${val(c.next, sides?.next ?? true, false)}`;
+	const name = face(c.entity);
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
 	return `${name}.${label}: ${val(c.prev, sides?.prev ?? true, refProp(sim, c.prop))} → ${val(c.next, sides?.next ?? true, refProp(sim, c.prop))}`;
 }
@@ -486,19 +521,21 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 }
 
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
-function referentsOf(sim: Simulation, c: Change, sides?: { prev: boolean; next: boolean }): string[] {
-	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : c.kind === "spawn" ? [c.entity.id] : [c.entity];
+function referentsOf(sim: Simulation, c: Change, face: Face, sides?: { prev: boolean; next: boolean }): string[] {
+	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity.id];
 	const ref = refProp(sim, c.prop);
 	const out: string[] = [c.entity];
-	if (sides?.prev ?? true) out.push(...renderValue(sim, c.prev ?? null, ref).ids);
-	if (sides?.next ?? true) out.push(...renderValue(sim, c.next ?? null, ref).ids);
+	if (sides?.prev ?? true) out.push(...renderValue(face, c.prev ?? null, ref).ids);
+	if (sides?.next ?? true) out.push(...renderValue(face, c.next ?? null, ref).ids);
 	return out;
 }
 
 /** 事件流的规范单行渲染（✓/✗/⏱/×n）；可说性按冻结截面判据，言默不随消费面改变（刻账目闭合）。 */
 export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: ReadonlyMap<string, string> }): string[] {
 	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
-	const shownDeparted = opts?.departed ?? shownDepartedNames(steps);
+	const shownDeparted = opts?.departed ?? shownDepartedNames(sim.def, steps);
+	const perceive = sim.def.propPerception?.(deepFreeze(sim.snapshot()), sim.player);
+	const face = faceOf(sim, shownDeparted, perceive);
 	/** 步内可说变更的渲染：存在性、值侧披露与指称门共一判定。 */
 	const speakableOf = (s: Step): ((c: Change) => string | null) => {
 		const field = spanOf(s);
@@ -518,8 +555,8 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 		return (c) => {
 			const sides = sidesOf(c);
 			if (sides && !sides.prev && !sides.next) return null;
-			if (!referentsOf(sim, c, sides ?? undefined).every((r) => field.has(r))) return null;
-			return fmtChange(sim, c, shownDeparted, sides ?? undefined);
+			if (!referentsOf(sim, c, face, sides ?? undefined).every((r) => field.has(r))) return null;
+			return fmtChange(sim, c, face, sides ?? undefined);
 		};
 	};
 	const msgs = sim.def.messages;
@@ -549,7 +586,7 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 				s.ok && s.facts?.length ? `[${s.facts.join("; ")}]` : "",
 			].join("");
 			const voice = s.ok ? s.reason : renderDenial(sim.def, s.denial);
-			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, shownDeparted)}${voice !== undefined ? `：${voice}` : ""}${tail}`);
+			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, face)}${voice !== undefined ? `：${voice}` : ""}${tail}`);
 		} else {
 			const held = said.get(s.at) ?? { changes: [], facts: [], denials: [] };
 			if (s.ok) {
@@ -606,6 +643,11 @@ export class Simulation {
 				if (s.kind !== undefined && s.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 kind 标记只对字符串参数有意义`);
 			}
 		}
+		if (typeof def.designationKey !== "string" || def.designationKey === "") throw new Error("GameDef.designationKey 必填：指称呈现的键");
+		const designated = def.props?.[def.designationKey];
+		if (!designated) throw new Error(`designated 键「${def.designationKey}」未注册于 props`);
+		if (designated.type !== "string") throw new Error(`designated 键「${def.designationKey}」须为 string 型`);
+		if (designated.internal) throw new Error(`designated 键「${def.designationKey}」不得 internal`);
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
 		const broken = this.checkInvariants("def", this.readState(), []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
@@ -799,8 +841,8 @@ export class Simulation {
 		return { step, elapsed: step.ticks > 0 ? this.tick(step.ticks) : [] };
 	}
 
-	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态参照域判，出域引用恒原样回显（在世名与离场名都不查）。 */
-	describeAction(step: ActionStep, departed?: ReadonlyMap<string, string>): string {
+	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态参照域判，过门者取 πₚ 可读之脸，否则原样回显——幻觉、隐藏、离场同一回显。 */
+	describeAction(step: ActionStep, face: Face): string {
 		const action = step.action;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
@@ -810,9 +852,9 @@ export class Simulation {
 			.filter((k) => k in action.params)
 			.map((k) => {
 				const v = action.params[k]!;
-				if (!refs.has(k) || typeof v !== "string") return renderValue(this, v, false, departed).text;
+				if (!refs.has(k) || typeof v !== "string") return renderValue(face, v, false).text;
 				if (!legal.has(v)) return v;
-				return renderValue(this, v, true, departed).text;
+				return renderValue(face, v, true).text;
 			});
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
@@ -852,14 +894,9 @@ export class Simulation {
 			case "spawn":
 				return entity(this.world, c.entity.id) ? `spawn "${c.entity.id}" 已在世` : null;
 			case "despawn": {
-				const gone = entity(this.world, c.entity);
-				if (!gone) return `despawn "${c.entity}" 不在世`;
-				return gone.name !== c.name ? `despawn "${c.entity}" 离场名不符（在世 ${gone.name}，记录 ${c.name}）` : null;
-			}
-			case "rename": {
-				const e = entity(this.world, c.entity);
-				if (!e) return `rename "${c.entity}" 不在世`;
-				return e.name !== c.prev ? `rename "${c.entity}" 前名不符` : null;
+				const gone = entity(this.world, c.entity.id);
+				if (!gone) return `despawn "${c.entity.id}" 不在世`;
+				return sameEntity(gone, c.entity) ? null : `despawn "${c.entity.id}" 离场态不符`;
 			}
 			case "prop": {
 				const e = entity(this.world, c.entity);
@@ -969,7 +1006,7 @@ export class Simulation {
 						existing.splice(j, 1);
 					}
 				}
-				changes.push({ kind: "despawn", entity: d.entity, name: gone.name });
+				changes.push({ kind: "despawn", entity: JSON.parse(JSON.stringify(gone)) as Entity });
 				for (const r of dissolved) changes.push({ kind: "rel", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				continue;
 			}
@@ -987,16 +1024,6 @@ export class Simulation {
 					upsertRel(d.from, d.to, d.type, d.value);
 				}
 				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value });
-				continue;
-			}
-			if (d.op === "rename") {
-				const e = entity(this.world, d.entity);
-				if (!e) return refuse(`rename "${d.entity}": target entity missing`);
-				if (typeof d.value !== "string" || d.value === "") return refuse(`rename "${d.entity}": name must be non-empty string`);
-				if (e.name === d.value) continue;
-				const prev = e.name;
-				e.name = d.value;
-				changes.push({ kind: "rename", entity: d.entity, prev, next: d.value });
 				continue;
 			}
 			const e = entity(this.world, d.entity);

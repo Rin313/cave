@@ -1,8 +1,9 @@
-import type { Delta, Fact, GameDef, PropDef, PromptKit, Q, ViewValue, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, free, grant, ref, refParamsOf, relVal } from "../core/sim.ts";
+import type { Delta, Entity, Fact, GameDef, PropDef, PromptKit, Q, ViewValue, World } from "../core/sim.ts";
+import { D, defineVerb, deny, designationOf, entity, free, grant, ref, refParamsOf, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
 const SEALS_PROPS: Record<string, PropDef> = {
+	name: { type: "string" },
 	kind: { type: "string", label: "类别" },
 	in: { type: "id", label: "持者" },
 	space: { type: "boolean", label: "场景" },
@@ -21,7 +22,14 @@ const SEALS_PROPS: Record<string, PropDef> = {
 	trueName: { type: "string", internal: true },
 };
 
-const nameOf = (w: World, id: string): string => entity(w, id)?.name ?? id;
+const DESIG: Pick<GameDef, "designationKey"> = { designationKey: "name" };
+
+const des = (e: Entity): string => designationOf(DESIG, e);
+
+const nameOf = (w: World, id: string): string => {
+	const e = entity(w, id);
+	return e ? des(e) : id;
+};
 
 const isLetter = (q: Q, id: string) => {
 	const t = entity(q.world, id);
@@ -67,6 +75,7 @@ const base: Omit<GameDef, "prompt"> = {
 	id: "seals",
 	title: "统一探针",
 	playerId: "player",
+	designationKey: DESIG.designationKey,
 	recentWindow: 6,
 	messages: {
 		noResponse: "无人应答。",
@@ -177,7 +186,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (!t || t.props.mask !== true) return deny("unmask.nomask", { reason: "那人没有戴面具。" });
 					const trueName = t.props.trueName;
 					const reveal = typeof trueName === "string" && trueName !== "" ? trueName : null;
-					return grant([...(reveal !== null ? [D.rename(q.params.target, reveal)] : []), D.set(q.params.target, "mask", false)], "你揭下了面具。");
+					return grant([...(reveal !== null ? [D.set(q.params.target, DESIG.designationKey, reveal)] : []), D.set(q.params.target, "mask", false)], "你揭下了面具。");
 				},
 			}],
 		}),
@@ -258,19 +267,19 @@ const base: Omit<GameDef, "prompt"> = {
 	world: {
 		time: 0,
 		entities: [
-			{ id: "player", name: "心神", props: { kind: "soul", in: "courier" } },
-			{ id: "courier", name: "信使", props: { kind: "person", vessel: true, in: "parlor" } },
-			{ id: "magistrate", name: "太守", props: { kind: "person", in: "parlor" } },
-			{ id: "steward", name: "管家", props: { kind: "person", in: "parlor" } },
-			{ id: "merchant", name: "盐商", props: { kind: "person", in: "parlor" } },
-			{ id: "guest", name: "灰衣人", props: { kind: "person", mask: true, trueName: "沈青", in: "study" } },
-			{ id: "mask", name: "白瓷面具", props: { kind: "thing", vessel: true, in: "parlor" } },
-			{ id: "parlor", name: "正厅", props: { kind: "room", space: true } },
-			{ id: "study", name: "书房", props: { kind: "room", space: true } },
-			{ id: "court", name: "庭院", props: { kind: "room", space: true } },
-			{ id: "desk", name: "书案", props: { kind: "desk", in: "parlor" } },
-			{ id: "letter_salt", name: "火漆信·盐引", props: { kind: "letter", in: "desk", seal: true, sender: "merchant", recipient: "magistrate", content: "盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。" } },
-			{ id: "letter_grain", name: "火漆信·粮价", props: { kind: "letter", in: "desk", seal: true, sender: "magistrate", recipient: "merchant", content: "秋粮定价每石四百钱，勿为流言所动。" } },
+			{ id: "player", props: { name: "心神", kind: "soul", in: "courier" } },
+			{ id: "courier", props: { name: "信使", kind: "person", vessel: true, in: "parlor" } },
+			{ id: "magistrate", props: { name: "太守", kind: "person", in: "parlor" } },
+			{ id: "steward", props: { name: "管家", kind: "person", in: "parlor" } },
+			{ id: "merchant", props: { name: "盐商", kind: "person", in: "parlor" } },
+			{ id: "guest", props: { name: "灰衣人", kind: "person", mask: true, trueName: "沈青", in: "study" } },
+			{ id: "mask", props: { name: "白瓷面具", kind: "thing", vessel: true, in: "parlor" } },
+			{ id: "parlor", props: { name: "正厅", kind: "room", space: true } },
+			{ id: "study", props: { name: "书房", kind: "room", space: true } },
+			{ id: "court", props: { name: "庭院", kind: "room", space: true } },
+			{ id: "desk", props: { name: "书案", kind: "desk", in: "parlor" } },
+			{ id: "letter_salt", props: { name: "火漆信·盐引", kind: "letter", in: "desk", seal: true, sender: "merchant", recipient: "magistrate", content: "盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。" } },
+			{ id: "letter_grain", props: { name: "火漆信·粮价", kind: "letter", in: "desk", seal: true, sender: "magistrate", recipient: "merchant", content: "秋粮定价每石四百钱，勿为流言所动。" } },
 		],
 		relations: [
 			{ from: "parlor", to: "study", type: "path", value: true },
@@ -298,9 +307,9 @@ const base: Omit<GameDef, "prompt"> = {
 					deltas.push(D.set(l.id, "in", rid), D.set(l.id, "seal", false), D.relSet(rid, l.id, "知晓", true));
 					if (tampered) {
 						suspicion.set(rid, (suspicion.get(rid) ?? 0) + 1);
-						facts.push(`${to.name}收了${nameOf(q.world, l.id)}。断口的火漆瞒不过人，${to.name}的目光落在你身上。`);
+						facts.push(`${nameOf(q.world, rid)}收了${nameOf(q.world, l.id)}。断口的火漆瞒不过人，${nameOf(q.world, rid)}的目光落在你身上。`);
 					} else {
-						facts.push(`${to.name}收了${nameOf(q.world, l.id)}，拆封读毕。`);
+						facts.push(`${nameOf(q.world, rid)}收了${nameOf(q.world, l.id)}，拆封读毕。`);
 					}
 				}
 				for (const [rid, n] of suspicion) {
@@ -319,7 +328,7 @@ const base: Omit<GameDef, "prompt"> = {
 				if (!delivered) return null;
 				return {
 					deltas: [
-						D.spawn({ id: "letter_night", name: "夜笺", props: { kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } }),
+						D.spawn({ id: "letter_night", props: { name: "夜笺", kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } }),
 					],
 					facts: ["又有一封夜笺送到，搁在书案上。"],
 				};
@@ -364,7 +373,7 @@ const base: Omit<GameDef, "prompt"> = {
 	propPerception: (world, player) => (e, prop) => prop !== "content" || relVal(world, player, e.id, "知晓") !== null,
 	// 视角锚 = hostOf；魂不可自见
 	grounding: (world, player) => {
-		const vis = inTreeVisible(world, hostOf(world, player));
+		const vis = inTreeVisible(world, hostOf(world, player), des);
 		vis.delete(player);
 		for (const e of world.entities) if (e.props.introduced === true) vis.add(e.id);
 		return [...vis];

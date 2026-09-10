@@ -1,4 +1,4 @@
-import type { World } from "../core/sim.ts";
+import type { Entity, World } from "../core/sim.ts";
 import { entity } from "../core/sim.ts";
 
 /** 容器包含树语义：可达性 = 共享围合场景或目标在锚点子树内；关容器沿链拦截。 */
@@ -21,6 +21,7 @@ function chainTop(
 	from: string,
 	anchor: string,
 	msgs: typeof REACH_MSGS,
+	des: (e: Entity) => string,
 ): { ok: true; top: string | null } | { ok: false; reason: string } {
 	const start = entity(world, from);
 	if (!start) return { ok: false, reason: msgs.reachNotHere };
@@ -35,7 +36,7 @@ function chainTop(
 		if (!parent) return { ok: false, reason: msgs.reachNotHere };
 		if (parent.props.space === true) return { ok: true, top: cur };
 		if (parent.props.openable === true && parent.props.open !== true) {
-			return { ok: false, reason: msgs.reachClosed(parent.name) };
+			return { ok: false, reason: msgs.reachClosed(des(parent)) };
 		}
 		cur = (parent.props["in"] as string | undefined) ?? null;
 	}
@@ -43,14 +44,14 @@ function chainTop(
 }
 
 /** 两链同为 null（未安置）视为同处：持握于未安置锚点的目标可达。 */
-export function inTreeReach(world: World, player: string, id: string, opts: SpaceOpts = {}): { ok: boolean; reason: string } {
+export function inTreeReach(world: World, player: string, id: string, des: (e: Entity) => string, opts: SpaceOpts = {}): { ok: boolean; reason: string } {
 	const msgs = { ...REACH_MSGS, ...opts.msgs };
 	if (!entity(world, id)) return { ok: false, reason: msgs.reachMissing };
-	const target = chainTop(world, id, player, msgs);
+	const target = chainTop(world, id, player, msgs, des);
 	if (!target.ok) return { ok: false, reason: target.reason };
 	// 贴身必达：目标在锚点子树内（被持握/居于其中），锚点自身链的围合无关紧要
 	if (target.top === player) return { ok: true, reason: "" };
-	const home = chainTop(world, player, player, msgs);
+	const home = chainTop(world, player, player, msgs, des);
 	if (!home.ok) return { ok: false, reason: home.reason };
 	return home.top === target.top ? { ok: true, reason: "" } : { ok: false, reason: msgs.reachNotHere };
 }
@@ -86,11 +87,11 @@ export function hostOf(world: World, anchor: string, opts: SpaceOpts = {}): stri
 	return anchor;
 }
 
-export function inTreeVisible(world: World, player: string, opts: SpaceOpts = {}): Set<string> {
+export function inTreeVisible(world: World, player: string, des: (e: Entity) => string, opts: SpaceOpts = {}): Set<string> {
 	const vis = new Set<string>([player]);
 	for (const e of world.entities) {
 		if (e.props.space === true) vis.add(e.id);
-		if (inTreeReach(world, player, e.id, opts).ok) vis.add(e.id);
+		if (inTreeReach(world, player, e.id, des, opts).ok) vis.add(e.id);
 	}
 	return vis;
 }
