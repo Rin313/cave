@@ -100,7 +100,7 @@ function runStep(sim: Simulation, step: ScenarioStep): { steps: Commit[]; error?
 		const action: Action = step.tick != null
 			? devWait(step.tick)
 			: { verb: step.action!.verb, params: step.action!.params as Record<string, Scalar> };
-		const res = sim.apply(action);
+		const res = sim.apply(action, step.tick != null ? "code" : "will");
 		return { steps: [res.step, ...res.elapsed] };
 	} catch (e) {
 		return { steps: [], error: e };
@@ -127,7 +127,7 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		const a = ex.steps[0];
 		if (a === undefined || a.origin === "clock") return ["（无尝试提交）"];
 		const denied = ex.steps.filter((s): s is Extract<Commit, { ok: false }> => s.origin === "clock" && !s.ok);
-		const voice = a.ok ? a.reason : renderDenial(sim.def, a.denial);
+		const voice = a.ok ? a.notes?.[0] : renderDenial(sim.def, a.denial);
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
 		if (e.reason !== undefined && !(voice ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${voice ?? ""}」`);
 		if (e.law !== undefined && (a.ok ? null : a.denial.law) !== e.law) p.push(`law: expected ${e.law} got ${a.ok ? null : a.denial.law}`);
@@ -167,7 +167,7 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
 				: a !== undefined && a.origin !== "clock"
-					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.reason ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
+					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.notes?.[0] ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
 					: "（无尝试提交）",
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
@@ -235,7 +235,7 @@ async function cmdVerify(): Promise<void> {
 
 /** bug 判据：必要性通道否决且无世界腔理由。 */
 function bugOf(denial: Denial | undefined): string | undefined {
-	if (!denial || denial.reason != null) return undefined;
+	if (!denial || denial.notes != null) return undefined;
 	return denial.debug ?? denial.law;
 }
 
@@ -287,7 +287,7 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-/** 授予的变更形状指纹：格＋键（prop 名/rel 型），机械真相不滤 internal。 */
+/** 授予的变更形状指纹：格＋键（prop 名/rel 型），机械真相不滤 private。 */
 function deltaShape(changes: Change[]): string {
 	if (!changes.length) return "∅";
 	return changes.map((c) => (c.cell === "prop" ? `prop:${c.prop}` : c.cell === "edge" ? `rel:${c.type}` : c.next === null ? "despawn" : "spawn")).sort().join("+");
@@ -324,7 +324,8 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		trace.length = 0;
 		const op = opLabel(action);
 		try {
-			const { step, elapsed } = new Simulation(instrumented).apply(action);
+			const origin = instrumented.verbs[action.verb]?.private === true ? "code" : "will";
+			const { step, elapsed } = new Simulation(instrumented).apply(action, origin);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
 				const source = step.source;
@@ -365,7 +366,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		const seed: Record<string, Scalar> = {};
 		for (const [p, s] of Object.entries(verb.params)) {
 			if (s.optional || refs.includes(p)) continue;
-			seed[p] = s.type === "number" ? 1 : s.type === "boolean" ? true : "…";
+			seed[p] = s.domain === "number" ? 1 : s.domain === "boolean" ? true : "…";
 		}
 		const generate = (idx: number, acc: Record<string, Scalar>): void => {
 			if (truncated) return;
@@ -402,7 +403,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 		console.log(`  ${law.padEnd(18)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}${stated === 0 ? "  ⚠ 零表态" : ""}`);
 	}
 	console.log("");
-	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按授予法则×变更形状分组（∅＝零变更授予）、载代表 op——机械后果不滤 internal。");
+	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按授予法则×变更形状分组（∅＝零变更授予）、载代表 op——机械后果不滤 private。");
 	const byVerb = new Map<string, MapRow[]>();
 	for (const r of rows) {
 		const list = byVerb.get(r.verb);

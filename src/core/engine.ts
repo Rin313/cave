@@ -335,7 +335,7 @@ function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunS
 	}
 }
 
-/** 宿主面 schema 走 JSON Schema 通道；type 即载体（参数面无 any），ref 的载体是 string。 */
+/** 宿主面 schema 走 JSON Schema 通道；domain 即值域（参数面无 any），ref 的 JSON 型是 string。 */
 type JsonSchema = {
 	type?: string;
 	const?: string;
@@ -349,7 +349,7 @@ type JsonSchema = {
 
 /** 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
 function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
-	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type, ...(spec.description !== undefined && { description: spec.description }) });
+	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.domain === "ref" ? "string" : spec.domain, ...(spec.description !== undefined && { description: spec.description }) });
 	return {
 		anyOf: publicVerbs.map(([name, v]) => {
 			const entries = Object.entries(v.params);
@@ -373,7 +373,7 @@ function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
 }
 
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Archive, sessionManager: SessionManager) {
-	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.internal);
+	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.private);
 	return defineTool({
 		name: "act",
 		label: "act",
