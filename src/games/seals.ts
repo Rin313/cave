@@ -5,11 +5,11 @@ import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 const SEALS_PROPS: Record<string, PropDef> = {
 	name: { type: "string" },
 	kind: { type: "string", label: "类别" },
-	in: { type: "id", label: "持者" },
+	in: { type: "ref", label: "持者" },
 	space: { type: "boolean", label: "场景" },
 	seal: { type: "boolean", label: "火漆" },
-	sender: { type: "id", label: "寄信人" },
-	recipient: { type: "id", label: "收信人" },
+	sender: { type: "ref", label: "寄信人" },
+	recipient: { type: "ref", label: "收信人" },
 	content: { type: "string", label: "信文" },
 	introduced: { type: "boolean", internal: true },
 	vessel: { type: "boolean", internal: true },
@@ -35,11 +35,11 @@ const isLetter = (q: Q, id: string) => {
 /** 无主语动词的缺省主语：居所链最近宿主。 */
 const host = (q: Q): string => hostOf(q.world, q.player);
 
-/** 强引用宇宙单源于注册表声明（type:"id" 含数组值）；边是弱引用，随主消散。 */
+/** 强引用宇宙单源于注册表声明（ref 型含数组值）；边是弱引用，随主消散。 */
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
 		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
-			if (pd.type !== "id") continue;
+			if (pd.type !== "ref") continue;
 			const v = e.props[k];
 			if (v === id || (Array.isArray(v) && v.includes(id))) return e.id;
 		}

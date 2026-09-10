@@ -60,14 +60,18 @@ export interface Messages {
 /** 规则铸造的世界腔，进结果视图供叙述跟随。 */
 export type Fact = string;
 
-export type PropType = "string" | "number" | "boolean" | "id" | "any";
+/** 槽的意义种类：ref 的载体是 string 且元素须在世，string 是字面；any 是任意。 */
+export type Kind = "string" | "ref" | "number" | "boolean" | "any";
+
+/** 标量意义种类（参数面不含 any）。 */
+export type ScalarKind = Exclude<Kind, "any">;
 
 export interface PropDef {
-	/** 元素种类；值形状由种类 × 重数张成。 */
-	type: PropType;
-	/** 重数：缺省 one（标量），true 为有限序列 many(Seq)。 */
+	/** 意义种类；值的形状 = 载体 × 重数，引用解释附于载体 string。 */
+	type: Kind;
+	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: boolean;
-	/** 变更线性化里的属性名。 */
+	/** 模型面的槽名：非 internal、非 designated 的槽须全域且两两相异；key 不进模型面。 */
 	label?: string;
 	/** 对一切呈现面永不渲染；与感知正交，裁决侧照常读。 */
 	internal?: boolean;
@@ -144,9 +148,8 @@ function deltaOf(c: Change): Delta {
 
 /** 动词参数的声明面。 */
 export interface ParamSpec {
-	type: "string" | "number" | "boolean";
-	/** 字符串参数的语义：ref＝实体 id（过可见性门），free＝字面。 */
-	kind?: "ref" | "free";
+	/** 意义种类：ref＝实体 id（过可见性门），string＝字面。 */
+	type: ScalarKind;
 	optional?: true;
 	description?: string;
 }
@@ -161,17 +164,17 @@ export type ParamsOf<P extends Record<string, ParamSpec>> = {
 };
 
 /** 指称参数：值是实体 id，过可见性门。 */
-export function ref(description?: string): { type: "string"; kind: "ref"; description?: string } {
-	return { type: "string", kind: "ref", ...(description !== undefined && { description }) };
+export function ref(description?: string): { type: "ref"; description?: string } {
+	return { type: "ref", ...(description !== undefined && { description }) };
 }
 
 /** 自由字符串：值按字面进入裁决。 */
-export function free(description?: string): { type: "string"; kind: "free"; description?: string } {
-	return { type: "string", kind: "free", ...(description !== undefined && { description }) };
+export function free(description?: string): { type: "string"; description?: string } {
+	return { type: "string", ...(description !== undefined && { description }) };
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
-	return Object.keys(verb.params).filter((k) => verb.params[k]?.kind === "ref");
+	return Object.keys(verb.params).filter((k) => verb.params[k]?.type === "ref");
 }
 
 /** 规则参数由 params 声明推导编译期类型。 */
@@ -219,7 +222,8 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 			if (!s.optional) out.push(`params.${name}: missing required parameter${desc(s)}`);
 			continue;
 		}
-		if (typeof v !== s.type) out.push(`params.${name}: must be ${s.type}${desc(s)}`);
+		const carrier = s.type === "ref" ? "string" : s.type;
+		if (typeof v !== carrier) out.push(`params.${name}: must be ${s.type}${desc(s)}`);
 	}
 	return out;
 }
@@ -290,15 +294,29 @@ function isScalarValue(v: unknown): v is Scalar {
 	return typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核。 */
+/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核；空序列在存储无席位（缺席是唯一的零）。 */
 function isValue(v: unknown): v is Value {
-	return isScalarValue(v) || (Array.isArray(v) && v.every(isScalarValue));
+	return isScalarValue(v) || (Array.isArray(v) && v.length > 0 && v.every(isScalarValue));
+}
+
+/** 集合的零即缺席：空序列在写载荷里归一为删。 */
+function canonical(v: Payload): Payload {
+	return Array.isArray(v) && v.length === 0 ? null : v;
+}
+
+/** spawn 携带的实体属性去掉空序列（缺席是唯一的零）。 */
+function canonicalProps(props: Record<string, Value>): Record<string, Value> {
+	const out: Record<string, Value> = {};
+	for (const [k, v] of Object.entries(props)) if (!(Array.isArray(v) && v.length === 0)) out[k] = v;
+	return out;
 }
 
 /** 幂等跳过的判据是目标状态已成立；标量数组逐位恒等。 */
 function sameValue(a: Payload, b: Payload): boolean {
-	if (a === b) return true;
-	return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+	const x = canonical(a);
+	const y = canonical(b);
+	if (x === y) return true;
+	return Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
 function sameEntity(a: Entity, b: Entity): boolean {
@@ -346,13 +364,13 @@ const integrityInvariant: Invariant = {
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
 					if (v === undefined) continue;
-					if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or scalar array; absence is a missing key)`;
+					if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`;
 					const many = pd.many === true;
 					if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
 					if (p === ctx.def.designationKey && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
 					for (const x of Array.isArray(v) ? v : [v]) {
 						if (pd.type === "any") continue;
-						if (pd.type === "id") {
+						if (pd.type === "ref") {
 							if (typeof x !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(x)}`;
 							if (!ids.has(x)) return `integrity: ${e.id}.${p} -> missing entity ${x}`;
 							continue;
@@ -374,7 +392,7 @@ const integrityInvariant: Invariant = {
 				const eid = addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type });
 				if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
 				edgeIds.add(eid);
-			if (r.value === null || !isValue(r.value)) return `integrity: relation ${r.type} -> value is not a value (stored edges never hold null)`;
+			if (r.value === null || !isValue(r.value)) return `integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`;
 		}
 		return null;
 	},
@@ -405,13 +423,16 @@ export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perc
 		if (internal.has(k) || k === def.designationKey) continue;
 		if (perceiveProp && !perceiveProp(e, k)) continue;
 		if (!refsWithin(def, k, v, vis)) continue;
-		props[k] = v;
+		props[propLabelOf(def, k)] = v;
 	}
 	return { id: e.id, ...(name !== undefined && { name }), props };
 }
 
-function propLabelOf(def: GameDef, prop: string): string | undefined {
-	return def.props?.[prop]?.label;
+/** 槽的模型面名字；加载期保证一切可渲染槽携非空 label。 */
+function propLabelOf(def: GameDef, prop: string): string {
+	const label = def.props?.[prop]?.label;
+	if (label === undefined) throw new Error(`属性「${prop}」无模型面名字：key 不进模型面`);
+	return label;
 }
 
 /** 提交边界两侧的感知截面：参照域（顶点 id）恒在，边/属性截面仅于对应钩子声明时存在；裁决时取定，提交后不可重算。 */
@@ -504,9 +525,9 @@ function renderValue(face: Face, v: Payload, ref: boolean): { text: string; ids:
 	return { text: texts.join(", "), ids };
 }
 
-/** 注册表 type:"id" 的属性值是引用；关系值与未声明值一律字面。 */
+/** 注册表 ref 型的属性值是引用；关系值与未声明值一律字面。 */
 function refProp(def: Pick<GameDef, "props">, prop: string): boolean {
-	return def.props?.[prop]?.type === "id";
+	return def.props?.[prop]?.type === "ref";
 }
 
 /** 值位指称与边端点同过参照门：目标不在参照域则整槽遮蔽——披露的指称必有卡。 */
@@ -526,7 +547,7 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 	}
 	if (c.prop === sim.def.designationKey) return `~ ${val(c.prev, sides.prev, false)} → ${val(c.next, sides.next, false)}`;
 	const name = face(c.entity);
-	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
+	const label = propLabelOf(sim.def, c.prop);
 	return `${name}.${label}: ${val(c.prev, sides.prev, refProp(sim.def, c.prop))} → ${val(c.next, sides.next, refProp(sim.def, c.prop))}`;
 }
 
@@ -644,9 +665,7 @@ export class Simulation {
 				ruleIds.add(r.id);
 			}
 			for (const [p, s] of Object.entries(v.params)) {
-				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(s.type)}`);
-				if (s.type === "string" && !s.kind) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
-				if (s.kind !== undefined && s.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 kind 标记只对字符串参数有意义`);
+				if (s.type !== "string" && s.type !== "ref" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/ref/number/boolean），得到 ${String(s.type)}`);
 			}
 			if (v.clock) {
 				const required = Object.values(v.params).filter((s) => !s.optional);
@@ -654,7 +673,7 @@ export class Simulation {
 			}
 		}
 		for (const [k, pd] of Object.entries(def.props ?? {})) {
-			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "id" && pd.type !== "any") throw new Error(`属性「${k}」的 type 须为 string/number/boolean/id/any，得到 ${String(pd.type)}`);
+			if (pd.type !== "string" && pd.type !== "ref" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "any") throw new Error(`属性「${k}」的 type 须为 string/ref/number/boolean/any，得到 ${String(pd.type)}`);
 			if (pd.many !== undefined && typeof pd.many !== "boolean") throw new Error(`属性「${k}」的 many 须为布尔，得到 ${String(pd.many)}`);
 		}
 		if (typeof def.designationKey !== "string" || def.designationKey === "") throw new Error("GameDef.designationKey 必填：指称呈现的键");
@@ -662,6 +681,22 @@ export class Simulation {
 		if (!designated) throw new Error(`designated 键「${def.designationKey}」未注册于 props`);
 		if (designated.type !== "string" || designated.many === true) throw new Error(`designated 键「${def.designationKey}」须为标量 string 型`);
 		if (designated.internal) throw new Error(`designated 键「${def.designationKey}」不得 internal`);
+		// 模型面的槽名唯一：key 不进模型面，可渲染槽须携非空且两两相异的 label
+		const labels = new Map<string, string>();
+		for (const [k, pd] of Object.entries(def.props ?? {})) {
+			if (k === def.designationKey) {
+				if (pd.label !== undefined) throw new Error(`designated 键「${k}」不得有 label：它不以槽名渲染`);
+				continue;
+			}
+			if (pd.internal) {
+				if (pd.label !== undefined) throw new Error(`internal 属性「${k}」不得有 label：它不进任何呈现面`);
+				continue;
+			}
+			if (pd.label === undefined || pd.label === "") throw new Error(`属性「${k}」须有非空 label：key 不进模型面`);
+			const prev = labels.get(pd.label);
+			if (prev !== undefined) throw new Error(`属性 label 重复：「${pd.label}」为「${prev}」与「${k}」共有`);
+			labels.set(pd.label, k);
+		}
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
 		const broken = this.checkInvariants("def", this.readState(), []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
@@ -1000,36 +1035,39 @@ export class Simulation {
 					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				} else {
 					if (entity(this.world, d.id)) return refuse(`spawn "${d.id}": entity already exists`);
-					if (!Object.values(d.next.props).every(isValue)) return refuse(`spawn "${d.id}": props contain a non-value (non-null scalar or scalar array; absence is a missing key)`);
-					changes.push({ cell: "vertex", id: d.id, prev: null, next: JSON.parse(JSON.stringify(d.next)) as Entity });
-					this.world.entities.push(JSON.parse(JSON.stringify(d.next)) as Entity);
+					const ent: Entity = { id: d.next.id, props: canonicalProps(d.next.props) };
+					if (!Object.values(ent.props).every(isValue)) return refuse(`spawn "${d.id}": props contain a non-value (non-null non-empty scalar or scalar array; absence is a missing key)`);
+					changes.push({ cell: "vertex", id: d.id, prev: null, next: JSON.parse(JSON.stringify(ent)) as Entity });
+					this.world.entities.push(JSON.parse(JSON.stringify(ent)) as Entity);
 				}
 				continue;
 			}
 			if (d.cell === "edge") {
 				if (d.type === "") return refuse(`relSet ${d.from}->${d.to}: relation type must be non-empty string`);
+				const next = canonical(d.next);
 				const prev = relVal(this.world, d.from, d.to, d.type);
-				if (sameValue(prev, d.next)) continue;
+				if (sameValue(prev, next)) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
-				if (d.next !== null && !isValue(d.next)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a value`);
-				if (d.next === null) {
+				if (next !== null && !isValue(next)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a non-empty value`);
+				if (next === null) {
 					// 能走到此处则边必已存在（prev !== null）
 					const i = this.world.relations.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
 					if (i >= 0) this.world.relations.splice(i, 1);
 				} else {
-					upsertRel(d.from, d.to, d.type, d.next);
+					upsertRel(d.from, d.to, d.type, next);
 				}
-				changes.push({ cell: "edge", from: d.from, to: d.to, type: d.type, prev, next: d.next });
+				changes.push({ cell: "edge", from: d.from, to: d.to, type: d.type, prev, next });
 				continue;
 			}
 			const e = entity(this.world, d.entity);
 			if (!e) return refuse(`set "${d.entity}.${d.prop}": target entity missing`);
-			if (d.next !== null && !isValue(d.next)) return refuse(`set "${d.entity}.${d.prop}": value is not a value (non-null scalar or scalar array)`);
+			const next = canonical(d.next);
+			if (next !== null && !isValue(next)) return refuse(`set "${d.entity}.${d.prop}": value is not a non-empty value (non-null scalar or non-empty scalar array)`);
 			const prev = e.props[d.prop] ?? null;
-			if (sameValue(prev, d.next)) continue;
-			if (d.next === null) delete e.props[d.prop];
-			else e.props[d.prop] = d.next;
-			changes.push({ cell: "prop", entity: d.entity, prop: d.prop, prev, next: d.next });
+			if (sameValue(prev, next)) continue;
+			if (next === null) delete e.props[d.prop];
+			else e.props[d.prop] = next;
+			changes.push({ cell: "prop", entity: d.entity, prop: d.prop, prev, next });
 		}
 		return { changes };
 	}
