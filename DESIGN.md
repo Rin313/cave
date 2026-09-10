@@ -108,14 +108,15 @@ g   : World × Player → 𝒫(id)              参照域，缺省全见
 x   : World × Player → ViewValue          派生纹理，形态自由，无指称声明面
 ```
 
-状态视图与可见性门同源（参照域判定 `refdom(w, player) = g(w, player) ∩ E`）——同源是「知即在场」的立场而非推导：被知晓者恒有卡，其余交给 πₚ 遮蔽；「可指名而当前不在视野」不可表达，空卡是其极限形态，指称分裂是其表达出路：
+状态视图与可见性门同源（参照域判定 `refdom(w, player) = g(w, player) ∩ E`）——同源是「知即在场」的立场而非推导：被知晓者恒有卡（值位指称与边端点同过参照域之门：卡内 id 型槽的目标不在域内则整槽遮蔽），其余交给 πₚ 遮蔽；「可指名而当前不在视野」不可表达，空卡是其极限形态，指称分裂是其表达出路：
 
 ```
 view(w) = ( t,
             entities  = { card(e) : id(e) ∈ refdom(w) },
             relations = { r ∈ R : {a, b} ⊆ refdom(w) ∧ πₑ(w)(r) },
             extra     = x(w) )
-card(e) = ( id(e), face(e)?, props ↾ { k ∈ K : k ≠ designated ∧ k ∉ internal ∧ πₚ(w)(e, k) } )
+refs(k) ::= k 为 id 型 ? 值的指称集 : ∅
+card(e) = ( id(e), face(e)?, props ↾ { k ∈ K : k ≠ designated ∧ k ∉ internal ∧ πₚ(w)(e, k) ∧ refs(k) ⊆ refdom(w) } )
 face(e) ::= πₚ(w)(e, designated) ? designated(e) : ∅
 ```
 

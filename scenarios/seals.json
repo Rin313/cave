@@ -86,6 +86,13 @@
 				{ "name": "去书房", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true } },
 				{ "name": "三刻：t4 交割在书房外发生——火漆/持者/边行全静默，Fact 照言", "tick": 3, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ [太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewExcludes": ["火漆信·盐引", "火漆信·粮价", "书案"] } }
 			]
+		},
+		{
+			"name": "值位指称过参照门：id 型槽的目标出域则整槽遮蔽——披露的指称必有卡（与边端点同门）",
+			"steps": [
+				{ "name": "五刻：夜笺到案，寄信人（灰衣人）尚在书房——sender 出域，整槽遮蔽", "tick": 5, "expect": { "ok": true, "state": { "$world.time": 5, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"sender\":\"guest\""] } },
+				{ "name": "一刻：灰衣人漂移入厅——sender 随卡显形", "tick": 1, "expect": { "ok": true, "viewIncludes": ["\"sender\":\"guest\""] } }
+			]
 		}
 	]
 }

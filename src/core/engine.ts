@@ -289,14 +289,14 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 	};
 }
 
-function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]): string[] {
+function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[], vis: ReadonlySet<string>): string[] {
 	const lines = spineLines(sim, steps);
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
 		const perceiveProp = sim.def.propPerception?.(w, sim.player);
 		for (const id of revealed) {
 			const e = entity(w, id);
-			if (e) lines.push(JSON.stringify(viewCard(sim.def, e, perceiveProp)));
+			if (e) lines.push(JSON.stringify(viewCard(sim.def, e, vis, perceiveProp)));
 		}
 	}
 	return lines;
@@ -412,8 +412,9 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			let text: string;
 			try {
 				// 投影失灵时不重入 visible()：新见段缺席
-				const revealed = crashed ? [] : [...sim.visible()].filter((id) => !run.visibleBefore.has(id));
-				const lines = formatTurnEvents(sim, steps, revealed);
+				const vis = crashed ? new Set<string>() : sim.visible();
+				const revealed = crashed ? [] : [...vis].filter((id) => !run.visibleBefore.has(id));
+				const lines = formatTurnEvents(sim, steps, revealed, vis);
 				if (crashed) lines.push(def.messages.noResponse);
 				text = lines.join("\n");
 				if (text === "") text = def.messages.noResponse;

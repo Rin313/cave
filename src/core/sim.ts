@@ -388,14 +388,17 @@ export function designationOf(def: Pick<GameDef, "designationKey">, e: Entity): 
 	return designation(def, e) ?? e.id;
 }
 
-export function viewCard(def: GameDef, e: Entity, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, LedgerValue> } {
+export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, LedgerValue> } {
 	const internal = internalPropsOf(def);
 	const name = perceiveProp && !perceiveProp(e, def.designationKey) ? undefined : designation(def, e);
-	return {
-		id: e.id,
-		...(name !== undefined && { name }),
-		props: Object.fromEntries(Object.entries(e.props).filter(([k]) => !internal.has(k) && k !== def.designationKey && (!perceiveProp || perceiveProp(e, k)))),
-	};
+	const props: Record<string, LedgerValue> = {};
+	for (const [k, v] of Object.entries(e.props)) {
+		if (internal.has(k) || k === def.designationKey) continue;
+		if (perceiveProp && !perceiveProp(e, k)) continue;
+		if (!refsWithin(def, k, v, vis)) continue;
+		props[k] = v;
+	}
+	return { id: e.id, ...(name !== undefined && { name }), props };
 }
 
 function propLabelOf(def: GameDef, prop: string): string | undefined {
@@ -487,8 +490,15 @@ function renderValue(face: Face, v: PropValue, ref: boolean): { text: string; id
 }
 
 /** 注册表 type:"id" 的属性值是引用；关系值与未声明值一律字面。 */
-function refProp(sim: Simulation, prop: string): boolean {
-	return sim.def.props?.[prop]?.type === "id";
+function refProp(def: Pick<GameDef, "props">, prop: string): boolean {
+	return def.props?.[prop]?.type === "id";
+}
+
+/** 值位指称与边端点同过参照门：目标不在参照域则整槽遮蔽——披露的指称必有卡。 */
+function refsWithin(def: Pick<GameDef, "props">, prop: string, v: LedgerValue, vis: ReadonlySet<string>): boolean {
+	if (!refProp(def, prop)) return true;
+	for (const item of Array.isArray(v) ? v : [v]) if (typeof item === "string" && !vis.has(item)) return false;
+	return true;
 }
 
 function fmtChange(sim: Simulation, c: Change, face: Face, sides?: { prev: boolean; next: boolean }): string {
@@ -503,7 +513,7 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides?: { prev: boole
 	if (c.prop === sim.def.designationKey) return `~ ${val(c.prev, sides?.prev ?? true, false)} → ${val(c.next, sides?.next ?? true, false)}`;
 	const name = face(c.entity);
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	return `${name}.${label}: ${val(c.prev, sides?.prev ?? true, refProp(sim, c.prop))} → ${val(c.next, sides?.next ?? true, refProp(sim, c.prop))}`;
+	return `${name}.${label}: ${val(c.prev, sides?.prev ?? true, refProp(sim.def, c.prop))} → ${val(c.next, sides?.next ?? true, refProp(sim.def, c.prop))}`;
 }
 
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
@@ -514,7 +524,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
 function referentsOf(sim: Simulation, c: Change, face: Face, sides?: { prev: boolean; next: boolean }): string[] {
 	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity.id];
-	const ref = refProp(sim, c.prop);
+	const ref = refProp(sim.def, c.prop);
 	const out: string[] = [c.entity];
 	if (sides?.prev ?? true) out.push(...renderValue(face, c.prev ?? null, ref).ids);
 	if (sides?.next ?? true) out.push(...renderValue(face, c.next ?? null, ref).ids);
@@ -935,7 +945,7 @@ export class Simulation {
 		const vis = this.visibleIn(w);
 		const perceiveEdge = this.def.edgePerception?.(w, this.player);
 		const perceiveProp = this.def.propPerception?.(w, this.player);
-		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e, perceiveProp));
+		const entities = w.entities.filter((e) => vis.has(e.id)).map((e) => viewCard(this.def, e, vis, perceiveProp));
 		const relations = w.relations.filter((r) => vis.has(r.from) && vis.has(r.to) && (!perceiveEdge || perceiveEdge(r)));
 		const view: Record<string, unknown> = { time: w.time, relations, entities };
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
