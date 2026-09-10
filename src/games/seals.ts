@@ -10,15 +10,11 @@ const SEALS_PROPS: Record<string, PropDef> = {
 	seal: { type: "boolean", label: "火漆" },
 	sender: { type: "id", label: "寄信人" },
 	recipient: { type: "id", label: "收信人" },
-	// 展品：信文只对知晓者可感（属性感知槽）
 	content: { type: "string", label: "信文" },
-	// 展品：known 生命周期（对话获名，internal 不进视图、并入参照域）
 	introduced: { type: "boolean", internal: true },
-	// 展品：主体性（hostOf 键控、魂不可自见）
 	vessel: { type: "boolean", internal: true },
 	mask: { type: "boolean", label: "面具" },
 	heard: { type: "string", label: "闻言" },
-	// 展品：键控载荷（揭面的真名随面具者泛化，internal 不进视图）
 	trueName: { type: "string", internal: true },
 };
 
