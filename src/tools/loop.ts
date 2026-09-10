@@ -48,10 +48,10 @@ function warnWarnings(ws: string[]): void {
 }
 
 function printAct(sim: Simulation, o: {
-	turn: number; intent: string;
+	turn: number; utterance: string;
 	outcome: ActOutcome; brief?: boolean;
 }): void {
-	console.log(`\n【#${o.turn} act】${o.intent}`);
+	console.log(`\n【#${o.turn} act】${o.utterance}`);
 	for (const line of spineLines(sim, o.outcome.steps)) console.log(`  ${line}`);
 	warnWarnings(o.outcome.warnings);
 	const u = usageLine(o.outcome.usage);
@@ -102,44 +102,44 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	}
 }
 
-async function cmdAct(gameId: string, runId: string, intent: string, selection: string | undefined): Promise<void> {
+async function cmdAct(gameId: string, runId: string, raw: string, selection: string | undefined): Promise<void> {
 	await withEngine(gameId, runId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
-		const utterance = selection === undefined ? intent : `${intent}（选中：「${selection}」）`;
+		const utterance = selection === undefined ? raw : `${raw}（选中：「${selection}」）`;
 		const outcome = await engine.act({ utterance });
 		const turn = engine.turn;
 		appendTranscript(dir, {
 			turn,
 			phase: "act",
-			raw: intent,
+			raw,
 			selection: selection ?? null,
-			intent: utterance,
+			utterance,
 			steps: outcome.steps,
 			narration: outcome.narration,
 			warnings: outcome.warnings,
 			usage: outcome.usage,
 		});
-		printAct(sim, { turn, intent: utterance, outcome });
+		printAct(sim, { turn, utterance, outcome });
 	});
 }
 
-/** 顺序执行意图文件（一行一意图；#注释跳过）；同一引擎会话内连跑，A/B 意图集用。 */
+/** 顺序执行话语文件（一行一话语；#注释跳过）；同一引擎会话内连跑，A/B 话语集用。 */
 async function cmdBatch(gameId: string, runId: string, file: string): Promise<void> {
 	const lines = readFileSync(file, "utf8").split(/\r?\n/)
 		.map((l) => l.trim())
 		.filter((l) => l !== "" && !l.startsWith("#"));
-	if (!lines.length) throw new Error(`意图文件 ${file} 为空`);
+	if (!lines.length) throw new Error(`话语文件 ${file} 为空`);
 	await withEngine(gameId, runId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
 		for (const line of lines) {
 			const outcome = await engine.act({ utterance: line });
 			const turn = engine.turn;
 			appendTranscript(dir, {
-				turn, phase: "act", raw: line, selection: null, intent: line,
+				turn, phase: "act", raw: line, selection: null, utterance: line,
 				steps: outcome.steps,
 				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
 			});
-			printAct(sim, { turn, intent: line, outcome, brief: true });
+			printAct(sim, { turn, utterance: line, outcome, brief: true });
 		}
 	});
 }
@@ -176,8 +176,8 @@ function cmdReset(gameId: string, runId: string): void {
 	process.stdout.write(`已重置 run "${runId}"\n`);
 }
 
-/** 解析位置参数为完整意图文本（支持不带引号的多词意图）。 */
-function joinIntent(positionals: string[]): string {
+/** 解析位置参数为完整话语（支持不带引号的多词文本）。 */
+function joinUtterance(positionals: string[]): string {
 	return positionals.join(" ").trim();
 }
 
@@ -188,15 +188,15 @@ async function main() {
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
   loop start --run <id> --game <id>
-  loop act <意图文本> --run <id> --game <id> [--select <选中文本>]
-  loop batch <intents.txt> --run <id> --game <id>
+  loop act <话语> --run <id> --game <id> [--select <选中文本>]
+  loop batch <utterances.txt> --run <id> --game <id>
   loop render --run <id> --game <id> [--instruction <指令>]
   loop state --run <id> --game <id> [--out <file>]
   loop reset --run <id> --game <id>
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：session.jsonl 是机器全量档案（回合记录与检查点，装载对账的主侧），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
-batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过。
---select 由本工具并合进意图（transcript 记 raw/selection 分解）。
+batch 话语文件每行一条（同一引擎会话内顺序执行，A/B 话语集用）；空行与 # 注释跳过。
+--select 由本工具并合进话语（transcript 记 raw/selection 分解）。
 render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合），引擎无第二条提案通道。
 state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用）。
 --game 恒必填：run 按游戏分目录，无跨游戏消歧。
@@ -214,14 +214,14 @@ state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用
 			await cmdStart(gameId, runId);
 			return;
 		case "act": {
-			const intent = flagStr(a, "intent") ?? joinIntent(positionals);
-			if (!intent) throw new Error("act 需要意图文本（位置参数或 --intent）");
-			await cmdAct(gameId, runId, intent, flagStr(a, "select"));
+			const utterance = flagStr(a, "utterance") ?? joinUtterance(positionals);
+			if (!utterance) throw new Error("act 需要话语（位置参数或 --utterance）");
+			await cmdAct(gameId, runId, utterance, flagStr(a, "select"));
 			return;
 		}
 		case "batch": {
 			const file = positionals[0];
-			if (!file) throw new Error("batch 需要意图文件路径（位置参数）");
+			if (!file) throw new Error("batch 需要文件路径（位置参数）");
 			await cmdBatch(gameId, runId, file);
 			return;
 		}

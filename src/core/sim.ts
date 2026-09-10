@@ -425,11 +425,11 @@ export interface Resolution {
 	elapsed: TickStep[];
 }
 
-/** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟；intent 承载意志方话语，字段名沿袭会话文件兼容。 */
+/** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟。 */
 export interface ChronicleEntry {
 	seq: number;
 	time: number;
-	intent: string;
+	utterance: string;
 	steps: Step[];
 }
 

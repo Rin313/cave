@@ -23,7 +23,7 @@ interface EntryLike {
 interface RawTurn {
 	seq?: unknown;
 	time?: unknown;
-	intent?: unknown;
+	utterance?: unknown;
 	steps?: unknown;
 }
 
@@ -45,8 +45,8 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 		if (e.type !== "custom") continue;
 		if (e.customType === TURN_RECORD_TYPE) {
 			const d = e.data as RawTurn | undefined;
-			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.intent === "string" && Array.isArray(d.steps)) {
-				out.records.push({ seq: d.seq, time: d.time, intent: d.intent, steps: d.steps as Step[] });
+			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps)) {
+				out.records.push({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps as Step[] });
 			} else broken++;
 			continue;
 		}
@@ -134,7 +134,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 		}
 		if (!reason) return;
 		cut = Math.max(cut, gap ? i - 1 : i);
-		warnings.push(`纪要 seq${r.seq}「${r.intent.slice(0, 24)}」${reason}`);
+		warnings.push(`纪要 seq${r.seq}「${r.utterance.slice(0, 24)}」${reason}`);
 	});
 	if (cut >= 0) {
 		warnings.push(`近况截断：弃前 ${cut + 1}/${records.length} 条`);
@@ -146,7 +146,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 /** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
-	return records.map((r) => ({ time: r.time, utterance: verbatim(r.intent), moves: spineLines(sim, r.steps, { departed }) }));
+	return records.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, { departed }) }));
 }
 
 export function verbatim(s: string): string {

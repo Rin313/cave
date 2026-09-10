@@ -321,7 +321,7 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 
 /** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到） */
 function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
-	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, intent: run.utterance ?? "", steps: deepFreeze(run.steps) };
+	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: deepFreeze(run.steps) };
 	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
 	archive.records.push(record);
 	archive.lastSeq = record.seq;
