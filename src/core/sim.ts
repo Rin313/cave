@@ -233,7 +233,7 @@ export interface PromptKit {
 export interface GameDef {
 	id: string;
 	title: string;
-	/** 指向普通实体的锚引用，integrity 恒查其在世；Q.player 即其值。 */
+	/** 指向普通实体的锚引用 */
 	playerId: string;
 	/** 指称呈现的键 */
 	designationKey: string;

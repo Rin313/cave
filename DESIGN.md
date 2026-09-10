@@ -167,7 +167,7 @@ face(e) ::= πₚ(w)(e, designated) ? designated(e) : ∅
 
 ## 主体性
 
-**意志不在世界里**　`def.playerId` 是指向普通实体的锚引用，integrity 恒查其在世——锚在提交边界不可缺席；指针在 def 层不可重绑。
+**意志不在世界里**　`def.playerId` 是指向普通实体的锚引用。
 
 **缺省主语**　无主语动词的主语 = `hostOf(w, player)`：`in` 链上最近的宿主，缺省锚自身；视角锚定 hostOf 是 games 构件的取值。
 
