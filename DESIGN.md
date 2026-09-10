@@ -30,14 +30,14 @@ Entity ::= (id, props)       -- id ∈ String⁺，props : K ⇀ V
 Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V；身份 (a, b, τ) 在 R 内两两相异
 ```
 
-- 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于写载荷（δ 的 `v ∈ V?`）；集合无空值（写载荷的空序列归一为删），缺席是唯一的零
-- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, ref?, many?, label?, internal?)`：`type ∈ {string, number, boolean, any}` 是载体（`any` 为不约束载体的顶）；`ref?` 是 string 载体上的引用解释——为真时值是实体 id 且须在世，缺省即普通 string。`many` 声明重数（缺省 one，true 为非空 `many(Seq)`）。存储形状 = 载体 × 重数；引用解释是 string 载体上的一种意义，与字面并列，但不进载体轴。
+- 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于格的状态表达（δ 的 next 与 𝒞 的 prev/next），不出现在世界存储；空序列不是值、也不是删除的拼写（δ 载荷里的空序列即违约），缺席是唯一的零
+- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, ref?, many?) & (slot(label) | face | hidden)`：`type ∈ {string, number, boolean, any}` 是载体（`any` 为不约束载体的顶）；`ref?` 是 string 载体上的引用解释——为真时值是实体 id 且须在世，缺省即普通 string。`many` 声明重数（缺省 one，true 为非空 `many(Seq)`）。存储形状 = 载体 × 重数；引用解释是 string 载体上的一种意义，与字面并列，但不进载体轴。展示类别恰一，由和类型承担：`slot` 携非空且两两相异的 `label`；`face` 是唯一的 designated；`hidden` 不进任何呈现面。`props` 必填（K 是 `κ` 的全定义域）。
 
   词汇闭合：`keys(e.props) ⊆ K`；动态键值对走关系边（关系类型与 tag 是开口 token，无注册表）。
-- key 只在世界内部（词汇闭合与账本身份），不进模型面；槽的模型面名字唯一且是世界语：非 internal、非 designated 的槽须携非空且两两相异的 `label`，状态视图与事件行同用 label，不得回落 key；designated 的值提升为 face，无槽名，故不携 label。
+- key 只在世界内部（词汇闭合与账本身份），不进模型面；槽的模型面名字唯一且是世界语：`slot` 的 `label` 非空且两两相异，状态视图与事件行同用 label，不得回落 key；`face` 的值提升为 face，无槽名；`hidden` 不携 label。
 - `ref` 声明的值是强引用：被指实体须在世，「无引用」即缺席；关系边是弱引用，端点在世由提交审查把门。
-- `internal` 的属性不进任何呈现面；`internal` 动词不进广告面与尝试面（其时钟后果仍作为世界因果入 ⏱，直连步归状态视图与新见段）。裁决侧照常读世界真相。
-- `def.designationKey` 是 designated 键，须注册为非 internal 的 string 属性；其行渲染取 `~` 形，未读侧出 `?`。
+- `hidden` 属性不进任何呈现面；`internal` 动词不进广告面与尝试面（其时钟后果仍作为世界因果入 ⏱，直连步归状态视图与新见段）。裁决侧照常读世界真相。
+- designated 键即 `face` 属性的键，须为标量 string（非 ref、非 many），全域恰一，由 `props` 派生而不另设字段；其行渲染取 `~` 形，未读侧出 `?`。
 
 ### 变更与门
 
@@ -50,8 +50,8 @@ Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V�
 顶点格的后态是实体或 none（生/灭），槽格的后态是值或 none（写/删）；`set/relSet/spawn/despawn` 是格×后态的糖。绝对写，后态自含；写 none 即删。幂等跳过限于状态写（set/relSet）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。
 
 ```
-G : Δ* × Src → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
-Src ::= rule:⟨verb⟩.⟨rule⟩ | gate:⟨law⟩ | replay:⟨seq⟩ | def
+G : Δ* × Source → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
+Source ::= rule(⟨verb⟩,⟨rule⟩) | gate(⟨law⟩) | init | replay(⟨seq⟩)
 ```
 
 `𝒞` 是变更记录序列，后态的完整 diff：prev/next 自含，spawn 携带完整后态实体，despawn 携带终态实体
@@ -65,7 +65,7 @@ despawn 级联删边，逐条入账且紧随 despawn 记录（弱引用随主消
 提交审查先执行校验（逐条，后到的 δ 可引用先到的后果——指向而非读值：spawn 后可 set 其属性；δ 无读原语，先到的值不可读），后不变式：
 
 ```
-ι : (w, ctx) → msg?      ctx = (genesis, changes, src)
+ι : (w, ctx) → msg?      ctx = (genesis, changes, source)
 ```
 
 genesis 是实际起点世界的冻结快照（存档恢复、变体开局同义）；changes 是本次提交的全部变更。integrity 恒挂：id 唯一、钟为非负整数、锚在世、词汇闭合、designated 非空、存储值 ∈ V、type 契约（载体与非空序列按 `type` 声明；`ref` 追加引用在世——标量与序列内逐项）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 message 即玩家文案，integrity 违反只有 debug（回落 noResponse）。
@@ -79,21 +79,21 @@ ref(a) ⊆ P                指称参数键集（ref 声明的字符串参数）
 Q   = (world, player, params, roll)           world 为深冻结快照，params 冻结——attempt 入界即不可变，越权写即抛
 J   : Q → Grant ⊎ Deny ⊎ ⊥
 Grant ::= (Δ*, reason?, facts?, ticks ∈ ℕ?)
-Deny  ::= (law, reason?, debug?)
+Deny  ::= (kind, law, reason?, debug?)      kind ∈ {gameplay, invariant}
 ```
 
 卫语句链 `rules`：首个非 ⊥ 表态即判决；全弃权由引擎闭合为 `action.unanswered`。`ref` 型参数先过可见性门，`string` 型参数按字面径由法则裁决，门与渲染不解析其内容。
 
 ```
-roll(t, src, key, sides) = 1 + ⌊h(t, src, key) · sides⌋      h : 确定性哈希 → [0,1)
+roll(t, source, key, sides) = 1 + ⌊h(t, source, key) · sides⌋      h : 确定性哈希 → [0,1)
 ```
 
-骰子地址 `(t, src, key)` 元组编码并继承出处命名空间；同地址恒同值，sides 违约即抛。
+骰子地址 `(t, source, key)` 元组编码（source 取机器元组身份）并继承出处命名空间；同地址恒同值，sides 违约即抛。
 
 ### 步
 
 ```
-Commit ::= (at, src, origin, action, price, ok, changes, field, 声)
+Commit ::= (at, source, origin, action, price, ok, changes, field, 声)
 origin ∈ { will, clock, code }        -- 触发类别，只分流行为
 action ::= (verb, params)             -- 公共载荷；clock 的 params 恒空
 price  =  origin = clock ? 0          -- 泵是价的铸造者
@@ -101,7 +101,7 @@ price  =  origin = clock ? 0          -- 泵是价的铸造者
 声     ::= 授予带 reason?/facts? | 否决带 denial
 ```
 
-序列按构造保序，at 为钟坐标。origin 于构造时由 (泵?, 动词.internal?) 定，随步入账——记录自含分类，投影不复依赖 def：一切步一律携 action（action.verb 即动词；clock 的 params 恒空，是空参提案，不是另一种形状）。src 是发言者的地址——法则表态 `rule:<verb>.⟨rule⟩`、门的自判 `gate:<law>`（invisible/unanswered）；提交存在判据：变更 ∨ 事实 ∨ 否决 ∨ 应答义务，尝试提交恒因应答义务而在，时钟的空授予（无变更、无事实）即默、不留空步。步入账即冻结（构造后不可变）。呈现按 origin 分流：will 产尝试行（✓/✗ 动词与理由），code 不入事件流（不产尝试行，后果由状态视图与新见段承接），clock 归 ⏱（授予成块、否决为失败刻、全弃权即默）；时钟授予携刻 → `invariant.grant` 否决。
+序列按构造保序，at 为钟坐标。origin 于构造时由 (泵?, 动词.internal?) 定，随步入账——记录自含分类，投影不复依赖 def：一切步一律携 action（action.verb 即动词；clock 的 params 恒空，是空参提案，不是另一种形状）。`source` 是裁决出处，同时是骰子命名空间——法则表态 `rule(⟨verb⟩,⟨rule⟩)`、门的自判 `gate(⟨law⟩)`（invisible/unanswered）；提交存在判据：变更 ∨ 事实 ∨ 否决 ∨ 应答义务，尝试提交恒因应答义务而在，时钟的空授予（无变更、无事实）即默、不留空步。步入账即冻结（构造后不可变）。呈现按 origin 分流：will 产尝试行（✓/✗ 动词与理由），code 不入事件流（不产尝试行，后果由状态视图与新见段承接），clock 归 ⏱（授予成块、否决为失败刻、全弃权即默）；时钟授予携刻 → `invariant.grant` 否决。
 
 ### 感知
 
@@ -122,7 +122,7 @@ view(w) = ( t,
             relations = { r ∈ R : {a, b} ⊆ refdom(w) ∧ πₑ(w)(r) },
             extra     = x(w) )
 refs(k) ::= k 为 ref 型 ? 值的指称集 : ∅
-card(e) = ( id(e), face(e)?, props ↾ { k ∈ K : k ≠ designated ∧ k ∉ internal ∧ πₚ(w)(e, k) ∧ refs(k) ⊆ refdom(w) } )   -- props 以 label 为键
+card(e) = ( id(e), face(e)?, props ↾ { k ∈ K : k 为 slot ∧ πₚ(w)(e, k) ∧ refs(k) ⊆ refdom(w) } )   -- props 以 label 为键
 face(e) ::= πₚ(w)(e, designated) ? designated(e) : ∅
 ```
 
@@ -143,7 +143,7 @@ face(e) ::= πₚ(w)(e, designated) ? designated(e) : ∅
 
 一切状态是 `w = (t, E, R)`，一切机械后果可说。
 
-∀ 变异恰一入口 `G(Δ*, src)`；`G` 全函数——确定性代码的崩溃在门内代谢为否决（法则崩溃 → `rule.crash`，链终止：意志照价、时钟成失败刻，同拍余者照跑、时刻照走；审计崩溃 → `invariant.crash`）。
+∀ 变异恰一入口 `G(Δ*, source)`；`G` 全函数——确定性代码的崩溃在门内代谢为否决（法则崩溃 → `rule.crash`，链终止：意志照价、时钟成失败刻，同拍余者照跑、时刻照走；审计崩溃 → `invariant.crash`）。
 
 **提交全序**　`G` 以裁决读态 `w⁻` 为回滚锚与出处锚。（门的原子性；重放公式使 `𝒞` 可复原任意时刻的世界——档案是信息主侧：在线裁决的因果主侧是 w⁻。世界状态是档案的派生检查点）
 
@@ -161,7 +161,7 @@ face(e) ::= πₚ(w)(e, designated) ? designated(e) : ∅
 
 **判定跨度**　`span(s) = (refdom, 边键截面, 属性键截面)(w⁻, w⁺)`——尝试提交跨其提交边界，时钟提交跨其拍的提交边界；边/属性截面仅于对应钩子声明时存在。随步入账冻结，提交后不可重算。
 
-**变更行判据**　行 c 于步 s 的可说判定（internal 变更先滤）：
+**变更行判据**　行 c 于步 s 的可说判定（hidden 变更先滤）：
 
 ```
 可说(c, s) ⟺ 存在(c, s) ∧ ref(c, s) ⊆ refdom(w⁻, player) ∪ refdom(w⁺, player)
@@ -205,9 +205,9 @@ price(s) = origin(s) ≠ clock ? (ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb))
 
 - **动词表**：`params` 声明（载体×ref?×可选×描述）派生宿主面、内核校验与规则参数的编译期类型；参数须为标量载体（不含 any），多重性由批次承载；string 载体上的 `ref?` 显式声明指称（值为实体 id，过可见性门），缺省即字面，声明错位在加载期失败。`internal` 动词不进广告面（广告面 = 裁决面 ∖ internal），由代码直接 apply——同一裁决边界与审查；其步不产尝试行，后果由状态视图与新见段承接。`clock` 动词每刻由泵以空参提案过同一扇门：无价、授予不带 reason、全弃权即默、授予禁携刻；其 deny 发声为失败刻。提案者矩阵由 internal × clock 两枚旗标张成：origin 于构造时由 (泵?, 动词.internal?) 定——泵 → `clock`、internal 动词 → `code`、其余 → `will`；双通道动词（意志可玩且时钟自鸣）合法，其 cost 只对意志面生效，internal∧clock 的 cost 是死配置。origin 随步入账，投影不再回查 def。
 - **法则纪律**：键控形态（规则按属性组合键控、量级存于属性载荷，随新实体自动泛化）与 authored 形态（互动逐实体书写）共用同一裁决与审查；键控禁止特判实体 id。规则的读通道唯一在 w⁻：同一值地址（实体×键、边）的多次写只能是一条预计算轨迹，从 w⁻ 重复派生的叠加增量按序覆盖。
-- **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`deniedBy: rule`（卫语句链、可见性门、unanswered 闭合）是玩法；`invariant`（审查否决、授予形状违约、`*.crash`）是必要性拦截，probe 报 bug。覆盖面没有机械判据：裁决地图供人判读拒绝的兜底落点与授予的后果形状，缺口判断属创作者。
+- **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`kind: gameplay`（卫语句链、可见性门、unanswered 闭合）是玩法；`kind: invariant`（审查否决、授予形状违约、`*.crash`）是必要性拦截，probe 报 bug。覆盖面没有机械判据：裁决地图供人判读拒绝的兜底落点与授予的后果形状，缺口判断属创作者。
 - **前置站点**：act 通道的形态校验完全托付宿主 schema（按广告面＝裁决面 ∖ internal 声明，execute 前整批拦截）；内核形态检查的全集是裁决面，供代码直连 apply（internal 动词的合法通道）——内核收到违约动作即调用方违约，抛 `ProtocolViolation`。语义前提写成卫语句链首；接线判据：前提的否定情形落在参照域内（可指名而不可及）才接线法则，域外（不可指名）由门独任。grounding 以可达性谓词定义感知域是合法取值，代价是物理前提被门吸收——两者的分界是同一次决策，改其一必重审另一。
-- **裁决地图**：probe 对每动词生成尝试空间的有限生成集——指称参数穷举可见域、必填自由参数取类型代表常量（每动作在独立 Simulation 上裁决）。probe 是法则裁决的唯一动态观察处，两面：活性矩阵（法则×动词的授予/拒绝/弃权/未达）只观察表态存在性，零表态是否死法则属作者判读（值条件法则之于常量，同状态条件之于初始世界）；逐 op 落行——拒绝行载法则与理由（兜底落点），授予行按授予法则×变更形状（kind＋键集；internal 不滤，裁决侧照常读）分组、载代表 op 与计数，授予归因读提交的 src；活性矩阵的弃权统计仍经 probe 的插装。
+- **裁决地图**：probe 对每动词生成尝试空间的有限生成集——指称参数穷举可见域、必填自由参数取类型代表常量（每动作在独立 Simulation 上裁决）。probe 是法则裁决的唯一动态观察处，两面：活性矩阵（法则×动词的授予/拒绝/弃权/未达）只观察表态存在性，零表态是否死法则属作者判读（值条件法则之于常量，同状态条件之于初始世界）；逐 op 落行——拒绝行载法则与理由（兜底落点），授予行按授予法则×变更形状（kind＋键集；hidden 不滤，裁决侧照常读）分组、载代表 op 与计数，授予归因读提交的 source；活性矩阵的弃权统计仍经 probe 的插装。
 
 ## 非目标
 

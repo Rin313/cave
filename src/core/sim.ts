@@ -66,20 +66,29 @@ export type Kind = "string" | "number" | "boolean" | "any";
 /** 参数载体（参数面无 any）。 */
 export type ScalarKind = Exclude<Kind, "any">;
 
-export interface PropDef {
+/**
+ * 属性展示类别，恰一：slot 携模型面名字；face 是唯一的 designated（提升为 face，无槽名）；
+ * hidden 不进任何呈现面。三类互斥由类型承担，加载期不再补校验。
+ */
+export type PropDef = {
 	/** 载体；存储形状 = 载体 × 重数。 */
 	type: Kind;
 	/** string 载体上的引用解释：值为实体 id 且须在世。 */
 	ref?: true;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
-	many?: boolean;
-	/** 模型面的槽名：非 internal、非 designated 的槽须全域且两两相异；key 不进模型面。 */
-	label?: string;
-	/** 对一切呈现面永不渲染；与感知正交，裁决侧照常读。 */
-	internal?: boolean;
-}
+	many?: true;
+} & (
+	| { label: string; face?: never; hidden?: never }
+	| { face: true; label?: never; hidden?: never }
+	| { hidden: true; label?: never; face?: never }
+);
+
+/** 否决类别：gameplay = 玩法（卫语句链/可见性门/unanswered）；invariant = 必要性拦截（审查/授予形状/*.crash）。 */
+export type DenialKind = "gameplay" | "invariant";
 
 export interface Denial {
+	kind: DenialKind;
+	/** 理由身份：作者 token 或引擎保留 id；前缀不承担分类。 */
 	law: string;
 	reason?: string;
 	debug?: string;
@@ -87,12 +96,12 @@ export interface Denial {
 
 /** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
 export class ProtocolViolation extends Error {
-	readonly law: "action.unknown" | "action.schema";
+	readonly code: "action.unknown" | "action.schema";
 	readonly debug: string;
 
-	constructor(law: "action.unknown" | "action.schema", debug: string) {
-		super(`Protocol violation ${law}: ${debug}`);
-		this.law = law;
+	constructor(code: "action.unknown" | "action.schema", debug: string) {
+		super(`Protocol violation ${code}: ${debug}`);
+		this.code = code;
 		this.debug = debug;
 	}
 }
@@ -120,7 +129,7 @@ export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: 
 }
 
 export function deny(law: string, o: { reason?: string } = {}): Verdict {
-	return { ok: false, denial: { law, ...o } };
+	return { ok: false, denial: { kind: "gameplay", law, ...o } };
 }
 
 export const D = {
@@ -255,11 +264,10 @@ export interface GameDef {
 	title: string;
 	/** 指向普通实体的锚引用 */
 	playerId: string;
-	/** 指称呈现的键 */
-	designationKey: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
-	props?: Record<string, PropDef>;
+	/** 属性注册表：κ 的全定义域，必填。 */
+	props: Record<string, PropDef>;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
 	grounding?: (world: World, player: string) => string[];
@@ -284,7 +292,7 @@ export interface InvariantCtx {
 	/** 起点世界的冻结副本 */
 	genesis: World;
 	changes: Change[];
-	src: string;
+	source: Source;
 }
 
 /** null 通过；违反即整提交回滚并拒绝。收冻结读态，写入即抛。 */
@@ -297,29 +305,15 @@ function isScalarValue(v: unknown): v is Scalar {
 	return typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核；空序列在存储无席位（缺席是唯一的零）。 */
+/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核；空序列无席位（缺席是唯一的零，空序列不是它的拼写）。 */
 function isValue(v: unknown): v is Value {
 	return isScalarValue(v) || (Array.isArray(v) && v.length > 0 && v.every(isScalarValue));
 }
 
-/** 集合的零即缺席：空序列在写载荷里归一为删。 */
-function canonical(v: Payload): Payload {
-	return Array.isArray(v) && v.length === 0 ? null : v;
-}
-
-/** spawn 携带的实体属性去掉空序列（缺席是唯一的零）。 */
-function canonicalProps(props: Record<string, Value>): Record<string, Value> {
-	const out: Record<string, Value> = {};
-	for (const [k, v] of Object.entries(props)) if (!(Array.isArray(v) && v.length === 0)) out[k] = v;
-	return out;
-}
-
 /** 幂等跳过的判据是目标状态已成立；标量数组逐位恒等。 */
 function sameValue(a: Payload, b: Payload): boolean {
-	const x = canonical(a);
-	const y = canonical(b);
-	if (x === y) return true;
-	return Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i]);
+	if (a === b) return true;
+	return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 function sameEntity(a: Entity, b: Entity): boolean {
@@ -353,7 +347,7 @@ const integrityInvariant: Invariant = {
 			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
 			if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
 			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
-			const registry = Object.entries(ctx.def.props ?? {});
+			const registry = Object.entries(ctx.def.props);
 			const vocabulary = new Set(registry.map(([k]) => k));
 			for (const e of world.entities) {
 				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
@@ -370,7 +364,7 @@ const integrityInvariant: Invariant = {
 					if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`;
 					const many = pd.many === true;
 					if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
-					if (p === ctx.def.designationKey && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
+					if (p === faceKeyOf(ctx.def) && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
 					for (const x of Array.isArray(v) ? v : [v]) {
 						if (pd.type === "any") continue;
 						if (pd.ref) {
@@ -401,29 +395,44 @@ const integrityInvariant: Invariant = {
 	},
 };
 
-function internalPropsOf(def: GameDef): Set<string> {
+/** designated 键：注册表里唯一的 face；加载期已保证恰一。 */
+const faceKeyCache = new WeakMap<GameDef, string>();
+
+export function faceKeyOf(def: GameDef): string {
+	let key = faceKeyCache.get(def);
+	if (key === undefined) {
+		const keys = Object.keys(def.props).filter((k) => "face" in def.props[k]!);
+		if (keys.length !== 1) throw new Error(`props 须恰有一个 face 属性（designated），得到 ${keys.length} 个`);
+		key = keys[0]!;
+		faceKeyCache.set(def, key);
+	}
+	return key;
+}
+
+function hiddenPropsOf(def: GameDef): Set<string> {
 	const s = new Set<string>();
-	for (const [k, p] of Object.entries(def.props ?? {})) if (p.internal) s.add(k);
+	for (const [k, p] of Object.entries(def.props)) if ("hidden" in p) s.add(k);
 	return s;
 }
 
 /** designated 槽的值 */
-export function designation(def: Pick<GameDef, "designationKey">, e: Entity): string | undefined {
-	const v = e.props[def.designationKey];
+export function designation(faceKey: string, e: Entity): string | undefined {
+	const v = e.props[faceKey];
 	return typeof v === "string" && v !== "" ? v : undefined;
 }
 
 /** 指称呈现，没有时回落 id。 */
-export function designationOf(def: Pick<GameDef, "designationKey">, e: Entity): string {
-	return designation(def, e) ?? e.id;
+export function designationOf(faceKey: string, e: Entity): string {
+	return designation(faceKey, e) ?? e.id;
 }
 
 export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, Value> } {
-	const internal = internalPropsOf(def);
-	const name = perceiveProp && !perceiveProp(e, def.designationKey) ? undefined : designation(def, e);
+	const faceKey = faceKeyOf(def);
+	const hidden = hiddenPropsOf(def);
+	const name = perceiveProp && !perceiveProp(e, faceKey) ? undefined : designation(faceKey, e);
 	const props: Record<string, Value> = {};
 	for (const [k, v] of Object.entries(e.props)) {
-		if (internal.has(k) || k === def.designationKey) continue;
+		if (hidden.has(k) || k === faceKey) continue;
 		if (perceiveProp && !perceiveProp(e, k)) continue;
 		if (!refsWithin(def, k, v, vis)) continue;
 		props[propLabelOf(def, k)] = v;
@@ -433,9 +442,9 @@ export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perc
 
 /** 槽的模型面名字；加载期保证一切可渲染槽携非空 label。 */
 function propLabelOf(def: GameDef, prop: string): string {
-	const label = def.props?.[prop]?.label;
-	if (label === undefined) throw new Error(`属性「${prop}」无模型面名字：key 不进模型面`);
-	return label;
+	const pd = def.props[prop];
+	if (!pd || !("label" in pd)) throw new Error(`属性「${prop}」无模型面名字：key 不进模型面`);
+	return pd.label;
 }
 
 /** 提交边界两侧的感知截面：参照域（顶点 id）恒在，边/属性截面仅于对应钩子声明时存在；裁决时取定，提交后不可重算。 */
@@ -454,10 +463,37 @@ function tupleKey(parts: readonly string[]): string {
 /** 步的来源：意志（玩家经广告面提案）、时钟（泵逐刻自鸣）、代码（internal 动词直连）。于构造时由 (泵?, 动词.internal?) 定，随步入账——记录自含分类，投影不复依赖 def。 */
 export type Origin = "will" | "clock" | "code";
 
-/** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）；origin 只分流行为。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。声：授予带 reason?/facts?，否决带 deniedBy + denial。src 是发言者地址：rule:<verb>.<rule> 或 gate:<law>。deniedBy: rule＝卫语句链/可见性门/unanswered，invariant＝必要性拦截。 */
+/** 裁决出处（发言者地址），同时是骰子命名空间：机器身份取 sourceParts 的元组编码，renderSource 仅作可读渲染。 */
+export type Source =
+	| { kind: "rule"; verb: string; rule: string }
+	| { kind: "gate"; law: "action.invisible" | "action.unanswered" }
+	| { kind: "init" }
+	| { kind: "replay"; seq: number };
+
+/** 骰子地址的机器身份：元组编码，成分字符集不受约束。 */
+function sourceParts(s: Source): string[] {
+	switch (s.kind) {
+		case "rule": return ["rule", s.verb, s.rule];
+		case "gate": return ["gate", s.law];
+		case "init": return ["init"];
+		case "replay": return ["replay", String(s.seq)];
+	}
+}
+
+/** 可读渲染；不参与机器判定。 */
+function renderSource(s: Source): string {
+	switch (s.kind) {
+		case "rule": return `rule:${s.verb}.${s.rule}`;
+		case "gate": return `gate:${s.law}`;
+		case "init": return "init";
+		case "replay": return `replay:${s.seq}`;
+	}
+}
+
+/** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）；origin 只分流行为。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。声：授予带 reason?/facts?，否决带 denial（kind 即分类）。source 是裁决出处。 */
 export type Commit =
-	| { at: number; src: string; origin: Origin; action: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
-	| { at: number; src: string; origin: Origin; action: Action; price: number; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial };
+	| { at: number; source: Source; origin: Origin; action: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
+	| { at: number; source: Source; origin: Origin; action: Action; price: number; ok: false; changes: []; field: FieldSpan; denial: Denial };
 
 export interface Resolution {
 	step: Commit;
@@ -483,11 +519,12 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 
 /** 离场名表：窗口内 despawn 记录的 designated 槽入表。 */
 export function shownDepartedNames(def: GameDef, steps: readonly { changes: Change[] }[]): Map<string, string> {
+	const faceKey = faceKeyOf(def);
 	const m = new Map<string, string>();
 	for (const s of steps)
 		for (const c of s.changes) {
 			if (c.cell !== "vertex" || c.next !== null || c.prev === null) continue;
-			const v = designation(def, c.prev);
+			const v = designation(faceKey, c.prev);
 			if (v !== undefined) m.set(c.id, v);
 		}
 	return m;
@@ -500,8 +537,8 @@ function faceOf(sim: Simulation, departed: ReadonlyMap<string, string>, perceive
 	return (id) => {
 		const e = entity(sim.world, id);
 		if (!e) return departed.get(id) ?? id;
-		if (perceive && !perceive(e, sim.def.designationKey)) return id;
-		return designationOf(sim.def, e);
+		if (perceive && !perceive(e, sim.designationKey)) return id;
+		return designationOf(sim.designationKey, e);
 	};
 }
 
@@ -523,7 +560,7 @@ function renderValue(face: Face, v: Payload, ref: boolean): { text: string; ids:
 
 /** 注册表 ref 声明的属性值是引用；关系值与未声明值一律字面。 */
 function refProp(def: Pick<GameDef, "props">, prop: string): boolean {
-	return def.props?.[prop]?.ref === true;
+	return def.props[prop]?.ref === true;
 }
 
 /** 值位指称与边端点同过参照门：目标不在参照域则整槽遮蔽——披露的指称必有卡。 */
@@ -541,15 +578,15 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 		const readable = (v: Payload, side: boolean): boolean => v === null || side;
 		return `${face(c.from)}.${c.type}.${face(c.to)}: ${val(c.prev, readable(c.prev, sides.prev), false)} → ${val(c.next, readable(c.next, sides.next), false)}`;
 	}
-	if (c.prop === sim.def.designationKey) return `~ ${val(c.prev, sides.prev, false)} → ${val(c.next, sides.next, false)}`;
+	if (c.prop === sim.designationKey) return `~ ${val(c.prev, sides.prev, false)} → ${val(c.next, sides.next, false)}`;
 	const name = face(c.entity);
 	const label = propLabelOf(sim.def, c.prop);
 	return `${name}.${label}: ${val(c.prev, sides.prev, refProp(sim.def, c.prop))} → ${val(c.next, sides.next, refProp(sim.def, c.prop))}`;
 }
 
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
-	const internal = internalPropsOf(def);
-	return changes.filter((c) => !(c.cell === "prop" && internal.has(c.prop)));
+	const hidden = hiddenPropsOf(def);
+	return changes.filter((c) => !(c.cell === "prop" && hidden.has(c.prop)));
 }
 
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
@@ -634,14 +671,16 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 门内裁决的表态；src 是发言者地址（法则表态 rule:<verb>.<rule>，门的自判 gate:<law>），随提交入账。 */
+/** 门内裁决的表态；source 是裁决出处，随提交入账。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; src: string; reason?: string; facts?: Fact[]; ticks?: number }
-	| { ok: false; src: string; deniedBy: "rule" | "invariant"; denial: Denial };
+	| { ok: true; deltas: Delta[]; source: Source; reason?: string; facts?: Fact[]; ticks?: number }
+	| { ok: false; source: Source; denial: Denial };
 
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
+	/** designated 键：props 里唯一的 face。 */
+	readonly designationKey: string;
 	/** 实际起点读态的冻结副本 */
 	private genesisCache?: World;
 
@@ -669,34 +708,28 @@ export class Simulation {
 				if (required.length) throw new Error(`时钟动词 ${name} 不得有必填参数：泵以空参提案过门，时钟不是能改错重提的调用者`);
 			}
 		}
-		for (const [k, pd] of Object.entries(def.props ?? {})) {
+		// props 必填；展示类别恰一：slot 携非空唯一 label，face 恰一且为标量 string，hidden 无 label
+		const faces: string[] = [];
+		const labels = new Map<string, string>();
+		for (const [k, pd] of Object.entries(def.props)) {
 			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "any") throw new Error(`属性「${k}」的 type 须为 string/number/boolean/any，得到 ${String(pd.type)}`);
 			if (pd.ref && pd.type !== "string") throw new Error(`属性「${k}」的 ref 解释仅限 string 载体`);
-			if (pd.many !== undefined && typeof pd.many !== "boolean") throw new Error(`属性「${k}」的 many 须为布尔，得到 ${String(pd.many)}`);
-		}
-		if (typeof def.designationKey !== "string" || def.designationKey === "") throw new Error("GameDef.designationKey 必填：指称呈现的键");
-		const designated = def.props?.[def.designationKey];
-		if (!designated) throw new Error(`designated 键「${def.designationKey}」未注册于 props`);
-		if (designated.type !== "string" || designated.ref || designated.many === true) throw new Error(`designated 键「${def.designationKey}」须为标量 string 型（非 ref）`);
-		if (designated.internal) throw new Error(`designated 键「${def.designationKey}」不得 internal`);
-		// 模型面的槽名唯一：key 不进模型面，可渲染槽须携非空且两两相异的 label
-		const labels = new Map<string, string>();
-		for (const [k, pd] of Object.entries(def.props ?? {})) {
-			if (k === def.designationKey) {
-				if (pd.label !== undefined) throw new Error(`designated 键「${k}」不得有 label：它不以槽名渲染`);
+			if (pd.many !== undefined && pd.many !== true) throw new Error(`属性「${k}」的 many 只能为 true（缺省即 one），得到 ${String(pd.many)}`);
+			if ("face" in pd) {
+				if (pd.type !== "string" || pd.ref === true || pd.many === true) throw new Error(`face 属性「${k}」须为标量 string 型（非 ref、非 many）`);
+				faces.push(k);
 				continue;
 			}
-			if (pd.internal) {
-				if (pd.label !== undefined) throw new Error(`internal 属性「${k}」不得有 label：它不进任何呈现面`);
-				continue;
-			}
-			if (pd.label === undefined || pd.label === "") throw new Error(`属性「${k}」须有非空 label：key 不进模型面`);
+			if ("hidden" in pd) continue;
+			if (pd.label === "") throw new Error(`属性「${k}」的 label 须非空：key 不进模型面`);
 			const prev = labels.get(pd.label);
 			if (prev !== undefined) throw new Error(`属性 label 重复：「${pd.label}」为「${prev}」与「${k}」共有`);
 			labels.set(pd.label, k);
 		}
+		if (faces.length !== 1) throw new Error(`props 须恰有一个 face 属性（designated），得到 ${faces.length} 个`);
+		this.designationKey = faces[0]!;
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
-		const broken = this.checkInvariants("def", this.readState(), []);
+		const broken = this.checkInvariants({ kind: "init" }, this.readState(), []);
 		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
 	}
 
@@ -727,7 +760,7 @@ export class Simulation {
 	private propField(world: World): string[] | undefined {
 		const perceive = this.def.propPerception?.(world, this.player);
 		if (!perceive) return undefined;
-		const keys = Object.keys(this.def.props ?? {});
+		const keys = Object.keys(this.def.props);
 		const out: string[] = [];
 		for (const e of world.entities) {
 			for (const k of keys) if (perceive(e, k)) out.push(addrKey({ cell: "prop", entity: e.id, prop: k }));
@@ -776,34 +809,35 @@ export class Simulation {
 			.filter((id): id is string => typeof id === "string" && !curVis.has(id));
 		if (invalid.length) {
 			const invisible = this.def.messages.invisibleEntity;
-			return { ok: false, src: "gate:action.invisible", deniedBy: "rule", denial: { law: "action.invisible", ...(invisible !== undefined && { reason: invisible }), debug: invalid.join(",") } };
+			return { ok: false, source: { kind: "gate", law: "action.invisible" }, denial: { kind: "gameplay", law: "action.invisible", ...(invisible !== undefined && { reason: invisible }), debug: invalid.join(",") } };
 		}
 		for (const r of verb.rules) {
-			const src = `rule:${action.verb}.${r.id}`;
-			const q = this.query(world, action.params, ["rule", action.verb, r.id]);
+			const source: Source = { kind: "rule", verb: action.verb, rule: r.id };
+			const q = this.query(world, action.params, source);
 			let v: Verdict | null;
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, src, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${src}: ${e instanceof Error ? e.message : String(e)}` } };
+				return { ok: false, source, denial: { kind: "invariant", law: "rule.crash", debug: `${renderSource(source)}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
 			if (v.ok) {
 				if (pump && v.ticks !== undefined) {
-					return { ok: false, src, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: 时钟提案不得延伸时间` } };
+					return { ok: false, source, denial: { kind: "invariant", law: "invariant.grant", debug: `${renderSource(source)}: 时钟提案不得延伸时间` } };
 				}
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
-					return { ok: false, src, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
+					return { ok: false, source, denial: { kind: "invariant", law: "invariant.grant", debug: `${renderSource(source)}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
 				}
-				return { ok: true, deltas: v.deltas, src, ...(v.reason !== undefined && { reason: v.reason }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
+				return { ok: true, deltas: v.deltas, source, ...(v.reason !== undefined && { reason: v.reason }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, src, deniedBy: "rule", denial: v.denial };
+			return { ok: false, source, denial: v.denial };
 		}
-		return { ok: false, src: "gate:action.unanswered", deniedBy: "rule", denial: { law: "action.unanswered" } };
+		return { ok: false, source: { kind: "gate", law: "action.unanswered" }, denial: { kind: "gameplay", law: "action.unanswered" } };
 	}
 
-	/** path 是骰子地址的机器身份，src 是其可读渲染，成对构造。 */
-	private query(world: World, params: Record<string, Scalar>, path: string[]): Q {
+	/** source 的元组编码即骰子地址的机器身份；同出处同 key 恒同值。 */
+	private query(world: World, params: Record<string, Scalar>, source: Source): Q {
+		const path = sourceParts(source);
 		return {
 			world,
 			player: this.player,
@@ -822,7 +856,7 @@ export class Simulation {
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
-	private commitChecked(s0: World, deltas: Delta[], src: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
+	private commitChecked(s0: World, deltas: Delta[], source: Source): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
 		const genesis = this.genesis();
 		try {
 			const out = this.commit(deltas);
@@ -830,29 +864,29 @@ export class Simulation {
 				this.restore(s0);
 				return { ok: false, denial: out.refusal };
 			}
-			const inv = this.checkInvariants(src, genesis, out.changes);
+			const inv = this.checkInvariants(source, genesis, out.changes);
 			if (inv) {
 				this.restore(s0);
 				const denial: Denial = inv.authored
-					? { law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
-					: { law: `invariant.${inv.id}`, debug: inv.message };
+					? { kind: "invariant", law: `invariant.${inv.id}`, reason: inv.message, debug: inv.message }
+					: { kind: "invariant", law: `invariant.${inv.id}`, debug: inv.message };
 				return { ok: false, denial };
 			}
 			return { ok: true, changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
-			return { ok: false, denial: { law: "invariant.crash", debug } };
+			return { ok: false, denial: { kind: "invariant", law: "invariant.crash", debug } };
 		}
 	}
 
-	private checkInvariants(src: string, genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
+	private checkInvariants(source: Source, genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
 		const world = this.readState();
 		const frozen = deepFreeze(changes);
-		const broken = integrityInvariant.check(world, { def: this.def, genesis, changes: frozen, src });
+		const broken = integrityInvariant.check(world, { def: this.def, genesis, changes: frozen, source });
 		if (broken) return { id: "integrity", message: broken, authored: false };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(world, { def: this.def, genesis, changes: frozen, src });
+			const msg = inv.check(world, { def: this.def, genesis, changes: frozen, source });
 			if (msg) return { id: inv.id, message: msg, authored: true };
 		}
 		return null;
@@ -883,14 +917,14 @@ export class Simulation {
 		const open = this.openField(s0, before);
 		const r = this.adjudicateRaw(action, verb, before, s0, pump);
 		if (r.ok) {
-			const cc = this.commitChecked(s0, r.deltas, r.src);
+			const cc = this.commitChecked(s0, r.deltas, r.source);
 			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
 			if (!cc.ok)
-				return { at, src: r.src, origin, action, price: pump ? 0 : verb.cost, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial };
-			return { at, src: r.src, origin, action, price: pump ? 0 : (r.ticks ?? verb.cost), ok: true, changes: cc.changes, field, ...(!pump && r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
+				return { at, source: r.source, origin, action, price: pump ? 0 : verb.cost, ok: false, changes: [], field, denial: cc.denial };
+			return { at, source: r.source, origin, action, price: pump ? 0 : (r.ticks ?? verb.cost), ok: true, changes: cc.changes, field, ...(!pump && r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
 		}
 		const field = this.closeField(before, open, false);
-		return { at, src: r.src, origin, action, price: pump ? 0 : verb.cost, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial };
+		return { at, source: r.source, origin, action, price: pump ? 0 : verb.cost, ok: false, changes: [], field, denial: r.denial };
 	}
 
 	private pump(price: number): Commit[] {
@@ -945,7 +979,7 @@ export class Simulation {
 				}
 			}
 			this.world.time = record.time;
-			const broken = integrityInvariant.check(this.readState(), { def: this.def, genesis: s0, changes: [], src: `replay:${record.seq}` });
+			const broken = integrityInvariant.check(this.readState(), { def: this.def, genesis: s0, changes: [], source: { kind: "replay", seq: record.seq } });
 			if (broken) return fail(`integrity：${broken}`);
 			return null;
 		} catch (e) {
@@ -1003,7 +1037,7 @@ export class Simulation {
 			if (hit) hit.value = value;
 			else this.world.relations.push({ from, to, type, value });
 		};
-		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", debug: `commit: ${debug}` } });
+		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { kind: "invariant", law: "invariant.commit", debug: `commit: ${debug}` } });
 		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
 		for (const d of deltas) {
 			if (d.cell === "vertex") {
@@ -1027,7 +1061,7 @@ export class Simulation {
 					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				} else {
 					if (entity(this.world, d.id)) return refuse(`spawn "${d.id}": entity already exists`);
-					const ent: Entity = { id: d.next.id, props: canonicalProps(d.next.props) };
+					const ent: Entity = { id: d.next.id, props: d.next.props };
 					if (!Object.values(ent.props).every(isValue)) return refuse(`spawn "${d.id}": props contain a non-value (non-null non-empty scalar or scalar array; absence is a missing key)`);
 					changes.push({ cell: "vertex", id: d.id, prev: null, next: JSON.parse(JSON.stringify(ent)) as Entity });
 					this.world.entities.push(JSON.parse(JSON.stringify(ent)) as Entity);
@@ -1036,11 +1070,11 @@ export class Simulation {
 			}
 			if (d.cell === "edge") {
 				if (d.type === "") return refuse(`relSet ${d.from}->${d.to}: relation type must be non-empty string`);
-				const next = canonical(d.next);
+				const next = d.next;
+				if (next !== null && !isValue(next)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a non-empty value`);
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (sameValue(prev, next)) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
-				if (next !== null && !isValue(next)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a non-empty value`);
 				if (next === null) {
 					// 能走到此处则边必已存在（prev !== null）
 					const i = this.world.relations.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
@@ -1053,7 +1087,7 @@ export class Simulation {
 			}
 			const e = entity(this.world, d.entity);
 			if (!e) return refuse(`set "${d.entity}.${d.prop}": target entity missing`);
-			const next = canonical(d.next);
+			const next = d.next;
 			if (next !== null && !isValue(next)) return refuse(`set "${d.entity}.${d.prop}": value is not a non-empty value (non-null scalar or non-empty scalar array)`);
 			const prev = e.props[d.prop] ?? null;
 			if (sameValue(prev, next)) continue;

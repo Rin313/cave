@@ -116,7 +116,7 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		if (e.throws !== undefined) {
 			if (!msg.includes(e.throws)) p.push(`throws: 期望包含「${e.throws}」，实际「${msg}」`);
 		} else if (e.protocol !== undefined) {
-			const law = ex.error instanceof ProtocolViolation ? ex.error.law : null;
+			const law = ex.error instanceof ProtocolViolation ? ex.error.code : null;
 			if (law !== e.protocol) p.push(`protocol: expected ${e.protocol}, got ${law ?? msg}`);
 		} else {
 			p.push(`步骤异常中断: ${msg}`);
@@ -327,7 +327,8 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			const { step, elapsed } = new Simulation(instrumented).apply(action);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
-				const rule = def.verbs[action.verb]!.rules.find((r) => `rule:${action.verb}.${r.id}` === step.src)!.id;
+				const source = step.source;
+				const rule = source.kind === "rule" ? source.rule : "?";
 				const shape = deltaShape(step.changes);
 				const key = `${action.verb}|${rule}|${shape}`;
 				const row = grantRows.get(key);
@@ -335,7 +336,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 				else grantRows.set(key, { verb: action.verb, rule, shape, count: 1, rep: op });
 			}
 			else {
-				const bug = step.deniedBy === "invariant" ? bugOf(step.denial) : undefined;
+				const bug = step.denial.kind === "invariant" ? bugOf(step.denial) : undefined;
 				rows.push({ verb: action.verb, op, law: step.denial.law, reason: renderDenial(def, step.denial), ...(bug !== undefined && { bug }) });
 			}
 			for (const t of elapsed) {
@@ -344,7 +345,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 				if (b) rows.push({ verb: action.verb, op, law: t.denial.law, reason: renderDenial(def, t.denial), bug: b });
 			}
 		} catch (e) {
-			if (e instanceof ProtocolViolation) rows.push({ verb: action.verb, op, law: e.law, reason: "协议违约：探测组合越过动词 schema" });
+			if (e instanceof ProtocolViolation) rows.push({ verb: action.verb, op, law: e.code, reason: "协议违约：探测组合越过动词 schema" });
 			else rows.push({ verb: action.verb, op, law: "apply.crash", reason: "apply 抛错（原子回滚后重抛——投影钩子或内核缺陷）", bug: e instanceof Error ? e.message : String(e) });
 		}
 		for (const t of trace) {

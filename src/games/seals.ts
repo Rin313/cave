@@ -3,7 +3,7 @@ import { D, defineVerb, deny, designationOf, entity, free, grant, ref, refParams
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
 const SEALS_PROPS: Record<string, PropDef> = {
-	name: { type: "string" },
+	name: { type: "string", face: true },
 	kind: { type: "string", label: "类别" },
 	in: { type: "string", ref: true, label: "持者" },
 	space: { type: "boolean", label: "场景" },
@@ -11,16 +11,14 @@ const SEALS_PROPS: Record<string, PropDef> = {
 	sender: { type: "string", ref: true, label: "寄信人" },
 	recipient: { type: "string", ref: true, label: "收信人" },
 	content: { type: "string", label: "信文" },
-	introduced: { type: "boolean", internal: true },
-	vessel: { type: "boolean", internal: true },
+	introduced: { type: "boolean", hidden: true },
+	vessel: { type: "boolean", hidden: true },
 	mask: { type: "boolean", label: "面具" },
 	heard: { type: "string", label: "闻言" },
-	trueName: { type: "string", internal: true },
+	trueName: { type: "string", hidden: true },
 };
 
-const DESIG: Pick<GameDef, "designationKey"> = { designationKey: "name" };
-
-const des = (e: Entity): string => designationOf(DESIG, e);
+const des = (e: Entity): string => designationOf("name", e);
 
 const nameOf = (w: World, id: string): string => {
 	const e = entity(w, id);
@@ -71,7 +69,6 @@ const base: Omit<GameDef, "prompt"> = {
 	id: "seals",
 	title: "统一探针",
 	playerId: "player",
-	designationKey: DESIG.designationKey,
 	recentWindow: 6,
 	messages: {
 		noResponse: "无人应答。",
@@ -182,7 +179,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (!t || t.props.mask !== true) return deny("unmask.nomask", { reason: "那人没有戴面具。" });
 					const trueName = t.props.trueName;
 					const reveal = typeof trueName === "string" && trueName !== "" ? trueName : null;
-					return grant([...(reveal !== null ? [D.set(q.params.target, DESIG.designationKey, reveal)] : []), D.set(q.params.target, "mask", false)], "你揭下了面具。");
+					return grant([...(reveal !== null ? [D.set(q.params.target, "name", reveal)] : []), D.set(q.params.target, "mask", false)], "你揭下了面具。");
 				},
 			}],
 		}),

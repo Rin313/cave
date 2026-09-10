@@ -28,10 +28,21 @@ interface RawTurn {
 }
 
 /** 信封粗筛：损坏条目在此离场（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
+function isSource(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	switch ((v as { kind?: unknown }).kind) {
+		case "rule": { const r = v as { verb?: unknown; rule?: unknown }; return typeof r.verb === "string" && typeof r.rule === "string"; }
+		case "gate": return typeof (v as { law?: unknown }).law === "string";
+		case "init": return true;
+		case "replay": return typeof (v as { seq?: unknown }).seq === "number";
+		default: return false;
+	}
+}
+
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; src?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown };
-	if (typeof c.at !== "number" || typeof c.src !== "string" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
+	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown };
+	if (typeof c.at !== "number" || !isSource(c.source) || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
 	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	return a !== null && typeof a === "object" && typeof a.verb === "string" && a.params !== null && typeof a.params === "object";
