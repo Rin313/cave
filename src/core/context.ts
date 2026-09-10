@@ -69,7 +69,7 @@ export interface Resumed {
 	warnings: string[];
 }
 
-/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要（试投影辖全窗口，序位检查只辖覆盖段——重放段的连续性由对账强制），截断而非剔除（名字闭合依赖完整时间后缀）。 */
+/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要（试投影辖全窗口，序位检查只辖覆盖段——重放段的连续性由对账强制），截断而非剔除 */
 export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const warnings: string[] = [];
 	const log = loadLog(entries, warnings);
@@ -143,7 +143,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	return { sim, records, lastSeq, warnings };
 }
 
-/** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值，离场名以窗口级名表兜底 */
+/** 近况与 act 结果同一变更行判据（刻账目闭合） */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(sim.def, records.flatMap((r) => r.steps));
 	return records.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, { departed }) }));
