@@ -24,17 +24,8 @@ Entity ::= (id, name, props)     -- id, name ∈ String⁺，props : K ⇀ V
 Edge   ::= (a, b, τ, v)          -- a, b 为实体 id，τ ∈ String⁺，v ∈ V；身份 (a, b, τ) 在 R 内两两相异
 ```
 
-- 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于写载荷（δ 的 `v ∈ V?`）。
-- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`。
-
-  | type | 值形状 |
-  |---|---|
-  | string | one(String) |
-  | number | one(Num) |
-  | boolean | one(Bool) |
-  | id | one(String) 或 many(Seq)，元素恒 String |
-  | tags | many(Seq)，元素恒 String |
-  | any | V |
+- 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于写载荷（δ 的 `v ∈ V?`）
+- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`
 
   词汇闭合：`keys(e.props) ⊆ K`；动态键值对走关系边（关系类型与 tag 是开口 token，无注册表）。
 - `id` 型值是强引用（标量与序列内逐项）：被指实体须在世，「无引用」由缺席表达；关系边是弱引用，端点在世由提交审查把门。
