@@ -191,7 +191,6 @@ export interface VerbDef {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 不进映射层，由代码直接 apply——同一裁决边界与审查。 */
 	internal?: boolean;
 	rules: Rule[];
 }
