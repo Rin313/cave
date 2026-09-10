@@ -60,10 +60,13 @@ export interface Messages {
 /** 规则铸造的世界腔，进结果视图供叙述跟随。 */
 export type Fact = string;
 
-export type PropType = "string" | "number" | "boolean" | "id" | "tags" | "any";
+export type PropType = "string" | "number" | "boolean" | "id" | "any";
 
 export interface PropDef {
+	/** 元素种类；值形状由种类 × 重数张成。 */
 	type: PropType;
+	/** 重数：缺省 one（标量），true 为有限序列 many(Seq)。 */
+	many?: boolean;
 	/** 变更线性化里的属性名。 */
 	label?: string;
 	/** 对一切呈现面永不渲染；与感知正交，裁决侧照常读。 */
@@ -344,23 +347,18 @@ const integrityInvariant: Invariant = {
 					const v = e.props[p];
 					if (v === undefined) continue;
 					if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or scalar array; absence is a missing key)`;
+					const many = pd.many === true;
+					if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
 					if (p === ctx.def.designationKey && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
-					if (pd.type === "any") continue;
-					if (pd.type === "id") {
-						for (const ref of Array.isArray(v) ? v : [v]) {
-							if (typeof ref !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(ref)}`;
-							if (!ids.has(ref)) return `integrity: ${e.id}.${p} -> missing entity ${ref}`;
+					for (const x of Array.isArray(v) ? v : [v]) {
+						if (pd.type === "any") continue;
+						if (pd.type === "id") {
+							if (typeof x !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(x)}`;
+							if (!ids.has(x)) return `integrity: ${e.id}.${p} -> missing entity ${x}`;
+							continue;
 						}
-						continue;
+						if (typeof x !== pd.type) return `integrity: ${e.id}.${p} expects ${pd.type}, got ${got(x)}`;
 					}
-					if (pd.type === "tags") {
-						if (!Array.isArray(v)) return `integrity: ${e.id}.${p} expects tags (string array), got ${got(v)}`;
-						for (const t of v) if (typeof t !== "string") return `integrity: ${e.id}.${p} expects string element, got ${got(t)}`;
-						continue;
-					}
-					if (pd.type === "number" && (typeof v !== "number" || !Number.isFinite(v))) return `integrity: ${e.id}.${p} expects number, got ${got(v)}`;
-					if (pd.type === "boolean" && typeof v !== "boolean") return `integrity: ${e.id}.${p} expects boolean, got ${got(v)}`;
-					if (pd.type === "string" && typeof v !== "string") return `integrity: ${e.id}.${p} expects string, got ${got(v)}`;
 				}
 			}
 			const edgeIds = new Set<string>();
@@ -655,10 +653,14 @@ export class Simulation {
 				if (required.length) throw new Error(`时钟动词 ${name} 不得有必填参数：泵以空参提案过门，时钟不是能改错重提的调用者`);
 			}
 		}
+		for (const [k, pd] of Object.entries(def.props ?? {})) {
+			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "id" && pd.type !== "any") throw new Error(`属性「${k}」的 type 须为 string/number/boolean/id/any，得到 ${String(pd.type)}`);
+			if (pd.many !== undefined && typeof pd.many !== "boolean") throw new Error(`属性「${k}」的 many 须为布尔，得到 ${String(pd.many)}`);
+		}
 		if (typeof def.designationKey !== "string" || def.designationKey === "") throw new Error("GameDef.designationKey 必填：指称呈现的键");
 		const designated = def.props?.[def.designationKey];
 		if (!designated) throw new Error(`designated 键「${def.designationKey}」未注册于 props`);
-		if (designated.type !== "string") throw new Error(`designated 键「${def.designationKey}」须为 string 型`);
+		if (designated.type !== "string" || designated.many === true) throw new Error(`designated 键「${def.designationKey}」须为标量 string 型`);
 		if (designated.internal) throw new Error(`designated 键「${def.designationKey}」不得 internal`);
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
 		const broken = this.checkInvariants("def", this.readState(), []);

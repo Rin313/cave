@@ -31,7 +31,7 @@ Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V�
 ```
 
 - 存储面无 none：`⇀` 的部分性即缺席——无引用、清空都是键缺席；none 只存在于写载荷（δ 的 `v ∈ V?`）
-- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, label?, internal?)`
+- `K` 是属性注册表键集，`κ : K → PropDef`，`PropDef = (type, many?, label?, internal?)`：`type ∈ {string, number, boolean, id, any}` 为元素种类，`many` 声明重数（缺省 one，true 为 `many(Seq)`）——值形状即种类×重数的乘积；`id` 的元素是须在世的 string 指称
 
   词汇闭合：`keys(e.props) ⊆ K`；动态键值对走关系边（关系类型与 tag 是开口 token，无注册表）。
 - `id` 型值是强引用：被指实体须在世，「无引用」由缺席表达；关系边是弱引用，端点在世由提交审查把门。
