@@ -1,7 +1,7 @@
 // 会话文件保存全量审计。
 // 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, shownDepartedNames, spineLines, type ChronicleEntry, type GameDef, type RecentEntry, type Step, type World } from "./sim.ts";
+import { Simulation, shownDepartedNames, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
@@ -27,6 +27,12 @@ interface RawTurn {
 	steps?: unknown;
 }
 
+function isCommit(s: unknown): boolean {
+	if (s === null || typeof s !== "object") return false;
+	const c = s as Partial<Commit>;
+	return typeof c.at === "number" && typeof c.src === "string" && typeof c.price === "number" && typeof c.ok === "boolean";
+}
+
 interface RawCheckpoint {
 	seq?: unknown;
 	world?: unknown;
@@ -37,7 +43,7 @@ export interface LogEntries {
 	checkpoint?: CheckpointEntry;
 }
 
-/** 信封粗筛：损坏条目在此离场（无 seq 的旧格式同弃、显形）；最终完好判据是装载对账与试投影。 */
+/** 信封粗筛：损坏条目在此离场（无 seq 或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
 function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries {
 	const out: LogEntries = { records: [] };
 	let broken = 0;
@@ -45,8 +51,8 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 		if (e.type !== "custom") continue;
 		if (e.customType === TURN_RECORD_TYPE) {
 			const d = e.data as RawTurn | undefined;
-			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps)) {
-				out.records.push({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps as Step[] });
+			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps) && d.steps.every(isCommit)) {
+				out.records.push({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps as Commit[] });
 			} else broken++;
 			continue;
 		}
@@ -57,7 +63,7 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 			}
 		}
 	}
-	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 的旧格式）`);
+	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 或旧步形状的条目）`);
 	return out;
 }
 

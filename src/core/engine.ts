@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
-import { Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type PromptKit, type RecentEntry, type Step, type VerbDef } from "./sim.ts";
+import { Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -24,7 +24,7 @@ export interface EngineOptions {
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 export interface ActOutcome {
-	steps: Step[];
+	steps: Commit[];
 	narration: string;
 	warnings: string[];
 	usage: TokenUsage[];
@@ -55,7 +55,7 @@ interface RunState {
 	utterance?: string | undefined;
 	settled: string;
 	current: string;
-	steps: Step[];
+	steps: Commit[];
 	warnings: string[];
 	usage: TokenUsage[];
 }
@@ -248,7 +248,7 @@ export class Engine {
 		this.recent.push(...projectWindow(this.sim, this.archive.records));
 	}
 
-	async narrate(instruction: string, steps: Step[] = []): Promise<NarrationOutcome> {
+	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
 		this.assertLive();
 		this.beginRun("narration");
 		const kit: PromptKit & { view: string; events: string[]; instruction: string } = { view: this.sim.digest(), events: spineLines(this.sim, steps), instruction, recent: this.recent };
@@ -256,7 +256,7 @@ export class Engine {
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
 	}
 
-	private settleNarration(steps: Step[]): string {
+	private settleNarration(steps: Commit[]): string {
 		const text = this.run.settled + this.run.current;
 		if (text.trim() === "") {
 			this.run.warnings.push("散文为空。");
@@ -265,7 +265,7 @@ export class Engine {
 		return text;
 	}
 
-	private fallbackSummary(steps: Step[]): string {
+	private fallbackSummary(steps: Commit[]): string {
 		const { text, warning } = skeletonSummary(this.sim, steps);
 		if (warning) this.run.warnings.push(warning);
 		return text;
@@ -289,7 +289,7 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 	};
 }
 
-function formatTurnEvents(sim: Simulation, steps: Step[], revealed: string[]): string[] {
+function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]): string[] {
 	const lines = spineLines(sim, steps);
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
@@ -302,7 +302,7 @@ function formatTurnEvents(sim: Simulation, steps: Step[], revealed: string[]): s
 	return lines;
 }
 
-function skeletonSummary(sim: Simulation, steps: Step[]): { text: string; warning?: string } {
+function skeletonSummary(sim: Simulation, steps: Commit[]): { text: string; warning?: string } {
 	try {
 		const lines = spineLines(sim, steps);
 		return { text: lines.length ? lines.join("\n") : sim.def.messages.noResponse };
@@ -312,7 +312,7 @@ function skeletonSummary(sim: Simulation, steps: Step[]): { text: string; warnin
 }
 
 /** 逐动作落钟：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
-function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): void {
+function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[]): void {
 	for (const a of actions) {
 		const res = sim.apply(a);
 		sink.push(res.step, ...res.elapsed);
@@ -392,7 +392,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			const proposed = (params.actions ?? []) as Action[];
 			// 形态校验完全托付宿主面（execute 前整批拦截）
 			run.phase = "narration";
-			const steps: Step[] = [];
+			const steps: Commit[] = [];
 			let crashed: string | null = null;
 			try {
 				applyBatch(sim, proposed, steps);

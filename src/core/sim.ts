@@ -104,12 +104,6 @@ export interface Rule {
 	judge: (q: Q) => Verdict | null;
 }
 
-/** 每 tick 一次；产出只有 deltas/facts，无应答通道。 */
-export interface SystemRule {
-	id: string;
-	run: (q: Q) => { deltas: Delta[]; facts?: Fact[] } | null;
-}
-
 export function grant(deltas: Delta[], reason?: string, facts?: Fact[], ticks?: number): Verdict {
 	return { ok: true, deltas, ...(reason !== undefined && { reason }), ...(facts !== undefined && { facts }), ...(ticks !== undefined && { ticks }) };
 }
@@ -174,6 +168,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	params: P;
 	cost: number;
 	internal?: boolean;
+	clock?: boolean;
 	rules: { id: string; judge: (q: Q<ParamsOf<P>>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -182,6 +177,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 		params: spec.params,
 		cost: spec.cost,
 		...(spec.internal !== undefined && { internal: spec.internal }),
+		...(spec.clock !== undefined && { clock: spec.clock }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q as Q<ParamsOf<P>>) })),
 	};
 }
@@ -192,6 +188,7 @@ export interface VerbDef {
 	params: Record<string, ParamSpec>;
 	cost: number;
 	internal?: boolean;
+	clock?: boolean;
 	rules: Rule[];
 }
 
@@ -242,7 +239,6 @@ export interface GameDef {
 	designationKey: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
-	systems?: SystemRule[];
 	props?: Record<string, PropDef>;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
@@ -420,16 +416,18 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-export type Step = ActionStep | TickStep;
+/** 尝试提交 ⟺ 意志/代码直连：携提案，价 = granted ?? cost，声可含 reason。时钟提交由泵构造：无提案、价恒 0、声只有 facts。src 是发言者地址：法则表态 rule:<verb>.<rule>，门的自判 gate:<law>（invisible/unanswered）；出处随步入账。提交存在判据：变更 ∨ 事实 ∨ 否决 ∨ 应答义务——时钟的空授予即默。deniedBy: rule＝卫语句链/可见性门/unanswered，invariant＝必要性拦截。 */
+export type Commit =
+	| { at: number; src: string; proposal: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
+	| { at: number; src: string; proposal: Action; price: number; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial }
+	| { at: number; src: string; price: 0; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
+	| { at: number; src: string; price: 0; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial };
 
-/** 本授予的刻步为 at+1..at+ticks；法则之声（reason/facts）只住授予分支，拒绝的声音由 denial 派生。deniedBy: rule＝卫语句链或可见性门（含 unanswered 闭合），invariant＝必要性拦截。 */
-export type ActionStep =
-	| { kind: "action"; at: number; ok: true; changes: Change[]; field: FieldSpan; action: Action; ticks: number; reason?: string; facts?: Fact[] }
-	| { kind: "action"; at: number; ok: false; changes: []; field: FieldSpan; action: Action; ticks: number; deniedBy: "rule" | "invariant"; denial: Denial };
+export type Attempt = Extract<Commit, { proposal: Action }>;
 
 export interface Resolution {
-	step: ActionStep;
-	elapsed: TickStep[];
+	step: Commit;
+	elapsed: Commit[];
 }
 
 /** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟。 */
@@ -437,13 +435,8 @@ export interface ChronicleEntry {
 	seq: number;
 	time: number;
 	utterance: string;
-	steps: Step[];
+	steps: Commit[];
 }
-
-/** 一刻内某个系统的产出；失败刻结构性属于必要性通道 */
-export type TickStep =
-	| { kind: "tick"; at: number; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
-	| { kind: "tick"; at: number; ok: false; changes: []; field: FieldSpan; denial: Denial };
 
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
@@ -530,13 +523,14 @@ function referentsOf(sim: Simulation, c: Change, face: Face, sides?: { prev: boo
 }
 
 /** 事件流的规范单行渲染（✓/✗/⏱/×n）；可说性按冻结截面判据，言默不随消费面改变（刻账目闭合）。 */
-export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: ReadonlyMap<string, string> }): string[] {
-	const spanOf = (s: Step): Set<string> => new Set([...s.field.before, ...s.field.after]);
+export function spineLines(sim: Simulation, steps: readonly Commit[], opts?: { departed?: ReadonlyMap<string, string> }): string[] {
+	const isAttempt = (s: Commit): s is Attempt => "proposal" in s;
+	const spanOf = (s: Commit): Set<string> => new Set([...s.field.before, ...s.field.after]);
 	const shownDeparted = opts?.departed ?? shownDepartedNames(sim.def, steps);
 	const perceive = sim.def.propPerception?.(deepFreeze(sim.snapshot()), sim.player);
 	const face = faceOf(sim, shownDeparted, perceive);
 	/** 步内可说变更的渲染：存在性、值侧披露与指称门共一判定。 */
-	const speakableOf = (s: Step): ((c: Change) => string | null) => {
+	const speakableOf = (s: Commit): ((c: Change) => string | null) => {
 		const field = spanOf(s);
 		const edgeSides = s.field.edges && { before: new Set(s.field.edges.before), after: new Set(s.field.edges.after) };
 		const propSides = s.field.props && { before: new Set(s.field.props.before), after: new Set(s.field.props.after) };
@@ -575,10 +569,10 @@ export function spineLines(sim: Simulation, steps: Step[], opts?: { departed?: R
 		said.clear();
 	};
 	for (const s of steps) {
-		if (s.kind === "action") {
+		if (isAttempt(s)) {
 			flush();
-			granted = s.ticks;
-			if (sim.def.verbs[s.action.verb]?.internal) continue;
+			granted = s.price;
+			if (sim.def.verbs[s.proposal.verb]?.internal) continue;
 			const changes = narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
 				changes.length ? `(${changes.join("; ")})` : "",
@@ -605,10 +599,10 @@ export function relVal(world: World, from: string, to: string, type: string): Le
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 裁决表态的引擎侧补全（出处、deniedBy）：无记录字段，step 与时价公式住在 applyInner 的唯一汇编点 */
+/** 门内裁决的表态；src 是发言者地址（法则表态 rule:<verb>.<rule>，门的自判 gate:<law>），随提交入账。 */
 type RawResult =
 	| { ok: true; deltas: Delta[]; src: string; reason?: string; facts?: Fact[]; ticks?: number }
-	| { ok: false; deniedBy: "rule" | "invariant"; denial: Denial };
+	| { ok: false; src: string; deniedBy: "rule" | "invariant"; denial: Denial };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -619,11 +613,6 @@ export class Simulation {
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
-		const systemIds = new Set<string>();
-		for (const s of def.systems ?? []) {
-			if (systemIds.has(s.id)) throw new Error(`系统 id 重复：${s.id}`);
-			systemIds.add(s.id);
-		}
 		const invariantIds = new Set<string>();
 		for (const inv of def.invariants ?? []) {
 			if (invariantIds.has(inv.id)) throw new Error(`不变式 id 重复：${inv.id}`);
@@ -640,6 +629,10 @@ export class Simulation {
 				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean") throw new Error(`动词 ${name} 的参数「${p}」须为标量（string/number/boolean），得到 ${String(s.type)}`);
 				if (s.type === "string" && !s.kind) throw new Error(`动词 ${name} 的字符串参数「${p}」须声明 kind：ref（指称）或 free（自由字符串）`);
 				if (s.kind !== undefined && s.type !== "string") throw new Error(`动词 ${name} 的参数「${p}」的 kind 标记只对字符串参数有意义`);
+			}
+			if (v.clock) {
+				const required = Object.values(v.params).filter((s) => !s.optional);
+				if (required.length) throw new Error(`时钟动词 ${name} 不得有必填参数：泵以空参提案过门，时钟不是能改错重提的调用者`);
 			}
 		}
 		if (typeof def.designationKey !== "string" || def.designationKey === "") throw new Error("GameDef.designationKey 必填：指称呈现的键");
@@ -722,14 +715,14 @@ export class Simulation {
 		return verb;
 	}
 
-	private adjudicateRaw(action: Action, verb: VerbDef, curVis: Set<string>, world: World): RawResult {
+	private adjudicateRaw(action: Action, verb: VerbDef, curVis: Set<string>, world: World, pump: boolean): RawResult {
 		const invalid = refParamsOf(verb)
 			.map((p) => action.params[p])
 			.filter((id): id is string => typeof id === "string" && !curVis.has(id));
 		if (invalid.length) {
 			// 幻觉 id 与隐藏实体同一文案：门对参照域外零泄漏
 			const invisible = this.def.messages.invisibleEntity;
-			return { ok: false, deniedBy: "rule", denial: { law: "action.invisible", ...(invisible !== undefined && { reason: invisible }), debug: invalid.join(",") } };
+			return { ok: false, src: "gate:action.invisible", deniedBy: "rule", denial: { law: "action.invisible", ...(invisible !== undefined && { reason: invisible }), debug: invalid.join(",") } };
 		}
 		for (const r of verb.rules) {
 			const src = `rule:${action.verb}.${r.id}`;
@@ -738,18 +731,21 @@ export class Simulation {
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${src}: ${e instanceof Error ? e.message : String(e)}` } };
+				return { ok: false, src, deniedBy: "invariant", denial: { law: "rule.crash", debug: `${src}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
 			if (v.ok) {
+				if (pump && v.ticks !== undefined) {
+					return { ok: false, src, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: 时钟提案不得延伸时间` } };
+				}
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
-					return { ok: false, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
+					return { ok: false, src, deniedBy: "invariant", denial: { law: "invariant.grant", debug: `${src}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
 				}
 				return { ok: true, deltas: v.deltas, src, ...(v.reason !== undefined && { reason: v.reason }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, deniedBy: "rule", denial: v.denial };
+			return { ok: false, src, deniedBy: "rule", denial: v.denial };
 		}
-		return { ok: false, deniedBy: "rule", denial: { law: "action.unanswered" } };
+		return { ok: false, src: "gate:action.unanswered", deniedBy: "rule", denial: { law: "action.unanswered" } };
 	}
 
 	/** path 是骰子地址的机器身份，src 是其可读渲染，成对构造。 */
@@ -821,31 +817,52 @@ export class Simulation {
 	}
 
 	private applyInner(action: Action, s0: World): Resolution {
+		const step = this.attempt(s0, action, false);
+		return { step, elapsed: this.pump(step.price) };
+	}
+
+	private attempt(s0: World, action: Action, pump: boolean): Commit {
 		const at = s0.time;
 		const verb = this.staticForm(action);
 		const before = this.visibleIn(s0);
 		const open = this.openField(s0, before);
-		const r = this.adjudicateRaw(action, verb, before, s0);
-		let step: ActionStep;
+		const r = this.adjudicateRaw(action, verb, before, s0, pump);
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.src);
 			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
-			step = cc.ok
-				? { kind: "action", at, field, ok: true, changes: cc.changes, action, ticks: r.ticks ?? verb.cost, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) }
-				: { kind: "action", at, field, ok: false, changes: [], action, ticks: verb.cost, deniedBy: "invariant", denial: cc.denial };
-		} else {
-			const field = this.closeField(before, open, false);
-			step = { kind: "action", at, field, ok: false, changes: [], action, ticks: verb.cost, deniedBy: r.deniedBy, denial: r.denial };
+			if (!cc.ok)
+				return pump
+					? { at, src: r.src, price: 0, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial }
+					: { at, src: r.src, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial };
+			return pump
+				? { at, src: r.src, price: 0, ok: true, changes: cc.changes, field, ...(r.facts !== undefined && { facts: r.facts }) }
+				: { at, src: r.src, proposal: action, price: r.ticks ?? verb.cost, ok: true, changes: cc.changes, field, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
 		}
-		return { step, elapsed: step.ticks > 0 ? this.tick(step.ticks) : [] };
+		const field = this.closeField(before, open, false);
+		return pump
+			? { at, src: r.src, price: 0, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial }
+			: { at, src: r.src, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial };
+	}
+
+	private pump(price: number): Commit[] {
+		const out: Commit[] = [];
+		for (let i = 0; i < price; i++) {
+			this.world.time += 1;
+			for (const [name, v] of Object.entries(this.def.verbs)) {
+				if (!v.clock) continue;
+				const c = this.attempt(this.readState(), { verb: name, params: {} }, true);
+				if (!c.ok ? c.denial.law !== "action.unanswered" : c.changes.length > 0 || !!c.facts?.length) out.push(c);
+			}
+		}
+		return out;
 	}
 
 	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态参照域判，过门者取 πₚ 可读之脸，否则原样回显——幻觉、隐藏、离场同一回显。 */
-	describeAction(step: ActionStep, face: Face): string {
-		const action = step.action;
+	describeAction(s: Attempt, face: Face): string {
+		const action = s.proposal;
 		const verb = this.def.verbs[action.verb];
 		if (!verb) return action.verb;
-		const legal = new Set(step.field.before);
+		const legal = new Set(s.field.before);
 		const refs = new Set(refParamsOf(verb));
 		const parts = Object.keys(verb.params)
 			.filter((k) => k in action.params)
@@ -868,7 +885,7 @@ export class Simulation {
 		try {
 			const start = record.steps.length ? record.steps[0]!.at : record.time;
 			if (!Number.isInteger(start) || start !== this.world.time) return fail(`起点钟 ${String(start)} 不接续当前钟 ${this.world.time}`);
-			const grants = record.steps.reduce((n, s) => (s.kind === "action" ? n + s.ticks : n), 0);
+			const grants = record.steps.reduce((n, s) => n + s.price, 0);
 			if (!Number.isInteger(record.time) || record.time !== start + grants) return fail(`末钟 ${String(record.time)} ≠ 起点 ${start} + 刻账 ${grants}`);
 			for (const step of record.steps) {
 				for (const c of step.changes) {
@@ -908,49 +925,6 @@ export class Simulation {
 				return sameLedger(cur, c.prev) ? null : `rel ${c.from}->${c.to} (${c.type}) 前值不符`;
 			}
 		}
-	}
-
-	private tick(n = 1): TickStep[] {
-		const out: TickStep[] = [];
-		for (let i = 0; i < n; i++) {
-			this.world.time += 1;
-			out.push(...this.runSystems());
-		}
-		return out;
-	}
-
-	private runSystems(): TickStep[] {
-		const out: TickStep[] = [];
-		for (const sys of this.def.systems ?? []) {
-			const src = `system:${sys.id}`;
-			const s0 = this.readState();
-			const before = this.visibleIn(s0);
-			const open = this.openField(s0, before);
-			let res: ReturnType<SystemRule["run"]> = null;
-			try {
-				res = sys.run(this.query(s0, {}, ["system", sys.id]));
-			} catch (e) {
-				out.push({ kind: "tick", at: this.world.time, ok: false, changes: [], denial: { law: "system.crash", debug: `${sys.id}: ${e instanceof Error ? e.message : String(e)}` }, field: this.closeField(before, open, false) });
-				continue;
-			}
-			if (!res || (res.deltas.length === 0 && !res.facts?.length)) continue;
-			const cc = this.commitChecked(s0, res.deltas, src);
-			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
-			const at = this.world.time;
-			if (!cc.ok) {
-				out.push({ kind: "tick", at, ok: false, changes: [], denial: cc.denial, field });
-				continue;
-			}
-			out.push({
-				kind: "tick",
-				at,
-				ok: true,
-				changes: cc.changes,
-				...(res.facts !== undefined && { facts: res.facts }),
-				field,
-			});
-		}
-		return out;
 	}
 
 	snapshot(): World {

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, refParamsOf, renderDenial, spineLines } from "../core/sim.ts";
-import type { Action, Change, Denial, GameDef, Q, Scalar, Step, TickStep, VerbDef, Verdict } from "../core/sim.ts";
+import type { Action, Change, Commit, Denial, GameDef, Q, Scalar, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -9,15 +9,15 @@ import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli
 interface StepExpect {
 	ok?: boolean;
 	reason?: string;
-	/** 动作步的否决律（Denial.law）。 */
+	/** 提交的否决律（Denial.law）。 */
 	law?: string;
 	/** 期望前置条件违约（未知动词/schema 不符），不混同于世界拒绝。 */
 	protocol?: "action.unknown" | "action.schema";
 	/** 期望抛错（错误信息子串）。 */
 	throws?: string;
-	/** 期望刻步被必要性通道拦截。 */
+	/** 期望时钟提交被必要性通道拦截。 */
 	tickDenied?: boolean;
-	/** spineLines 于本步骤 [动作步, ...刻步] 的精确行集。 */
+	/** spineLines 于本步 [尝试提交, ...时钟提交] 的精确行集。 */
 	lines?: string[];
 	/** 步骤后的状态断言：`实体.属性` 点径或 `$world.*` 世界径，deepEq。 */
 	state?: Record<string, unknown>;
@@ -94,7 +94,7 @@ function checkState(sim: Simulation, checks: Record<string, unknown>): string {
 	return failures.length ? failures.join("; ") : "ok";
 }
 
-function runStep(sim: Simulation, step: ScenarioStep): { steps: Step[]; error?: unknown } {
+function runStep(sim: Simulation, step: ScenarioStep): { steps: Commit[]; error?: unknown } {
 	if (step.tick == null && !step.action) return { steps: [], error: new Error("无效步骤：缺 action/tick") };
 	try {
 		const action: Action = step.tick != null
@@ -107,8 +107,8 @@ function runStep(sim: Simulation, step: ScenarioStep): { steps: Step[]; error?: 
 	}
 }
 
-/** ok/reason/law 恒指动作步（tick 步的动作步是 dev.wait 授予，恒真）；protocol/throws 断言抛错通道；state/lines 兼断抛错步（回滚探针）。 */
-function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Step[]; error?: unknown }): string[] {
+/** ok/reason/law 恒指尝试提交（tick 场景步的尝试是 dev.wait 授予，恒真）；protocol/throws 断言抛错通道；state/lines 兼断抛错提交（回滚探针）。 */
+function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; error?: unknown }): string[] {
 	const p: string[] = [];
 	const e = step.expect;
 	const msg = ex.error instanceof Error ? ex.error.message : ex.error != null ? String(ex.error) : null;
@@ -125,8 +125,8 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Step[]; er
 		p.push(e.throws !== undefined ? `throws: 期望抛出包含「${e.throws}」的错误，未抛` : `protocol: 期望协议违约 ${e.protocol}，未抛`);
 	} else {
 		const a = ex.steps[0];
-		if (a?.kind !== "action") return ["（无动作步）"];
-		const denied = ex.steps.filter((s): s is Extract<TickStep, { ok: false }> => s.kind === "tick" && !s.ok);
+		if (a === undefined || !("proposal" in a)) return ["（无尝试提交）"];
+		const denied = ex.steps.filter((s): s is Extract<Commit, { ok: false }> => !("proposal" in s) && !s.ok);
 		const voice = a.ok ? a.reason : renderDenial(sim.def, a.denial);
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
 		if (e.reason !== undefined && !(voice ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${voice ?? ""}」`);
@@ -159,16 +159,16 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		const ex = runStep(sim, step);
 		const problems = assertStep(sim, step, ex);
 		const a = ex.steps[0];
-		const denied = ex.steps.filter((s) => s.kind === "tick" && !s.ok).length;
+		const denied = ex.steps.filter((s) => !("proposal" in s) && !s.ok).length;
 		reports.push({
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
-				: a?.kind === "action"
+				: a !== undefined && "proposal" in a
 					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.reason ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
-					: "（无动作步）",
+					: "（无尝试提交）",
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
 	}
@@ -233,7 +233,7 @@ async function cmdVerify(): Promise<void> {
 	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
-/** bug 判据：必要性通道否决（deniedBy=invariant 的动作步、失败刻步）且无世界腔理由。 */
+/** bug 判据：必要性通道否决且无世界腔理由。 */
 function bugOf(denial: Denial | undefined): string | undefined {
 	if (!denial || denial.reason != null) return undefined;
 	return denial.debug ?? denial.law;
@@ -327,7 +327,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			const { step, elapsed } = new Simulation(instrumented).apply(action);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
-				const rule = trace.find((t) => t.ok === true)!.rule;
+				const rule = def.verbs[action.verb]!.rules.find((r) => `rule:${action.verb}.${r.id}` === step.src)!.id;
 				const shape = deltaShape(step.changes);
 				const key = `${action.verb}|${rule}|${shape}`;
 				const row = grantRows.get(key);
@@ -385,7 +385,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		if (n === 0) continue;
 		for (const r of verb.rules) {
 			const s = stats.get(`${verbName}|${r.id}`) ?? { grant: 0, deny: 0, abstain: 0 };
-			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: n - s.grant - s.deny - s.abstain });
+			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: Math.max(0, n - s.grant - s.deny - s.abstain) });
 		}
 	}
 	return { rows, grants, grantRows: [...grantRows.values()], total, truncated, liveness };

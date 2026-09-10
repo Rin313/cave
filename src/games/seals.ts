@@ -263,6 +263,112 @@ const base: Omit<GameDef, "prompt"> = {
 				},
 			}],
 		}),
+		"post.deliver": defineVerb({
+			label: "邮递",
+			description: "宅邸的邮路：每四刻，书案上的信照常送抵收信人。",
+			params: {},
+			cost: 0,
+			internal: true,
+			clock: true,
+			rules: [{
+				id: "deliver",
+				judge: (q) => {
+					if (q.world.time % 4 !== 0) return null;
+					const deltas: Delta[] = [];
+					const facts: Fact[] = [];
+					// 猜疑按收信人聚合为一次写：同址叠加增量按序覆盖
+					const suspicion = new Map<string, number>();
+					for (const l of q.world.entities) {
+						if (l.props.kind !== "letter" || l.props.in !== "desk") continue;
+						const rid = String(l.props.recipient ?? "");
+						const to = entity(q.world, rid);
+						if (!to) continue;
+						const tampered = l.props.seal !== true;
+						deltas.push(D.set(l.id, "in", rid), D.set(l.id, "seal", false), D.relSet(rid, l.id, "知晓", true));
+						if (tampered) {
+							suspicion.set(rid, (suspicion.get(rid) ?? 0) + 1);
+							facts.push(`${nameOf(q.world, rid)}收了${nameOf(q.world, l.id)}。断口的火漆瞒不过人，${nameOf(q.world, rid)}的目光落在你身上。`);
+						} else {
+							facts.push(`${nameOf(q.world, rid)}收了${nameOf(q.world, l.id)}，拆封读毕。`);
+						}
+					}
+					for (const [rid, n] of suspicion) {
+						const prev = Number(relVal(q.world, rid, host(q), "猜疑") ?? 0);
+						deltas.push(D.relSet(rid, host(q), "猜疑", prev + n));
+					}
+					return deltas.length ? grant(deltas, undefined, facts) : null;
+				},
+			}],
+		}),
+		"post.arrive": defineVerb({
+			label: "夜笺",
+			description: "宅邸的暗渠：交割后的下一刻，夜笺自会到案。",
+			params: {},
+			cost: 0,
+			internal: true,
+			clock: true,
+			rules: [{
+				id: "arrive",
+				judge: (q) => {
+					if (q.world.time % 4 !== 1 || entity(q.world, "letter_night")) return null;
+					const delivered = q.world.entities.some((e) => e.props.kind === "letter" && e.props.recipient != null && e.props.in === e.props.recipient);
+					if (!delivered) return null;
+					return grant(
+						[D.spawn({ id: "letter_night", props: { name: "夜笺", kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } })],
+						undefined,
+						["又有一封夜笺送到，搁在书案上。"],
+					);
+				},
+			}],
+		}),
+		"salon.gossip": defineVerb({
+			label: "流言",
+			description: "宅邸的耳目：过从甚密者必有低语，偶尔被你瞥见。",
+			params: {},
+			cost: 0,
+			internal: true,
+			clock: true,
+			rules: [{
+				id: "gossip",
+				judge: (q) => {
+					if (q.world.time % 4 !== 2) return null;
+					let best: { from: string; to: string; v: number } | null = null;
+					for (const r of q.world.relations) {
+						if (r.type !== "信任" || r.from === q.player || r.to === q.player) continue;
+						const v = Number(r.value ?? 0);
+						if (!best || v > best.v) best = { from: r.from, to: r.to, v };
+					}
+					if (!best || best.v < 2) return null;
+					return grant([], undefined, [`你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。`]);
+				},
+			}],
+		}),
+		"guest.drift": defineVerb({
+			label: "徘徊",
+			description: "灰衣人在正厅与书房之间踱步。",
+			params: {},
+			cost: 0,
+			internal: true,
+			clock: true,
+			rules: [{
+				id: "drift",
+				judge: (q) => {
+					const g = entity(q.world, "guest");
+					if (!g) return null;
+					if (q.world.time % 8 === 6 && g.props.in === "study") {
+						return grant(
+							[D.set("guest", "in", "parlor"), D.relSet("guest", "steward", "信任", Number(relVal(q.world, "guest", "steward", "信任") ?? 0) + 1)],
+							undefined,
+							["灰衣人踱进了正厅，与管家寒暄。"],
+						);
+					}
+					if (q.world.time % 8 === 2 && g.props.in === "parlor") {
+						return grant([D.set("guest", "in", "study")], undefined, [`${nameOf(q.world, "guest")}携着酒盏，踱回了书房。`]);
+					}
+					return null;
+				},
+			}],
+		}),
 	},
 	world: {
 		time: 0,
@@ -289,83 +395,6 @@ const base: Omit<GameDef, "prompt"> = {
 			{ from: "merchant", to: "steward", type: "信任", value: 1 },
 		],
 	},
-	systems: [
-		{
-			id: "post.deliver",
-			run: (q) => {
-				if (q.world.time % 4 !== 0) return null;
-				const deltas: Delta[] = [];
-				const facts: Fact[] = [];
-				// 猜疑按收信人聚合为一次写：同址叠加增量按序覆盖
-				const suspicion = new Map<string, number>();
-				for (const l of q.world.entities) {
-					if (l.props.kind !== "letter" || l.props.in !== "desk") continue;
-					const rid = String(l.props.recipient ?? "");
-					const to = entity(q.world, rid);
-					if (!to) continue;
-					const tampered = l.props.seal !== true;
-					deltas.push(D.set(l.id, "in", rid), D.set(l.id, "seal", false), D.relSet(rid, l.id, "知晓", true));
-					if (tampered) {
-						suspicion.set(rid, (suspicion.get(rid) ?? 0) + 1);
-						facts.push(`${nameOf(q.world, rid)}收了${nameOf(q.world, l.id)}。断口的火漆瞒不过人，${nameOf(q.world, rid)}的目光落在你身上。`);
-					} else {
-						facts.push(`${nameOf(q.world, rid)}收了${nameOf(q.world, l.id)}，拆封读毕。`);
-					}
-				}
-				for (const [rid, n] of suspicion) {
-					const prev = Number(relVal(q.world, rid, host(q), "猜疑") ?? 0);
-					deltas.push(D.relSet(rid, host(q), "猜疑", prev + n));
-				}
-				return deltas.length ? { deltas, facts } : null;
-			},
-		},
-		{
-			id: "post.arrive",
-			run: (q) => {
-				if (q.world.time % 4 !== 1 || entity(q.world, "letter_night")) return null;
-				// 首轮交割后的下一刻
-				const delivered = q.world.entities.some((e) => e.props.kind === "letter" && e.props.recipient != null && e.props.in === e.props.recipient);
-				if (!delivered) return null;
-				return {
-					deltas: [
-						D.spawn({ id: "letter_night", props: { name: "夜笺", kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } }),
-					],
-					facts: ["又有一封夜笺送到，搁在书案上。"],
-				};
-			},
-		},
-		{
-			id: "salon.gossip",
-			run: (q) => {
-				if (q.world.time % 4 !== 2) return null;
-				let best: { from: string; to: string; v: number } | null = null;
-				for (const r of q.world.relations) {
-					if (r.type !== "信任" || r.from === q.player || r.to === q.player) continue;
-					const v = Number(r.value ?? 0);
-					if (!best || v > best.v) best = { from: r.from, to: r.to, v };
-				}
-				if (!best || best.v < 2) return null;
-				return { deltas: [], facts: [`你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。`] };
-			},
-		},
-		{
-			id: "guest.drift",
-			run: (q) => {
-				const g = entity(q.world, "guest");
-				if (!g) return null;
-				if (q.world.time % 8 === 6 && g.props.in === "study") {
-					return {
-						deltas: [D.set("guest", "in", "parlor"), D.relSet("guest", "steward", "信任", Number(relVal(q.world, "guest", "steward", "信任") ?? 0) + 1)],
-						facts: ["灰衣人踱进了正厅，与管家寒暄。"],
-					};
-				}
-				if (q.world.time % 8 === 2 && g.props.in === "parlor") {
-					return { deltas: [D.set("guest", "in", "study")], facts: [`${nameOf(q.world, "guest")}携着酒盏，踱回了书房。`] };
-				}
-				return null;
-			},
-		},
-	],
 	props: SEALS_PROPS,
 	// 社会真相只经桶级披露与法则代笔流动（被测通道）
 	edgePerception: () => (r) => r.type !== "信任" && r.type !== "猜疑" && r.type !== "知晓",
