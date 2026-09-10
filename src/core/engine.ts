@@ -153,7 +153,7 @@ export class Engine {
 		const run: RunState = { phase: "mapping", visibleBefore: new Set(), settled: "", current: "", steps: [], warnings: [], usage: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
-			// 重试请求的历史已含已裁决动作及其结果，模型据此续行而非重复提案
+			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
 			retry: { enabled: true, maxRetries: 2 },
 		});
 		const recent: RecentEntry[] = [];
