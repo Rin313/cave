@@ -287,10 +287,10 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-/** 授予的变更形状指纹：kind＋键（prop 名/rel 型），机械真相不滤 internal。 */
+/** 授予的变更形状指纹：格＋键（prop 名/rel 型），机械真相不滤 internal。 */
 function deltaShape(changes: Change[]): string {
 	if (!changes.length) return "∅";
-	return changes.map((c) => (c.kind === "prop" ? `prop:${c.prop}` : c.kind === "rel" ? `rel:${c.type}` : c.kind)).sort().join("+");
+	return changes.map((c) => (c.cell === "prop" ? `prop:${c.prop}` : c.cell === "edge" ? `rel:${c.type}` : c.next === null ? "despawn" : "spawn")).sort().join("+");
 }
 
 /** 穷举指称参数 × 可见域（每动作在独立 Simulation 上裁决）；liveness 为法则×动词活性矩阵——永远弃权的法则只有此处可见。 */

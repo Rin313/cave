@@ -41,10 +41,12 @@ Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V�
 ### 变更与门
 
 ```
-δ ::= set(e,k,v) | relSet(a,b,τ,v) | spawn(ê) | despawn(e)       v ∈ V?
+格 ::= ⟨e⟩(顶点) | ⟨e,k⟩(槽) | ⟨a,b,τ⟩(边)     -- 写与记录的共同坐标
+δ  ::= set(e,k,v) | relSet(a,b,τ,v) | spawn(ê) | despawn(e)       v ∈ V?
+𝒞  ::= (格, 前态, 后态)                        -- δ 是缺前态的写，记录是补全前态的 δ
 ```
 
-绝对写，后态自含；`set/relSet` 写 none 即删。幂等跳过限于状态写（set/relSet）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。
+顶点格的后态是实体或 none（生/灭），槽格的后态是值或 none（写/删）；`set/relSet/spawn/despawn` 是格×后态的糖。绝对写，后态自含；写 none 即删。幂等跳过限于状态写（set/relSet）：`w ⊨ post(δ)` 即跳过，w 是应用该 delta 时的当前态而非 w⁻——无边可删、无键可清的清除写是空操作；同址多写后者覆盖。
 
 ```
 G : Δ* × Src → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变

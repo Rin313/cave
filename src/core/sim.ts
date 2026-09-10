@@ -3,22 +3,24 @@ import { deepFreeze, errorText, roll as rollDice } from "./util.ts";
 
 export type Scalar = string | number | boolean;
 
-export type LedgerValue = Scalar | Scalar[];
+/** 存储值：标量或其有限序列；缺席由键不在表达，故无 none。 */
+export type Value = Scalar | Scalar[];
 
-export type PropValue = LedgerValue | null;
+/** 槽写载荷：none（null）即删除。 */
+export type Payload = Value | null;
 
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
 export interface Entity {
 	id: string;
-	props: Record<string, LedgerValue>;
+	props: Record<string, Value>;
 }
 
 export interface Rel {
 	from: string;
 	to: string;
 	type: string;
-	value: LedgerValue;
+	value: Value;
 }
 
 export interface World {
@@ -27,18 +29,19 @@ export interface World {
 	relations: Rel[];
 }
 
-export type Delta =
-	| { op: "set"; entity: string; prop: string; value: PropValue }
-	| { op: "relSet"; from: string; to: string; type: string; value: LedgerValue | null }
-	| { op: "spawn"; entity: Entity }
-	| { op: "despawn"; entity: string };
+/** 账本格：顶点（存在）／槽（属性）／边（关系）——写与记录的共同坐标。 */
+export type VertexAddr = { cell: "vertex"; id: string };
+export type PropAddr = { cell: "prop"; entity: string; prop: string };
+export type EdgeAddr = { cell: "edge"; from: string; to: string; type: string };
+export type SlotAddr = PropAddr | EdgeAddr;
+export type Addr = VertexAddr | SlotAddr;
 
-/** 后态完整 diff；despawn.entity 是离场终态 */
-export type Change =
-	| { kind: "prop"; entity: string; prop: string; prev: PropValue; next: PropValue }
-	| { kind: "rel"; from: string; to: string; type: string; prev: PropValue; next: PropValue }
-	| { kind: "spawn"; entity: Entity }
-	| { kind: "despawn"; entity: Entity };
+/** δ：绝对写，后态自含。顶点格后态是实体或 none（生/灭），槽格后态是值或 none（写/删）。 */
+export type Delta = (VertexAddr & { next: Entity | null }) | (SlotAddr & { next: Payload });
+
+/** 𝒞：同一格的前态与后态——δ 是缺前态的写，记录是补全前态的 δ。 */
+type Recorded<D> = D extends { next: infer N } ? D & { prev: N } : never;
+export type Change = Recorded<Delta>;
 
 export interface Action {
 	verb: string;
@@ -112,19 +115,27 @@ export function deny(law: string, o: { reason?: string } = {}): Verdict {
 }
 
 export const D = {
-	set: (entity: string, prop: string, value: PropValue): Delta => ({ op: "set", entity, prop, value }),
-	relSet: (from: string, to: string, type: string, value: LedgerValue | null): Delta => ({ op: "relSet", from, to, type, value }),
-	spawn: (entity: Entity): Delta => ({ op: "spawn", entity }),
-	despawn: (entity: string): Delta => ({ op: "despawn", entity }),
+	set: (entity: string, prop: string, value: Payload): Delta => ({ cell: "prop", entity, prop, next: value }),
+	relSet: (from: string, to: string, type: string, value: Payload): Delta => ({ cell: "edge", from, to, type, next: value }),
+	spawn: (entity: Entity): Delta => ({ cell: "vertex", id: entity.id, next: entity }),
+	despawn: (entity: string): Delta => ({ cell: "vertex", id: entity, next: null }),
 };
+
+/** 格的机器身份：参照域、截面与记录共用同一编码。 */
+function addrKey(a: Addr): string {
+	switch (a.cell) {
+		case "vertex": return JSON.stringify(["vertex", a.id]);
+		case "prop": return JSON.stringify(["prop", a.entity, a.prop]);
+		case "edge": return JSON.stringify(["edge", a.from, a.to, a.type]);
+	}
+}
 
 /** 𝒞 反推 δ：绝对写、后态自含——重放不需读前值。 */
 function deltaOf(c: Change): Delta {
-	switch (c.kind) {
-		case "spawn": return D.spawn(JSON.parse(JSON.stringify(c.entity)) as Entity);
-		case "despawn": return D.despawn(c.entity.id);
-		case "prop": return D.set(c.entity, c.prop, c.next);
-		case "rel": return D.relSet(c.from, c.to, c.type, c.next);
+	switch (c.cell) {
+		case "vertex": return { cell: "vertex", id: c.id, next: c.next };
+		case "prop": return { cell: "prop", entity: c.entity, prop: c.prop, next: c.next };
+		case "edge": return { cell: "edge", from: c.from, to: c.to, type: c.type, next: c.next };
 	}
 }
 
@@ -277,12 +288,12 @@ function isScalarValue(v: unknown): v is Scalar {
 }
 
 /** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核。 */
-function isLedgerValue(v: unknown): v is LedgerValue {
+function isValue(v: unknown): v is Value {
 	return isScalarValue(v) || (Array.isArray(v) && v.every(isScalarValue));
 }
 
 /** 幂等跳过的判据是目标状态已成立；标量数组逐位恒等。 */
-function sameLedger(a: PropValue, b: PropValue): boolean {
+function sameValue(a: Payload, b: Payload): boolean {
 	if (a === b) return true;
 	return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 }
@@ -291,10 +302,10 @@ function sameEntity(a: Entity, b: Entity): boolean {
 	if (a.id !== b.id) return false;
 	const ka = Object.keys(a.props);
 	const kb = Object.keys(b.props);
-	return ka.length === kb.length && ka.every((k) => sameLedger(a.props[k] ?? null, b.props[k] ?? null));
+	return ka.length === kb.length && ka.every((k) => sameValue(a.props[k] ?? null, b.props[k] ?? null));
 }
 
-const got = (v: PropValue): string => {
+const got = (v: Payload): string => {
 	if (v === null) return "null";
 	if (typeof v === "number") return Number.isFinite(v) ? "number" : "non-finite number";
 	if (Array.isArray(v)) return "array";
@@ -332,7 +343,7 @@ const integrityInvariant: Invariant = {
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
 					if (v === undefined) continue;
-					if (!isLedgerValue(v)) return `integrity: ${e.id}.${p} is not a ledger value (non-null scalar or scalar array; absence is a missing key)`;
+					if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or scalar array; absence is a missing key)`;
 					if (p === ctx.def.designationKey && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
 					if (pd.type === "any") continue;
 					if (pd.type === "id") {
@@ -362,10 +373,10 @@ const integrityInvariant: Invariant = {
 				if (typeof r.to !== "string" || r.to === "") return "integrity: relation.to must be non-empty string";
 				if (typeof r.type !== "string" || r.type === "") return "integrity: relation.type must be non-empty string";
 				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
-				const eid = tupleKey([r.from, r.to, r.type]);
+				const eid = addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type });
 				if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
 				edgeIds.add(eid);
-			if (r.value === null || !isLedgerValue(r.value)) return `integrity: relation ${r.type} -> value is not a ledger value (stored edges never hold null)`;
+			if (r.value === null || !isValue(r.value)) return `integrity: relation ${r.type} -> value is not a value (stored edges never hold null)`;
 		}
 		return null;
 	},
@@ -388,10 +399,10 @@ export function designationOf(def: Pick<GameDef, "designationKey">, e: Entity): 
 	return designation(def, e) ?? e.id;
 }
 
-export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, LedgerValue> } {
+export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, Value> } {
 	const internal = internalPropsOf(def);
 	const name = perceiveProp && !perceiveProp(e, def.designationKey) ? undefined : designation(def, e);
-	const props: Record<string, LedgerValue> = {};
+	const props: Record<string, Value> = {};
 	for (const [k, v] of Object.entries(e.props)) {
 		if (internal.has(k) || k === def.designationKey) continue;
 		if (perceiveProp && !perceiveProp(e, k)) continue;
@@ -405,7 +416,7 @@ function propLabelOf(def: GameDef, prop: string): string | undefined {
 	return def.props?.[prop]?.label;
 }
 
-/** 提交边界两侧的感知截面；裁决时取定，提交后不可重算。 */
+/** 提交边界两侧的感知截面：参照域（顶点 id）恒在，边/属性截面仅于对应钩子声明时存在；裁决时取定，提交后不可重算。 */
 export interface FieldSpan {
 	before: string[];
 	after: string[];
@@ -454,9 +465,9 @@ export function shownDepartedNames(def: GameDef, steps: readonly { changes: Chan
 	const m = new Map<string, string>();
 	for (const s of steps)
 		for (const c of s.changes) {
-			if (c.kind !== "despawn") continue;
-			const v = designation(def, c.entity);
-			if (v !== undefined) m.set(c.entity.id, v);
+			if (c.cell !== "vertex" || c.next !== null || c.prev === null) continue;
+			const v = designation(def, c.prev);
+			if (v !== undefined) m.set(c.id, v);
 		}
 	return m;
 }
@@ -473,7 +484,7 @@ function faceOf(sim: Simulation, departed: ReadonlyMap<string, string>, perceive
 	};
 }
 
-function renderValue(face: Face, v: PropValue, ref: boolean): { text: string; ids: string[] } {
+function renderValue(face: Face, v: Payload, ref: boolean): { text: string; ids: string[] } {
 	if (!ref) return { text: String(v), ids: [] };
 	const items = Array.isArray(v) ? v : [v];
 	const texts: string[] = [];
@@ -495,70 +506,64 @@ function refProp(def: Pick<GameDef, "props">, prop: string): boolean {
 }
 
 /** 值位指称与边端点同过参照门：目标不在参照域则整槽遮蔽——披露的指称必有卡。 */
-function refsWithin(def: Pick<GameDef, "props">, prop: string, v: LedgerValue, vis: ReadonlySet<string>): boolean {
+function refsWithin(def: Pick<GameDef, "props">, prop: string, v: Value, vis: ReadonlySet<string>): boolean {
 	if (!refProp(def, prop)) return true;
 	for (const item of Array.isArray(v) ? v : [v]) if (typeof item === "string" && !vis.has(item)) return false;
 	return true;
 }
 
-function fmtChange(sim: Simulation, c: Change, face: Face, sides?: { prev: boolean; next: boolean }): string {
-	const val = (v: PropValue, ok: boolean, ref: boolean): string => (ok ? renderValue(face, v, ref).text : "?");
-	if (c.kind === "spawn") return `+ ${face(c.entity.id)}`;
-	if (c.kind === "despawn") return `- ${face(c.entity.id)}`;
-	if (c.kind === "rel") {
+function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }): string {
+	const val = (v: Payload, ok: boolean, ref: boolean): string => (ok ? renderValue(face, v, ref).text : "?");
+	if (c.cell === "vertex") return `${c.next === null ? "-" : "+"} ${face(c.id)}`;
+	if (c.cell === "edge") {
 		// 空侧（创生/消散）随行广播、豁免截面；? 只占位有值未读
-		const readable = (v: PropValue, side: boolean | undefined): boolean => v === null || (side ?? true);
-		return `${face(c.from)}.${c.type}.${face(c.to)}: ${val(c.prev, readable(c.prev, sides?.prev), false)} → ${val(c.next, readable(c.next, sides?.next), false)}`;
+		const readable = (v: Payload, side: boolean): boolean => v === null || side;
+		return `${face(c.from)}.${c.type}.${face(c.to)}: ${val(c.prev, readable(c.prev, sides.prev), false)} → ${val(c.next, readable(c.next, sides.next), false)}`;
 	}
-	if (c.prop === sim.def.designationKey) return `~ ${val(c.prev, sides?.prev ?? true, false)} → ${val(c.next, sides?.next ?? true, false)}`;
+	if (c.prop === sim.def.designationKey) return `~ ${val(c.prev, sides.prev, false)} → ${val(c.next, sides.next, false)}`;
 	const name = face(c.entity);
 	const label = propLabelOf(sim.def, c.prop) ?? c.prop;
-	return `${name}.${label}: ${val(c.prev, sides?.prev ?? true, refProp(sim.def, c.prop))} → ${val(c.next, sides?.next ?? true, refProp(sim.def, c.prop))}`;
+	return `${name}.${label}: ${val(c.prev, sides.prev, refProp(sim.def, c.prop))} → ${val(c.next, sides.next, refProp(sim.def, c.prop))}`;
 }
 
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	const internal = internalPropsOf(def);
-	return changes.filter((c) => !(c.kind === "prop" && internal.has(c.prop)));
+	return changes.filter((c) => !(c.cell === "prop" && internal.has(c.prop)));
 }
 
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
-function referentsOf(sim: Simulation, c: Change, face: Face, sides?: { prev: boolean; next: boolean }): string[] {
-	if (c.kind !== "prop") return c.kind === "rel" ? [c.from, c.to] : [c.entity.id];
+function referentsOf(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }): string[] {
+	if (c.cell === "vertex") return [c.id];
+	if (c.cell === "edge") return [c.from, c.to];
 	const ref = refProp(sim.def, c.prop);
 	const out: string[] = [c.entity];
-	if (sides?.prev ?? true) out.push(...renderValue(face, c.prev ?? null, ref).ids);
-	if (sides?.next ?? true) out.push(...renderValue(face, c.next ?? null, ref).ids);
+	if (sides.prev) out.push(...renderValue(face, c.prev, ref).ids);
+	if (sides.next) out.push(...renderValue(face, c.next, ref).ids);
 	return out;
 }
 
 /** 事件流的规范单行渲染（✓/✗/⏱/×n）；可说性按冻结截面判据，言默不随消费面改变（刻账目闭合）。 */
 export function spineLines(sim: Simulation, steps: readonly Commit[], opts?: { departed?: ReadonlyMap<string, string> }): string[] {
 	const isAttempt = (s: Commit): s is Attempt => "proposal" in s;
-	const spanOf = (s: Commit): Set<string> => new Set([...s.field.before, ...s.field.after]);
 	const shownDeparted = opts?.departed ?? shownDepartedNames(sim.def, steps);
 	const perceive = sim.def.propPerception?.(deepFreeze(sim.snapshot()), sim.player);
 	const face = faceOf(sim, shownDeparted, perceive);
 	/** 步内可说变更的渲染：存在性、值侧披露与指称门共一判定。 */
 	const speakableOf = (s: Commit): ((c: Change) => string | null) => {
-		const field = spanOf(s);
+		const field = new Set([...s.field.before, ...s.field.after]);
 		const edgeSides = s.field.edges && { before: new Set(s.field.edges.before), after: new Set(s.field.edges.after) };
 		const propSides = s.field.props && { before: new Set(s.field.props.before), after: new Set(s.field.props.after) };
 		const sidesOf = (c: Change): { prev: boolean; next: boolean } | null => {
-			if (c.kind === "rel" && edgeSides) {
-				const k = tupleKey([c.from, c.to, c.type]);
-				return { prev: edgeSides.before.has(k), next: edgeSides.after.has(k) };
-			}
-			if (c.kind === "prop" && propSides) {
-				const k = tupleKey([c.entity, c.prop]);
-				return { prev: propSides.before.has(k), next: propSides.after.has(k) };
-			}
+			if (c.cell === "edge" && edgeSides) return { prev: edgeSides.before.has(addrKey(c)), next: edgeSides.after.has(addrKey(c)) };
+			if (c.cell === "prop" && propSides) return { prev: propSides.before.has(addrKey(c)), next: propSides.after.has(addrKey(c)) };
 			return null;
 		};
 		return (c) => {
 			const sides = sidesOf(c);
 			if (sides && !sides.prev && !sides.next) return null;
-			if (!referentsOf(sim, c, face, sides ?? undefined).every((r) => field.has(r))) return null;
-			return fmtChange(sim, c, face, sides ?? undefined);
+			const effective = sides ?? { prev: true, next: true };
+			if (!referentsOf(sim, c, face, effective).every((r) => field.has(r))) return null;
+			return fmtChange(sim, c, face, effective);
 		};
 	};
 	const msgs = sim.def.messages;
@@ -604,7 +609,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], opts?: { d
 	return lines;
 }
 
-export function relVal(world: World, from: string, to: string, type: string): LedgerValue | null {
+export function relVal(world: World, from: string, to: string, type: string): Value | null {
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
@@ -673,7 +678,7 @@ export class Simulation {
 		const perceive = this.def.edgePerception?.(world, this.player);
 		if (!perceive) return undefined;
 		const out: string[] = [];
-		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(tupleKey([r.from, r.to, r.type]));
+		for (const r of world.relations) if (vis.has(r.from) && vis.has(r.to) && perceive(r)) out.push(addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type }));
 		return out;
 	}
 
@@ -684,7 +689,7 @@ export class Simulation {
 		const keys = Object.keys(this.def.props ?? {});
 		const out: string[] = [];
 		for (const e of world.entities) {
-			for (const k of keys) if (perceive(e, k)) out.push(tupleKey([e.id, k]));
+			for (const k of keys) if (perceive(e, k)) out.push(addrKey({ cell: "prop", entity: e.id, prop: k }));
 		}
 		return out;
 	}
@@ -914,23 +919,24 @@ export class Simulation {
 
 	/** 逐变更 prev 校验：记录前值须与重放世界相符；消散行的边可已随 despawn 消散（后态已成立即通过）。 */
 	private verifyChange(c: Change): string | null {
-		switch (c.kind) {
-			case "spawn":
-				return entity(this.world, c.entity.id) ? `spawn "${c.entity.id}" 已在世` : null;
-			case "despawn": {
-				const gone = entity(this.world, c.entity.id);
-				if (!gone) return `despawn "${c.entity.id}" 不在世`;
-				return sameEntity(gone, c.entity) ? null : `despawn "${c.entity.id}" 离场态不符`;
+		switch (c.cell) {
+			case "vertex": {
+				if (c.next === null) {
+					const gone = entity(this.world, c.id);
+					if (!gone) return `despawn "${c.id}" 不在世`;
+					return c.prev !== null && sameEntity(gone, c.prev) ? null : `despawn "${c.id}" 离场态不符`;
+				}
+				return entity(this.world, c.id) ? `spawn "${c.id}" 已在世` : null;
 			}
 			case "prop": {
 				const e = entity(this.world, c.entity);
 				if (!e) return `set "${c.entity}.${c.prop}" 主语不在世`;
-				return sameLedger(e.props[c.prop] ?? null, c.prev) ? null : `set "${c.entity}.${c.prop}" 前值不符`;
+				return sameValue(e.props[c.prop] ?? null, c.prev) ? null : `set "${c.entity}.${c.prop}" 前值不符`;
 			}
-			case "rel": {
+			case "edge": {
 				const cur = relVal(this.world, c.from, c.to, c.type);
 				if (c.next === null && cur === null) return null;
-				return sameLedger(cur, c.prev) ? null : `rel ${c.from}->${c.to} (${c.type}) 前值不符`;
+				return sameValue(cur, c.prev) ? null : `rel ${c.from}->${c.to} (${c.type}) 前值不符`;
 			}
 		}
 	}
@@ -956,7 +962,7 @@ export class Simulation {
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */
 	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: Denial } {
 		const changes: Change[] = [];
-		const upsertRel = (from: string, to: string, type: string, value: LedgerValue) => {
+		const upsertRel = (from: string, to: string, type: string, value: Value) => {
 			const hit = this.world.relations.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
 			else this.world.relations.push({ from, to, type, value });
@@ -964,57 +970,57 @@ export class Simulation {
 		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", debug: `commit: ${debug}` } });
 		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
 		for (const d of deltas) {
-			if (d.op === "spawn") {
-				if (entity(this.world, d.entity.id)) return refuse(`spawn "${d.entity.id}": entity already exists`);
-				if (!Object.values(d.entity.props).every(isLedgerValue)) return refuse(`spawn "${d.entity.id}": props contain a non-ledger value (non-null scalar or scalar array; absence is a missing key)`);
-				this.world.entities.push(JSON.parse(JSON.stringify(d.entity)) as Entity);
-				// 记录自含克隆，不与活账本共享引用
-				changes.push({ kind: "spawn", entity: JSON.parse(JSON.stringify(d.entity)) as Entity });
-				continue;
-			}
-			if (d.op === "despawn") {
-				const i = this.world.entities.findIndex((e) => e.id === d.entity);
-				if (i < 0) return refuse(`despawn "${d.entity}": entity missing`);
-				const gone = this.world.entities[i]!;
-				this.world.entities.splice(i, 1);
-				// 逆序遍历 + unshift 保边表序
-				const existing = this.world.relations;
-				const dissolved: Rel[] = [];
-				for (let j = existing.length - 1; j >= 0; j--) {
-					const r = existing[j]!;
-					if (r.from === d.entity || r.to === d.entity) {
-						dissolved.unshift(r);
-						existing.splice(j, 1);
+			if (d.cell === "vertex") {
+				if (d.next === null) {
+					const i = this.world.entities.findIndex((e) => e.id === d.id);
+					if (i < 0) return refuse(`despawn "${d.id}": entity missing`);
+					const gone = this.world.entities[i]!;
+					this.world.entities.splice(i, 1);
+					// 逆序遍历 + unshift 保边表序
+					const existing = this.world.relations;
+					const dissolved: Rel[] = [];
+					for (let j = existing.length - 1; j >= 0; j--) {
+						const r = existing[j]!;
+						if (r.from === d.id || r.to === d.id) {
+							dissolved.unshift(r);
+							existing.splice(j, 1);
+						}
 					}
+					// 记录自含克隆，不与活账本共享引用
+					changes.push({ cell: "vertex", id: d.id, prev: JSON.parse(JSON.stringify(gone)) as Entity, next: null });
+					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
+				} else {
+					if (entity(this.world, d.id)) return refuse(`spawn "${d.id}": entity already exists`);
+					if (!Object.values(d.next.props).every(isValue)) return refuse(`spawn "${d.id}": props contain a non-value (non-null scalar or scalar array; absence is a missing key)`);
+					changes.push({ cell: "vertex", id: d.id, prev: null, next: JSON.parse(JSON.stringify(d.next)) as Entity });
+					this.world.entities.push(JSON.parse(JSON.stringify(d.next)) as Entity);
 				}
-				changes.push({ kind: "despawn", entity: JSON.parse(JSON.stringify(gone)) as Entity });
-				for (const r of dissolved) changes.push({ kind: "rel", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				continue;
 			}
-			if (d.op === "relSet") {
-				if (typeof d.type !== "string" || d.type === "") return refuse(`relSet ${String(d.from)}->${String(d.to)}: relation type must be non-empty string`);
+			if (d.cell === "edge") {
+				if (d.type === "") return refuse(`relSet ${d.from}->${d.to}: relation type must be non-empty string`);
 				const prev = relVal(this.world, d.from, d.to, d.type);
-				if (sameLedger(prev, d.value)) continue;
+				if (sameValue(prev, d.next)) continue;
 				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
-				if (d.value !== null && !isLedgerValue(d.value)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a ledger value`);
-				if (d.value === null) {
+				if (d.next !== null && !isValue(d.next)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a value`);
+				if (d.next === null) {
 					// 能走到此处则边必已存在（prev !== null）
 					const i = this.world.relations.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
 					if (i >= 0) this.world.relations.splice(i, 1);
 				} else {
-					upsertRel(d.from, d.to, d.type, d.value);
+					upsertRel(d.from, d.to, d.type, d.next);
 				}
-				changes.push({ kind: "rel", from: d.from, to: d.to, type: d.type, prev, next: d.value });
+				changes.push({ cell: "edge", from: d.from, to: d.to, type: d.type, prev, next: d.next });
 				continue;
 			}
 			const e = entity(this.world, d.entity);
 			if (!e) return refuse(`set "${d.entity}.${d.prop}": target entity missing`);
-			if (d.value !== null && !isLedgerValue(d.value)) return refuse(`set "${d.entity}.${d.prop}": value is not a ledger value (non-null scalar or scalar array)`);
+			if (d.next !== null && !isValue(d.next)) return refuse(`set "${d.entity}.${d.prop}": value is not a value (non-null scalar or scalar array)`);
 			const prev = e.props[d.prop] ?? null;
-			if (sameLedger(prev, d.value)) continue;
-			if (d.value === null) delete e.props[d.prop];
-			else e.props[d.prop] = d.value;
-			changes.push({ kind: "prop", entity: d.entity, prop: d.prop, prev, next: d.value });
+			if (sameValue(prev, d.next)) continue;
+			if (d.next === null) delete e.props[d.prop];
+			else e.props[d.prop] = d.next;
+			changes.push({ cell: "prop", entity: d.entity, prop: d.prop, prev, next: d.next });
 		}
 		return { changes };
 	}
