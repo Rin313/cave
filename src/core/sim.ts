@@ -129,7 +129,7 @@ function deltaOf(c: Change): Delta {
 	}
 }
 
-/** 动词参数的声明面：惰性描述符——内核校验、宿主面与规则参数类型皆由构造派生。 */
+/** 动词参数的声明面。 */
 export interface ParamSpec {
 	type: "string" | "number" | "boolean";
 	/** 字符串参数的语义：ref＝实体 id（过可见性门），free＝字面。 */
@@ -607,7 +607,7 @@ type RawResult =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 实际起点读态的冻结副本，首次提交前惰性捕获。 */
+	/** 实际起点读态的冻结副本 */
 	private genesisCache?: World;
 
 	constructor(def: GameDef, world?: World) {

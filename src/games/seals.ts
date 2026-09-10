@@ -150,7 +150,7 @@ const base: Omit<GameDef, "prompt"> = {
 		}),
 		talk: defineVerb({
 			label: "攀谈",
-			description: "与眼前的人说一句话（words 为原话）——话语留在对方那里，成为世界里的惰性记录。",
+			description: "与眼前的人说一句话",
 			params: {
 				target: ref("交谈对象 id"),
 				words: free("要说的话"),
