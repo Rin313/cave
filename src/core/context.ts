@@ -146,7 +146,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 /** 近况与 act 结果同一变更行判据（刻账目闭合）；名字解析随世界现值（改名连续），离场名以窗口级名表兜底 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
 	const departed = shownDepartedNames(records.flatMap((r) => r.steps));
-	return records.map((r) => ({ time: r.time, intent: verbatim(r.intent), moves: spineLines(sim, r.steps, { departed }) }));
+	return records.map((r) => ({ time: r.time, utterance: verbatim(r.intent), moves: spineLines(sim, r.steps, { departed }) }));
 }
 
 export function verbatim(s: string): string {

@@ -223,7 +223,7 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 /** 近况窗口内一条回合的呈现切片 */
 export interface RecentEntry {
 	time: number;
-	intent: string;
+	utterance: string;
 	moves: string[];
 }
 
@@ -232,7 +232,7 @@ export interface PromptKit {
 	recent: RecentEntry[];
 	/** 状态视图 */
 	view?: string;
-	intent?: string;
+	utterance?: string;
 	/** 事件骨架行 */
 	events?: string[];
 	/** 渲染指令 */
@@ -261,7 +261,7 @@ export interface GameDef {
 	messages: Messages;
 	prompt: {
 		system: string;
-		turn?: (kit: PromptKit & { view: string; intent: string }) => string;
+		turn?: (kit: PromptKit & { view: string; utterance: string }) => string;
 		narrate?: (kit: PromptKit & { view: string; events: string[]; instruction: string }) => string;
 		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];
 	};
@@ -425,7 +425,7 @@ export interface Resolution {
 	elapsed: TickStep[];
 }
 
-/** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟。 */
+/** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟；intent 承载意志方话语，字段名沿袭会话文件兼容。 */
 export interface ChronicleEntry {
 	seq: number;
 	time: number;
@@ -630,7 +630,7 @@ export class Simulation {
 		return this.visibleIn(this.readState());
 	}
 
-	/** 参照域 = grounding ∩ 账本：可见性门与状态视图的共同权威，谎报的 id 静默离场。 */
+	/** 参照域 = grounding ∩ 账本 */
 	private visibleIn(world: World): Set<string> {
 		const ids = new Set(world.entities.map((e) => e.id));
 		if (!this.def.grounding) return ids;

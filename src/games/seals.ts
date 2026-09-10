@@ -43,7 +43,6 @@ const referenced = (q: Q, id: string): string | null => {
 	return null;
 };
 
-/** 桶级披露：非账本的聚合纹理。 */
 function extraOf(world: World, player: string): Record<string, ViewValue> {
 	const name = (id: string): string => nameOf(world, id);
 	const affinity: string[] = [];
@@ -315,7 +314,7 @@ const base: Omit<GameDef, "prompt"> = {
 			id: "post.arrive",
 			run: (q) => {
 				if (q.world.time % 4 !== 1 || entity(q.world, "letter_night")) return null;
-				// 首轮交割后的下一刻；判据取账本状态（信在收信人处）而非绝对钟点（存档恢复、变体开局同义）
+				// 首轮交割后的下一刻
 				const delivered = q.world.entities.some((e) => e.props.kind === "letter" && e.props.recipient != null && e.props.in === e.props.recipient);
 				if (!delivered) return null;
 				return {
@@ -385,7 +384,7 @@ const sealsSystemPrompt = (def: Pick<GameDef, "verbs">): string => {
 	return `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。
 
 Parse the player's operational intent into action proposals and submit them via the act tool. act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn. A call rejected by static form checks does not occupy the window; fix the reported violations and resubmit. If you can form a legal proposal (the verb carries the intent, referential params take ids of visible entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you. If you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities. After act returns the world's adjudication results, write the turn as literary prose for the player based on them.
-Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly. A prompt may open with recent world results (player intents and the world's skeletal responses) for reference and continuation.
+Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly. A prompt may open with recent world results (player utterances and the world's skeletal responses) for reference and continuation.
 World notes: entities lists every currently visible entity; relations lists the visible relation edges (from/to are entity ids, type is the relation name). id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
 Available verbs (enforced by the simulation layer):
 ${verbs}
@@ -401,17 +400,17 @@ const sealsRecentLines = (kit: PromptKit): string[] => {
 	if (!kit.recent.length) return [];
 	const lines = [`${kit.recent.length} recent turn(s), oldest last:`];
 	for (const r of kit.recent) {
-		lines.push(`- t${r.time} ${r.intent}`);
+		lines.push(`- t${r.time} ${r.utterance}`);
 		if (r.moves.length) for (const l of r.moves) lines.push(`  ${l}`);
 		else lines.push("  no visible events");
 	}
 	return lines;
 };
 
-const sealsTurnPrompt = (kit: PromptKit & { view: string; intent: string }): string => {
+const sealsTurnPrompt = (kit: PromptKit & { view: string; utterance: string }): string => {
 	const lines = sealsRecentLines(kit);
 	if (lines.length) lines.push("");
-	lines.push(stateHeader, kit.view, "", `Player intent: ${kit.intent}`, "", "Parse the intent and call the act tool to submit an action proposal; after act returns the world's adjudication results, write the turn as literary prose for the player based on them.");
+	lines.push(stateHeader, kit.view, "", `Player says: ${kit.utterance}`, "", "Parse the intent and call the act tool to submit an action proposal; after act returns the world's adjudication results, write the turn as literary prose for the player based on them.");
 	return lines.join("\n");
 };
 

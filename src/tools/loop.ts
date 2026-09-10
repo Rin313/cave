@@ -106,7 +106,7 @@ async function cmdAct(gameId: string, runId: string, intent: string, selection: 
 	await withEngine(gameId, runId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
 		const utterance = selection === undefined ? intent : `${intent}（选中：「${selection}」）`;
-		const outcome = await engine.act({ intent: utterance });
+		const outcome = await engine.act({ utterance });
 		const turn = engine.turn;
 		appendTranscript(dir, {
 			turn,
@@ -132,7 +132,7 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 	await withEngine(gameId, runId, async (ctx) => {
 		const { dir, sim, engine } = ctx;
 		for (const line of lines) {
-			const outcome = await engine.act({ intent: line });
+			const outcome = await engine.act({ utterance: line });
 			const turn = engine.turn;
 			appendTranscript(dir, {
 				turn, phase: "act", raw: line, selection: null, intent: line,
@@ -196,7 +196,7 @@ async function main() {
 
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：session.jsonl 是机器全量档案（回合记录与检查点，装载对账的主侧），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
 batch 意图文件每行一个意图（同一引擎会话内顺序执行，A/B 意图集用）；空行与 # 注释跳过。
---select 由本工具并合进意图（transcript 记 raw/selection 分解）——引擎的意志输入只有 intent 一段不透明文本。
+--select 由本工具并合进意图（transcript 记 raw/selection 分解）。
 render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合），引擎无第二条提案通道。
 state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用）。
 --game 恒必填：run 按游戏分目录，无跨游戏消歧。

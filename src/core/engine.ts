@@ -52,7 +52,7 @@ export type EngineEvent =
 interface RunState {
 	phase: "mapping" | "narration";
 	visibleBefore: Set<string>;
-	intent?: string | undefined;
+	utterance?: string | undefined;
 	settled: string;
 	current: string;
 	steps: Step[];
@@ -197,11 +197,11 @@ export class Engine {
 		return this.archive.lastSeq;
 	}
 
-	private beginRun(phase: "mapping" | "narration", intent?: string): void {
+	private beginRun(phase: "mapping" | "narration", utterance?: string): void {
 		const r = this.run;
 		r.phase = phase;
 		r.visibleBefore = phase === "mapping" ? this.sim.visible() : new Set();
-		r.intent = intent;
+		r.utterance = utterance;
 		r.settled = "";
 		r.current = "";
 		r.warnings = [];
@@ -209,12 +209,12 @@ export class Engine {
 		r.steps = [];
 	}
 
-	async act(action: { intent: string }): Promise<ActOutcome> {
+	async act(action: { utterance: string }): Promise<ActOutcome> {
 		this.assertLive();
-		this.beginRun("mapping", action.intent);
-		const kit: PromptKit & { view: string; intent: string } = { view: this.sim.digest(), intent: verbatim(action.intent), recent: this.recent };
+		this.beginRun("mapping", action.utterance);
+		const kit: PromptKit & { view: string; utterance: string } = { view: this.sim.digest(), utterance: verbatim(action.utterance), recent: this.recent };
 		try {
-			await this.session.prompt(this.sim.def.prompt?.turn?.(kit) ?? kit.intent);
+			await this.session.prompt(this.sim.def.prompt?.turn?.(kit) ?? kit.utterance);
 		} catch (e) {
 			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
 			if (this.run.phase === "mapping") throw e;
@@ -321,7 +321,7 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Step[]): 
 
 /** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到） */
 function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
-	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, intent: run.intent ?? "", steps: deepFreeze(run.steps) };
+	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, intent: run.utterance ?? "", steps: deepFreeze(run.steps) };
 	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
 	archive.records.push(record);
 	archive.lastSeq = record.seq;
