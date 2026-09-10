@@ -125,8 +125,8 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		p.push(e.throws !== undefined ? `throws: 期望抛出包含「${e.throws}」的错误，未抛` : `protocol: 期望协议违约 ${e.protocol}，未抛`);
 	} else {
 		const a = ex.steps[0];
-		if (a === undefined || !("proposal" in a)) return ["（无尝试提交）"];
-		const denied = ex.steps.filter((s): s is Extract<Commit, { ok: false }> => !("proposal" in s) && !s.ok);
+		if (a === undefined || a.origin === "clock") return ["（无尝试提交）"];
+		const denied = ex.steps.filter((s): s is Extract<Commit, { ok: false }> => s.origin === "clock" && !s.ok);
 		const voice = a.ok ? a.reason : renderDenial(sim.def, a.denial);
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
 		if (e.reason !== undefined && !(voice ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${voice ?? ""}」`);
@@ -159,14 +159,14 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 		const ex = runStep(sim, step);
 		const problems = assertStep(sim, step, ex);
 		const a = ex.steps[0];
-		const denied = ex.steps.filter((s) => !("proposal" in s) && !s.ok).length;
+		const denied = ex.steps.filter((s) => s.origin === "clock" && !s.ok).length;
 		reports.push({
 			index: i + 1,
 			name: step.name,
 			pass: problems.length === 0,
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
-				: a !== undefined && "proposal" in a
+				: a !== undefined && a.origin !== "clock"
 					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.reason ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
 					: "（无尝试提交）",
 			detail: problems.length ? problems.join(" | ") : "matches",

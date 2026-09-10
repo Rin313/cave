@@ -429,12 +429,18 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-/** 尝试提交 ⟺ 意志/代码直连：携提案，价 = granted ?? cost，声可含 reason。时钟提交由泵构造：无提案、价恒 0、声只有 facts。src 是发言者地址：法则表态 rule:<verb>.<rule>，门的自判 gate:<law>（invisible/unanswered）；出处随步入账。提交存在判据：变更 ∨ 事实 ∨ 否决 ∨ 应答义务——时钟的空授予即默。deniedBy: rule＝卫语句链/可见性门/unanswered，invariant＝必要性拦截。 */
+/** 步的来源：意志（玩家经广告面提案）、时钟（泵逐刻自鸣）、代码（internal 动词直连）。于构造时由 (泵?, 动词.internal?) 定，随步入账——记录自含分类，投影不复依赖 def。 */
+export type Origin = "will" | "clock" | "code";
+
+/** 携提案的源（意志或代码直连）；时钟无提案。 */
+type ProposedOrigin = Exclude<Origin, "clock">;
+
+/** 步的来源归属：will/code 携提案（proposal.verb 即动词），clock 无提案故自带 verb。价 = granted ?? cost；时钟步恒 0。声：授予带 reason?/facts?，否决带 denial。src 是发言者地址：rule:<verb>.<rule> 或 gate:<law>。deniedBy: rule＝卫语句链/可见性门/unanswered，invariant＝必要性拦截。 */
 export type Commit =
-	| { at: number; src: string; proposal: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
-	| { at: number; src: string; proposal: Action; price: number; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial }
-	| { at: number; src: string; price: 0; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
-	| { at: number; src: string; price: 0; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial };
+	| { at: number; src: string; origin: ProposedOrigin; proposal: Action; price: number; ok: true; changes: Change[]; field: FieldSpan; reason?: string; facts?: Fact[] }
+	| { at: number; src: string; origin: ProposedOrigin; proposal: Action; price: number; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial }
+	| { at: number; src: string; origin: "clock"; verb: string; price: 0; ok: true; changes: Change[]; field: FieldSpan; facts?: Fact[] }
+	| { at: number; src: string; origin: "clock"; verb: string; price: 0; ok: false; changes: []; field: FieldSpan; deniedBy: "rule" | "invariant"; denial: Denial };
 
 export type Attempt = Extract<Commit, { proposal: Action }>;
 
@@ -544,7 +550,6 @@ function referentsOf(sim: Simulation, c: Change, face: Face, sides: { prev: bool
 
 /** 事件流的规范单行渲染（✓/✗/⏱/×n）；可说性按冻结截面判据，言默不随消费面改变（刻账目闭合）。 */
 export function spineLines(sim: Simulation, steps: readonly Commit[], opts?: { departed?: ReadonlyMap<string, string> }): string[] {
-	const isAttempt = (s: Commit): s is Attempt => "proposal" in s;
 	const shownDeparted = opts?.departed ?? shownDepartedNames(sim.def, steps);
 	const perceive = sim.def.propPerception?.(deepFreeze(sim.snapshot()), sim.player);
 	const face = faceOf(sim, shownDeparted, perceive);
@@ -583,10 +588,11 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], opts?: { d
 		said.clear();
 	};
 	for (const s of steps) {
-		if (isAttempt(s)) {
+		if (s.origin !== "clock") {
 			flush();
 			granted = s.price;
-			if (sim.def.verbs[s.proposal.verb]?.internal) continue;
+			// 代码直连步不入事件流：不产尝试行，后果由状态视图与新见段承接
+			if (s.origin === "code") continue;
 			const changes = narratableChanges(sim.def, s.changes).map(speakableOf(s)).filter((x): x is string => x !== null);
 			const tail = [
 				changes.length ? `(${changes.join("; ")})` : "",
@@ -837,6 +843,7 @@ export class Simulation {
 	private attempt(s0: World, action: Action, pump: boolean): Commit {
 		const at = s0.time;
 		const verb = this.staticForm(action);
+		const source = verb.internal ? "code" : "will";
 		const before = this.visibleIn(s0);
 		const open = this.openField(s0, before);
 		const r = this.adjudicateRaw(action, verb, before, s0, pump);
@@ -845,16 +852,16 @@ export class Simulation {
 			const field = this.closeField(before, open, cc.ok && cc.changes.length > 0);
 			if (!cc.ok)
 				return pump
-					? { at, src: r.src, price: 0, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial }
-					: { at, src: r.src, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial };
+					? { at, src: r.src, origin: "clock", verb: action.verb, price: 0, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial }
+					: { at, src: r.src, origin: source, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: "invariant", denial: cc.denial };
 			return pump
-				? { at, src: r.src, price: 0, ok: true, changes: cc.changes, field, ...(r.facts !== undefined && { facts: r.facts }) }
-				: { at, src: r.src, proposal: action, price: r.ticks ?? verb.cost, ok: true, changes: cc.changes, field, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
+				? { at, src: r.src, origin: "clock", verb: action.verb, price: 0, ok: true, changes: cc.changes, field, ...(r.facts !== undefined && { facts: r.facts }) }
+				: { at, src: r.src, origin: source, proposal: action, price: r.ticks ?? verb.cost, ok: true, changes: cc.changes, field, ...(r.reason !== undefined && { reason: r.reason }), ...(r.facts !== undefined && { facts: r.facts }) };
 		}
 		const field = this.closeField(before, open, false);
 		return pump
-			? { at, src: r.src, price: 0, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial }
-			: { at, src: r.src, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial };
+			? { at, src: r.src, origin: "clock", verb: action.verb, price: 0, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial }
+			: { at, src: r.src, origin: source, proposal: action, price: verb.cost, ok: false, changes: [], field, deniedBy: r.deniedBy, denial: r.denial };
 	}
 
 	private pump(price: number): Commit[] {
