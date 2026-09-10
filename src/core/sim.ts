@@ -7,7 +7,6 @@ export type LedgerValue = Scalar | Scalar[];
 
 export type PropValue = LedgerValue | null;
 
-/** 呈现面自由载荷 */
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
 export interface Entity {
