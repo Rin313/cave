@@ -127,12 +127,12 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		const a = ex.steps[0];
 		if (a === undefined || a.origin === "clock") return ["（无尝试提交）"];
 		const denied = ex.steps.filter((s): s is Extract<Commit, { ok: false }> => s.origin === "clock" && !s.ok);
-		const voice = a.ok ? a.notes?.[0] : renderDenial(sim.def, a.denial);
+		const voice = a.ok ? a.voice : renderDenial(sim.def, a.denial);
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
 		if (e.reason !== undefined && !(voice ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${voice ?? ""}」`);
 		if (e.law !== undefined && (a.ok ? null : a.denial.law) !== e.law) p.push(`law: expected ${e.law} got ${a.ok ? null : a.denial.law}`);
 		if (e.tickDenied === true && denied.length === 0) p.push("tickDenied: 期望刻步被必要性通道拦截，未发生");
-		if (e.tickDenied !== true) for (const t of denied) p.push(`刻步被硬墙拦截: ${t.denial.debug}`);
+		if (e.tickDenied !== true) for (const t of denied) if (t.denial.fault === "engine") p.push(`刻步被硬墙拦截: ${t.denial.debug}`);
 	}
 	if (e.state) {
 		const c = checkState(sim, e.state);
@@ -167,7 +167,7 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
 				: a !== undefined && a.origin !== "clock"
-					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.notes?.[0] ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
+					? `ok=${a.ok}${a.ok ? "" : ` law=${a.denial.law}`} reason="${a.ok ? (a.voice ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
 					: "（无尝试提交）",
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
@@ -233,9 +233,9 @@ async function cmdVerify(): Promise<void> {
 	process.exit(failedFiles > 0 ? 1 : 0);
 }
 
-/** bug 判据：必要性通道否决且无世界腔理由。 */
+/** bug 判据：引擎侧违约（必要性通道）。 */
 function bugOf(denial: Denial | undefined): string | undefined {
-	if (!denial || denial.notes != null) return undefined;
+	if (!denial || denial.fault !== "engine") return undefined;
 	return denial.debug ?? denial.law;
 }
 
@@ -337,7 +337,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 				else grantRows.set(key, { verb: action.verb, rule, shape, count: 1, rep: op });
 			}
 			else {
-				const bug = step.denial.kind === "invariant" ? bugOf(step.denial) : undefined;
+				const bug = bugOf(step.denial);
 				rows.push({ verb: action.verb, op, law: step.denial.law, reason: renderDenial(def, step.denial), ...(bug !== undefined && { bug }) });
 			}
 			for (const t of elapsed) {
@@ -366,7 +366,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		const seed: Record<string, Scalar> = {};
 		for (const [p, s] of Object.entries(verb.params)) {
 			if (s.optional || refs.includes(p)) continue;
-			seed[p] = s.carrier === "number" ? 1 : s.carrier === "boolean" ? true : "…";
+			seed[p] = s.type === "number" ? 1 : s.type === "boolean" ? true : "…";
 		}
 		const generate = (idx: number, acc: Record<string, Scalar>): void => {
 			if (truncated) return;

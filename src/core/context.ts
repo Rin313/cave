@@ -31,22 +31,37 @@ interface RawTurn {
 function isSource(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	switch ((v as { kind?: unknown }).kind) {
-		case "rule": { const r = v as { verb?: unknown; rule?: unknown }; return typeof r.verb === "string" && typeof r.rule === "string"; }
+		case "rule": return typeof (v as { rule?: unknown }).rule === "string";
 		case "gate": return typeof (v as { law?: unknown }).law === "string";
-		case "init": return true;
-		case "replay": return typeof (v as { seq?: unknown }).seq === "number";
 		default: return false;
 	}
 }
 
+/** 否决形状：受众与理由；旧形状（kind/notes）在此离场。 */
+function isDenial(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	const d = v as { law?: unknown; fault?: unknown; voice?: unknown; debug?: unknown; notes?: unknown; kind?: unknown };
+	if (typeof d.law !== "string") return false;
+	if (d.fault !== "world" && d.fault !== "engine") return false;
+	if (d.voice !== undefined && typeof d.voice !== "string") return false;
+	if (d.debug !== undefined && typeof d.debug !== "string") return false;
+	return d.notes === undefined && d.kind === undefined;
+}
+
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; field?: unknown };
+	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; field?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; notes?: unknown };
 	if (typeof c.at !== "number" || !isSource(c.source) || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
 	if (!isField(c.field)) return false;
 	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
-	return a !== null && typeof a === "object" && typeof a.verb === "string" && a.params !== null && typeof a.params === "object";
+	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
+	if (c.notes !== undefined) return false;
+	if (c.ok === true) {
+		if (c.voice !== undefined && typeof c.voice !== "string") return false;
+		return c.facts === undefined || (Array.isArray(c.facts) && c.facts.every((f) => typeof f === "string"));
+	}
+	return isDenial(c.denial);
 }
 
 /** 脸表：id → 名（null = 在世但无可披露名）。 */

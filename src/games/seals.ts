@@ -3,19 +3,19 @@ import { D, defineVerb, deny, entity, free, grant, ref, refParamsOf, relVal } fr
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
 const SEALS_PROPS: Record<string, PropDef> = {
-	name: { carrier: "string", identity: true },
-	kind: { carrier: "string", label: "类别" },
-	in: { carrier: "string", reference: true, label: "持者" },
-	space: { carrier: "boolean", label: "场景" },
-	seal: { carrier: "boolean", label: "火漆" },
-	sender: { carrier: "string", reference: true, label: "寄信人" },
-	recipient: { carrier: "string", reference: true, label: "收信人" },
-	content: { carrier: "string", label: "信文" },
-	introduced: { carrier: "boolean" },
-	vessel: { carrier: "boolean" },
-	mask: { carrier: "boolean", label: "面具" },
-	heard: { carrier: "string", label: "闻言" },
-	trueName: { carrier: "string" },
+	name: { type: "string" },
+	kind: { type: "string", label: "类别" },
+	in: { type: "ref", label: "持者" },
+	space: { type: "boolean", label: "场景" },
+	seal: { type: "boolean", label: "火漆" },
+	sender: { type: "ref", label: "寄信人" },
+	recipient: { type: "ref", label: "收信人" },
+	content: { type: "string", label: "信文" },
+	introduced: { type: "boolean" },
+	vessel: { type: "boolean" },
+	mask: { type: "boolean", label: "面具" },
+	heard: { type: "string", label: "闻言" },
+	trueName: { type: "string" },
 };
 
 const des = (e: Entity): string => {
@@ -40,7 +40,7 @@ const host = (q: Q): string => hostOf(q.world, q.player);
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
 		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
-			if (pd.reference !== true) continue;
+			if (pd.type !== "ref") continue;
 			const v = e.props[k];
 			if (v === id || (Array.isArray(v) && v.includes(id))) return e.id;
 		}
@@ -80,6 +80,7 @@ const base: Omit<GameDef, "prompt"> = {
 	id: "seals",
 	title: "统一探针",
 	playerId: "player",
+	identity: "name",
 	recentWindow: 6,
 	messages: {
 		noResponse: "无人应答。",
@@ -96,9 +97,9 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "desk",
 				judge: (q) => {
 					const t = isLetter(q, q.params.entity);
-					if (!t) return deny("take.notletter", ["那不是能拿的信。"]);
-					if (t.props.in !== "desk") return deny("take.notondesk", ["那封信不在书案上。"]);
-					return grant([D.set(q.params.entity, "in", host(q))], [`你把${nameOf(q.world, q.params.entity)}拿到了手里。`]);
+					if (!t) return deny("take.notletter", "那不是能拿的信。");
+					if (t.props.in !== "desk") return deny("take.notondesk", "那封信不在书案上。");
+					return grant([D.set(q.params.entity, "in", host(q))], { voice: `你把${nameOf(q.world, q.params.entity)}拿到了手里。` });
 				},
 			}],
 		}),
@@ -111,13 +112,13 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "held",
 				judge: (q) => {
 					const t = isLetter(q, q.params.entity);
-					if (!t) return deny("read.notletter", ["那不是能读的信。"]);
-					if (t.props.in !== host(q)) return deny("read.notheld", ["你得先把信拿到手里。"]);
+					if (!t) return deny("read.notletter", "那不是能读的信。");
+					if (t.props.in !== host(q)) return deny("read.notheld", "你得先把信拿到手里。");
 					const deltas: Delta[] = [];
 					if (t.props.seal === true) deltas.push(D.set(q.params.entity, "seal", false));
 					if (relVal(q.world, q.player, q.params.entity, "知晓") === null) deltas.push(D.relSet(q.player, q.params.entity, "知晓", true));
-					if (!deltas.length) return grant([], [`你把${nameOf(q.world, q.params.entity)}又读了一遍，字句没有变。`]);
-					return grant(deltas, [`你展信细读：${String(t.props.content ?? "")}`]);
+					if (!deltas.length) return grant([], { voice: `你把${nameOf(q.world, q.params.entity)}又读了一遍，字句没有变。` });
+					return grant(deltas, { voice: `你展信细读：${String(t.props.content ?? "")}` });
 				},
 			}],
 		}),
@@ -130,13 +131,13 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "held",
 				judge: (q) => {
 					const t = isLetter(q, q.params.entity);
-					if (!t) return deny("forge.notletter", ["那不是能改的信。"]);
-					if (t.props.in !== host(q)) return deny("forge.notheld", ["你得先把信拿到手里。"]);
+					if (!t) return deny("forge.notletter", "那不是能改的信。");
+					if (t.props.in !== host(q)) return deny("forge.notheld", "你得先把信拿到手里。");
 					const text = q.params.text.trim();
-					if (!text) return deny("forge.blank", ["信文不能是空的。"]);
+					if (!text) return deny("forge.blank", "信文不能是空的。");
 					return grant(
 						[D.set(q.params.entity, "seal", false), D.set(q.params.entity, "content", text), D.relSet(q.player, q.params.entity, "知晓", true)],
-						["你借着拆封的工夫，重新誊写了信文。"],
+						{ voice: "你借着拆封的工夫，重新誊写了信文。" },
 					);
 				},
 			}],
@@ -150,9 +151,9 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "held",
 				judge: (q) => {
 					const t = isLetter(q, q.params.entity);
-					if (!t) return deny("leave.notletter", ["那不是信。"]);
-					if (t.props.in !== host(q)) return deny("leave.notheld", ["那封信不在你手里。"]);
-					return grant([D.set(q.params.entity, "in", "desk")], [`你把${nameOf(q.world, q.params.entity)}放回了书案。`]);
+					if (!t) return deny("leave.notletter", "那不是信。");
+					if (t.props.in !== host(q)) return deny("leave.notheld", "那封信不在你手里。");
+					return grant([D.set(q.params.entity, "in", "desk")], { voice: `你把${nameOf(q.world, q.params.entity)}放回了书案。` });
 				},
 			}],
 		}),
@@ -168,12 +169,12 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "person",
 				judge: (q) => {
 					const t = entity(q.world, q.params.target);
-					if (!t || t.props.kind !== "person") return deny("talk.notperson", ["那不是能交谈的人。"]);
+					if (!t || t.props.kind !== "person") return deny("talk.notperson", "那不是能交谈的人。");
 					const words = q.params.words.trim();
-					if (!words) return deny("talk.blank", ["话不能是空的。"]);
+					if (!words) return deny("talk.blank", "话不能是空的。");
 					return grant(
 						[D.set(q.params.target, "heard", words), ...(t.props.introduced !== true ? [D.set(q.params.target, "introduced", true)] : [])],
-						[`你与${nameOf(q.world, q.params.target)}攀谈了一句。`],
+						{ voice: `你与${nameOf(q.world, q.params.target)}攀谈了一句。` },
 					);
 				},
 			}],
@@ -187,10 +188,10 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "masked",
 				judge: (q) => {
 					const t = entity(q.world, q.params.target);
-					if (!t || t.props.mask !== true) return deny("unmask.nomask", ["那人没有戴面具。"]);
+					if (!t || t.props.mask !== true) return deny("unmask.nomask", "那人没有戴面具。");
 					const trueName = t.props.trueName;
 					const reveal = typeof trueName === "string" && trueName !== "" ? trueName : null;
-					return grant([...(reveal !== null ? [D.set(q.params.target, "name", reveal)] : []), D.set(q.params.target, "mask", false)], ["你揭下了面具。"]);
+					return grant([...(reveal !== null ? [D.set(q.params.target, "name", reveal)] : []), D.set(q.params.target, "mask", false)], { voice: "你揭下了面具。" });
 				},
 			}],
 		}),
@@ -203,12 +204,12 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "path",
 				judge: (q) => {
 					const d = entity(q.world, q.params.dest);
-					if (!d || d.props.space !== true) return deny("go.noplace", ["那里不是能去的地方。"]);
+					if (!d || d.props.space !== true) return deny("go.noplace", "那里不是能去的地方。");
 					const here = enclosingSpace(q.world, host(q));
-					if (here === null) return deny("go.noway", ["你无处可去。"]);
-					if (here === q.params.dest) return deny("go.here", [`你已经身在${nameOf(q.world, q.params.dest)}。`]);
-					if (relVal(q.world, here, q.params.dest, "path") === null) return deny("go.noway", [`从这里没有路通往${nameOf(q.world, q.params.dest)}。`]);
-					return grant([D.set(host(q), "in", q.params.dest)], [`你走向${nameOf(q.world, q.params.dest)}。`]);
+					if (here === null) return deny("go.noway", "你无处可去。");
+					if (here === q.params.dest) return deny("go.here", `你已经身在${nameOf(q.world, q.params.dest)}。`);
+					if (relVal(q.world, here, q.params.dest, "path") === null) return deny("go.noway", `从这里没有路通往${nameOf(q.world, q.params.dest)}。`);
+					return grant([D.set(host(q), "in", q.params.dest)], { voice: `你走向${nameOf(q.world, q.params.dest)}。` });
 				},
 			}],
 		}),
@@ -221,9 +222,9 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "vessel",
 				judge: (q) => {
 					const t = entity(q.world, q.params.entity);
-					if (!t || t.props.vessel !== true) return deny("channel.notvessel", ["那不是能容魂的东西。"]);
-					if (q.params.entity === host(q)) return deny("channel.self", ["你已经居于其中。"]);
-					return grant([D.set(q.player, "in", q.params.entity)], [`你的神魂没入${nameOf(q.world, q.params.entity)}。`]);
+					if (!t || t.props.vessel !== true) return deny("channel.notvessel", "那不是能容魂的东西。");
+					if (q.params.entity === host(q)) return deny("channel.self", "你已经居于其中。");
+					return grant([D.set(q.player, "in", q.params.entity)], { voice: `你的神魂没入${nameOf(q.world, q.params.entity)}。` });
 				},
 			}],
 		}),
@@ -236,8 +237,8 @@ const base: Omit<GameDef, "prompt"> = {
 				id: "tied",
 				judge: (q) => {
 					const ref = referenced(q, q.params.entity);
-					if (ref) return deny("burn.tied", [`${nameOf(q.world, ref)}还系着${nameOf(q.world, q.params.entity)}，解开了才烧得掉。`]);
-					return grant([D.despawn(q.params.entity)], [`你把${nameOf(q.world, q.params.entity)}掷进了火盆。`]);
+					if (ref) return deny("burn.tied", `${nameOf(q.world, ref)}还系着${nameOf(q.world, q.params.entity)}，解开了才烧得掉。`);
+					return grant([D.despawn(q.params.entity)], { voice: `你把${nameOf(q.world, q.params.entity)}掷进了火盆。` });
 				},
 			}],
 		}),
@@ -248,22 +249,22 @@ const base: Omit<GameDef, "prompt"> = {
 			cost: 0,
 			rules: [{
 				id: "lot",
-				judge: (q) => grant([], [`铜钱落进灰里：${q.roll("lot", 2) === 1 ? "吉" : "凶"}。`]),
+				judge: (q) => grant([], { voice: `铜钱落进灰里：${q.roll("lot", 2) === 1 ? "吉" : "凶"}。` }),
 			}],
 		}),
 		wait: defineVerb({
 			label: "等候",
 			description: "在廊下站着：说等多久（span 为刻数，1–12，缺省一刻）。",
-			params: { span: { carrier: "number", optional: true, description: "刻数（1–12），缺省一刻" } },
+			params: { span: { type: "number", optional: true, description: "刻数（1–12），缺省一刻" } },
 			cost: 0,
 			rules: [{
 				id: "pass",
 				judge: (q) => {
 					const span = q.params.span ?? 1;
-					if (!Number.isInteger(span)) return deny("wait.span", ["时间以刻计，没有半刻。"]);
-					if (span < 1) return deny("wait.span", ["那不算等候。"]);
-					if (span > 12) return deny("wait.span", ["你等不了那么久。"]);
-					return grant([], [span >= 4 ? "你在廊下站了好一阵子。" : "你静静站了一会儿。"], span);
+					if (!Number.isInteger(span)) return deny("wait.span", "时间以刻计，没有半刻。");
+					if (span < 1) return deny("wait.span", "那不算等候。");
+					if (span > 12) return deny("wait.span", "你等不了那么久。");
+					return grant([], { voice: span >= 4 ? "你在廊下站了好一阵子。" : "你静静站了一会儿。", ticks: span });
 				},
 			}],
 		}),
@@ -300,7 +301,7 @@ const base: Omit<GameDef, "prompt"> = {
 						const prev = Number(relVal(q.world, rid, host(q), "猜疑") ?? 0);
 						deltas.push(D.relSet(rid, host(q), "猜疑", prev + n));
 					}
-					return deltas.length ? grant(deltas, facts) : null;
+					return deltas.length ? grant(deltas, { facts }) : null;
 				},
 			}],
 		}),
@@ -319,7 +320,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (!delivered) return null;
 					return grant(
 						[D.spawn({ id: "letter_night", props: { name: "夜笺", kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } })],
-						["又有一封夜笺送到，搁在书案上。"],
+						{ voice: "又有一封夜笺送到，搁在书案上。" },
 					);
 				},
 			}],
@@ -342,7 +343,7 @@ const base: Omit<GameDef, "prompt"> = {
 						if (!best || v > best.v) best = { from: r.from, to: r.to, v };
 					}
 					if (!best || best.v < 2) return null;
-					return grant([], [`你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。`]);
+					return grant([], { voice: `你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。` });
 				},
 			}],
 		}),
@@ -361,11 +362,11 @@ const base: Omit<GameDef, "prompt"> = {
 					if (q.world.time % 8 === 6 && g.props.in === "study") {
 						return grant(
 							[D.set("guest", "in", "parlor"), D.relSet("guest", "steward", "信任", Number(relVal(q.world, "guest", "steward", "信任") ?? 0) + 1)],
-							["灰衣人踱进了正厅，与管家寒暄。"],
+							{ voice: "灰衣人踱进了正厅，与管家寒暄。" },
 						);
 					}
 					if (q.world.time % 8 === 2 && g.props.in === "parlor") {
-						return grant([D.set("guest", "in", "study")], [`${nameOf(q.world, "guest")}携着酒盏，踱回了书房。`]);
+						return grant([D.set("guest", "in", "study")], { voice: `${nameOf(q.world, "guest")}携着酒盏，踱回了书房。` });
 					}
 					return null;
 				},

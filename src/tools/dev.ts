@@ -12,11 +12,11 @@ export function withDevWait(def: GameDef): GameDef {
 				label: "流逝",
 				description: "研究摇钟：推进 n 刻（工具层合成的内部动词，映射层不可见；场景 tick 脱糖经裸 apply 消费）。",
 				private: true,
-				params: { n: { carrier: "number", optional: true, description: "刻数，缺省 1" } },
+				params: { n: { type: "number", optional: true, description: "刻数，缺省 1" } },
 				cost: 0,
 				rules: [{
 					id: "wait",
-					judge: (q) => grant([], ["时间流逝。"], Math.max(0, Math.floor(Number(q.params.n ?? 1)))),
+					judge: (q) => grant([], { voice: "时间流逝。", ticks: Math.max(0, Math.floor(Number(q.params.n ?? 1))) }),
 				}],
 			}),
 		},
