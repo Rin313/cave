@@ -68,12 +68,18 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 	return out;
 }
 
-/** 所指域：视角锚 = hostOf；魂不可自见；已引见者（introduced）并入域。 */
-const sealsNaming = (world: World, player: string): ((id: string) => boolean) => {
+/** 可见域：视角锚 = hostOf；魂不可自见。 */
+const sealsVisible = (world: World, player: string): Set<string> => {
 	const vis = inTreeVisible(world, hostOf(world, player), des);
 	vis.delete(player);
+	return vis;
+};
+
+/** 可指称域：可见 ∪ 已引见（introduced）——听说其名者可指名，可不出卡。 */
+const sealsReferable = (world: World, player: string): Set<string> => {
+	const vis = sealsVisible(world, player);
 	for (const e of world.entities) if (e.props.introduced === true) vis.add(e.id);
-	return (id) => vis.has(id);
+	return vis;
 };
 
 const base: Omit<GameDef, "prompt"> = {
@@ -387,14 +393,19 @@ const base: Omit<GameDef, "prompt"> = {
 		"猜疑": { type: "number", present: "hidden" },
 		"知晓": { type: "boolean", present: "hidden" },
 	},
-	// 卡随感知域（顶点格）：居所链可见＋已引见者；信文只对知晓者可感（判据 = 知晓边）；隐藏边由注册声明遮蔽
+	// 卡随可见域（顶点格）：居所链；信文只对知晓者可感（判据 = 知晓边）；隐藏边由名字缺省遮蔽
 	perceives: (world, player) => {
-		const vis = sealsNaming(world, player);
+		const vis = sealsVisible(world, player);
 		return (cell: Addr): boolean => {
-			if (cell.cell === "vertex") return vis(cell.id);
+			if (cell.cell === "vertex") return vis.has(cell.id);
 			if (cell.cell === "edge") return true;
 			return cell.prop !== "content" || relVal(world, player, cell.entity, "知晓") !== null;
 		};
+	},
+	// 指称门随可指称域：已引见者离屏仍可指名（出句柄目录，不出卡）
+	referable: (world, player) => {
+		const vis = sealsReferable(world, player);
+		return (e: Entity) => vis.has(e.id);
 	},
 	digestExtra: extraOf,
 };
@@ -405,14 +416,14 @@ const sealsSystemPrompt = (def: Pick<GameDef, "verbs">): string => {
 	const verbs = Object.entries(def.verbs)
 		.map(([name, v]) => {
 			const refs = refParamsOf(v);
-			return `- ${name} "${v.label}": ${v.description}${refs.length ? ` (reference params: ${refs.join("/")} — must be ids of visible entities)` : ""}`;
+			return `- ${name} "${v.label}": ${v.description}${refs.length ? ` (reference params: ${refs.join("/")} — must be ids of visible or known entities)` : ""}`;
 		})
 		.join("\n");
 	return `你以白描与留白写这一夜：宅邸的灯、火盆、火漆与低语。短句，重感官，克制；不解释人物的内心，让断口与沉默自己说话。称呼玩家为「你」。
 
-Parse the player's operational intent into action proposals and submit them via the act tool. act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn. A call rejected by static form checks does not occupy the window; fix the reported violations and resubmit. If you can form a legal proposal (the verb carries the intent, referential params take ids of visible entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you. If you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities. After act returns the world's adjudication results, write the turn as literary prose for the player based on them.
+Parse the player's operational intent into action proposals and submit them via the act tool. act allows exactly one adjudication window per turn; once a proposal enters adjudication, no further act calls are accepted this turn. A call rejected by static form checks does not occupy the window; fix the reported violations and resubmit. If you can form a legal proposal (the verb carries the intent, referential params take ids of visible or known entities), submit actions; submit as usual even if you expect the world to deny it — whether the intent is reasonable is adjudicated by world laws, not by you. If you cannot form a legal proposal, submit empty actions (an empty proposal is a refusal; write no rationale); do not force verbs that cannot carry the intent or unrelated entities. After act returns the world's adjudication results, write the turn as literary prose for the player based on them.
 Rendering calls (opening scenes, scene descriptions after time passes) have no action window: such prompts are headed "[Rendering service]"; do not call act, write the prose text directly. A prompt may open with recent world results (player utterances and the world's skeletal responses) for reference and continuation.
-World notes: entities lists every currently visible entity; relations lists the visible relation edges (from/to are entity ids, type is the relation name). id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
+World notes: entities lists every currently visible entity (props is a list of named values); relations lists the visible relation edges (from/to are entity ids, type is the relation name); known, when present, lists entities you know of but cannot see (id and name) — referential params may take their ids. id is the unique identifier, name is the display name. extra, when present, is game-derived scene texture.
 Available verbs (enforced by the simulation layer):
 ${verbs}
 

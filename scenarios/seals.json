@@ -93,8 +93,8 @@
 		{
 			"name": "值位指称过参照门：ref 型槽的目标出域则整槽遮蔽——披露的指称必有卡（与边端点同门）",
 			"steps": [
-				{ "name": "五刻：夜笺到案，寄信人（灰衣人）尚在书房——寄信人出域，整槽遮蔽", "tick": 5, "expect": { "ok": true, "state": { "$world.time": 5, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"寄信人\":\"guest\""] } },
-				{ "name": "一刻：灰衣人漂移入厅——寄信人随卡显形", "tick": 1, "expect": { "ok": true, "viewIncludes": ["\"寄信人\":\"guest\""] } }
+				{ "name": "五刻：夜笺到案，寄信人（灰衣人）尚在书房——寄信人出域，整槽遮蔽", "tick": 5, "expect": { "ok": true, "state": { "$world.time": 5, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"name\":\"寄信人\",\"value\":\"guest\""] } },
+				{ "name": "一刻：灰衣人漂移入厅——寄信人随卡显形", "tick": 1, "expect": { "ok": true, "viewIncludes": ["\"name\":\"寄信人\",\"value\":\"guest\""] } }
 			]
 		},
 		{

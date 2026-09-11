@@ -52,6 +52,7 @@ export type EngineEvent =
 interface RunState {
 	phase: "mapping" | "narration";
 	visibleBefore: Set<string>;
+	knownBefore: Set<string>;
 	utterance?: string | undefined;
 	messageStart: number;
 	entryStart: number;
@@ -131,7 +132,7 @@ export class Engine {
 
 		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", visibleBefore: new Set(), messageStart: 0, entryStart: 0, steps: [], warnings: [] };
+		const run: RunState = { phase: "mapping", visibleBefore: new Set(), knownBefore: new Set(), messageStart: 0, entryStart: 0, steps: [], warnings: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
@@ -181,7 +182,14 @@ export class Engine {
 	private beginRun(phase: "mapping" | "narration", utterance?: string): void {
 		const r = this.run;
 		r.phase = phase;
-		r.visibleBefore = phase === "mapping" ? this.sim.sights() : new Set();
+		if (phase === "mapping") {
+			const sv = this.sim.sightView();
+			r.visibleBefore = sv.visible;
+			r.knownBefore = sv.known;
+		} else {
+			r.visibleBefore = new Set();
+			r.knownBefore = new Set();
+		}
 		r.utterance = utterance;
 		r.messageStart = this.session.messages.length;
 		r.entryStart = this.session.sessionManager.getEntries().length;
@@ -300,7 +308,12 @@ function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]):
 		const w = deepFreeze(sim.snapshot());
 		for (const id of revealed) {
 			const card = sim.card(w, id);
-			if (card) lines.push(JSON.stringify(card));
+			if (card) {
+				lines.push(JSON.stringify(card));
+				continue;
+			}
+			const handle = sim.handle(w, id);
+			if (handle) lines.push(JSON.stringify(handle));
 		}
 	}
 	return lines;
@@ -385,7 +398,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 	return defineTool({
 		name: "act",
 		label: "act",
-		description: `Propose actions to the world (${verbs.map(([n]) => n).join("/")}); the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; referential params take ids of visible entities; an empty actions array is a refusal.`,
+		description: `Propose actions to the world (${verbs.map(([n]) => n).join("/")}); the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; referential params take ids of visible or known entities; an empty actions array is a refusal.`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -419,9 +432,12 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			}
 			let text: string;
 			try {
-				// 投影失灵时不重入所见域：新见段缺席
-				const vis = crashed ? new Set<string>() : sim.sights();
-				const revealed = crashed ? [] : [...vis].filter((id) => !run.visibleBefore.has(id));
+				// 投影失灵时不重入所见域：新见段缺席。新见段 = 新进可见域 ∪ 新进可指称域（出卡优先，否则出句柄）
+				const sv = crashed ? null : sim.sightView();
+				const revealed = sv === null ? [] : [...new Set([
+					...[...sv.visible].filter((id) => !run.visibleBefore.has(id)),
+					...[...sv.known].filter((id) => !run.knownBefore.has(id)),
+				])];
 				const lines = formatTurnEvents(sim, steps, revealed);
 				if (crashed) lines.push(def.messages.noResponse);
 				text = lines.join("\n");
