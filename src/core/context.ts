@@ -1,6 +1,6 @@
 // 会话文件保存全量审计：档案是单一追加日志——回合条目（证据，每回合恰一）+ 检查点条目（缓存）。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, deepFreeze, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, deepFreeze, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type RecentEntry, type World } from "./sim.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
@@ -25,12 +25,6 @@ interface RawTurn {
 	steps?: unknown;
 }
 
-/** 授予行的 law 缺省即守卫 id；law 引入前的记录缺此字段，装载时按缺省补全——可回算载荷同坐标断言之律。 */
-function completeLaw(s: unknown): Commit {
-	const c = s as { ok: boolean; rule: string; law?: string };
-	return c.ok && c.law === undefined ? { ...(s as Extract<Commit, { ok: true }>), law: c.rule } : (s as Commit);
-}
-
 interface RawCheckpoint {
 	seq?: unknown;
 	world?: unknown;
@@ -50,7 +44,7 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 		if (e.customType === TURN_RECORD_TYPE) {
 			const d = e.data as RawTurn | undefined;
 			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps) && d.steps.every(isCommit)) {
-				out.records.push(deepFreeze({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps.map(completeLaw) }));
+				out.records.push(deepFreeze({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps }));
 			} else broken++;
 			continue;
 		}

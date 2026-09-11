@@ -261,7 +261,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (!Number.isInteger(span)) return deny("wait.span", "时间以刻计，没有半刻。");
 					if (span < 1) return deny("wait.span", "那不算等候。");
 					if (span > 12) return deny("wait.span", "你等不了那么久。");
-					return grant([], { reply: span >= 4 ? "你在廊下站了好一阵子。" : "你静静站了一会儿。", ticks: span });
+					return grant([], { reply: span >= 4 ? "你在廊下站了好一阵子。" : "你静静站了一会儿。", price: span });
 				},
 			}],
 		}),

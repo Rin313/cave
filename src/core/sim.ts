@@ -163,29 +163,29 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 裁决结果；ticks 覆写价，授予与否决同轴；授予的可选 law 缺省即守卫 id，只被呈现与探针消费。 */
+/** 裁决结果；price 覆写缺省 cost（授予与否决同轴）；授予的可选 law 缺省即守卫 id，只被呈现与探针消费。 */
 export type Verdict =
-	| { ok: true; deltas: Delta[]; law?: Text; reply?: Text; statements?: Text[]; ticks?: number }
-	| { ok: false; denial: RuleDenial; ticks?: number };
+	| { ok: true; deltas: Delta[]; law?: Text; reply?: Text; statements?: Text[]; price?: number }
+	| { ok: false; denial: RuleDenial; price?: number };
 
 export interface Rule {
 	id: string;
 	judge: (q: Q) => Verdict | null;
 }
 
-export function grant(deltas: Delta[], opts: { law?: Text; reply?: Text; statements?: Text[]; ticks?: number } = {}): Verdict {
+export function grant(deltas: Delta[], opts: { law?: Text; reply?: Text; statements?: Text[]; price?: number } = {}): Verdict {
 	return {
 		ok: true,
 		deltas,
 		...(opts.law !== undefined && { law: opts.law }),
 		...(opts.reply !== undefined && { reply: opts.reply }),
 		...(opts.statements !== undefined && { statements: opts.statements }),
-		...(opts.ticks !== undefined && { ticks: opts.ticks }),
+		...(opts.price !== undefined && { price: opts.price }),
 	};
 }
 
-export function deny(law: string, text?: Text, ticks?: number): Verdict {
-	return { ok: false, denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(ticks !== undefined && { ticks }) };
+export function deny(law: string, text?: Text, price?: number): Verdict {
+	return { ok: false, denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(price !== undefined && { price }) };
 }
 
 export const D = {
@@ -399,9 +399,9 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 /** 判定数据面：verdict 中会进记录的字段（作者可影响的部分）——违约由 engine(grant) 承接。 */
 function verdictProblems(v: Verdict, clock: boolean): string[] {
 	const out: string[] = [];
-	if (v.ticks !== undefined) {
+	if (v.price !== undefined) {
 		if (clock) out.push("常驻规则不得延伸时间");
-		else if (!Number.isInteger(v.ticks) || v.ticks < 0) out.push(`ticks 须为非负整数刻数，得到 ${String(v.ticks)}`);
+		else if (!Number.isInteger(v.price) || v.price < 0) out.push(`price 须为非负整数刻数，得到 ${String(v.price)}`);
 	}
 	if (v.ok) {
 		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
@@ -702,7 +702,7 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = origin=clock ? 0 : (ticks ?? cost)；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
+/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = origin=clock ? 0 : (price ?? cost)；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
 	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; law: Text; changes: Change[]; reply?: Text; statements?: Text[] }
 	| { at: number; origin: Origin; action: Action; price: number; ok: false; rule?: string; denial: Denial };
@@ -749,7 +749,7 @@ function isChange(v: unknown): boolean {
 	}
 }
 
-/** 步形状：授予行 law 可缺（law 引入前的记录），有则须非空；否决的 rule 同样可缺。 */
+/** 步形状：授予行 law 必填非空；否决的 rule 可缺（gate/closure 无守卫）。 */
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
 	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
@@ -759,7 +759,7 @@ export function isCommit(s: unknown): boolean {
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
 	if (c.ok === true) {
 		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
-		if (c.law !== undefined && (typeof c.law !== "string" || c.law === "")) return false;
+		if (typeof c.law !== "string" || c.law === "") return false;
 		if (c.reply !== undefined && typeof c.reply !== "string") return false;
 		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
 	}
@@ -1022,8 +1022,8 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 
 /** 门内裁决的表态；授予记守卫与法则，否决自带裁决点与守卫。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; rule: string; law: Text; reply?: Text; statements?: Text[]; ticks?: number }
-	| { ok: false; denial: Denial; rule?: string; ticks?: number };
+	| { ok: true; deltas: Delta[]; rule: string; law: Text; reply?: Text; statements?: Text[]; price?: number }
+	| { ok: false; denial: Denial; rule?: string; price?: number };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -1185,9 +1185,9 @@ export class Simulation {
 			const problems = verdictProblems(v, clock);
 			if (problems.length) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
 			if (v.ok) {
-				return { ok: true, deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
+				return { ok: true, deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.price !== undefined && { price: v.price }) };
 			}
-			return { ok: false, rule: r.id, denial: v.denial, ...(v.ticks !== undefined && { ticks: v.ticks }) };
+			return { ok: false, rule: r.id, denial: v.denial, ...(v.price !== undefined && { price: v.price }) };
 		}
 		return { ok: false, denial: { point: { kind: "closure" } } };
 	}
@@ -1300,10 +1300,10 @@ export class Simulation {
 				// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
 				const reply = clock ? undefined : r.reply;
 				const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-				step = { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+				step = { at, origin, action, price: clock ? 0 : (r.price ?? price), ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 			}
 		} else {
-			step = { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
+			step = { at, origin, action, price: clock ? 0 : (r.price ?? price), ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 		}
 		// 绊线：提交产出必落在装载域内（与装载路径同一判据）
 		if (!isCommit(step)) throw new Error(`内核缺陷：提交产出的记录被装载判据拒绝 ${JSON.stringify(step)}`);
