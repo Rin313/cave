@@ -86,10 +86,15 @@ export type LitType = "string" | "number" | "boolean";
 /** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称。 */
 export type SlotType = LitType | "ref";
 
-/** 属性与边载荷共用的槽声明面：值域 × 重数 × 呈现名。 */
-interface SlotCommon {
-	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
+/** 值声明：值域 × 重数；属性的值、边载荷与动词参数共用这根轴。 */
+interface ValueDecl {
+	type: SlotType;
+	/** 重数：缺省 one（标量），true 为非空序列。 */
 	many?: true;
+}
+
+/** 注册槽：值声明 + 呈现名；ref 另携生命周期。 */
+interface SlotCommon extends ValueDecl {
 	/** 呈现名；缺席或 null 即该表缺省（属性无名、边 τ），非空串即该名。 */
 	label?: string | null;
 }
@@ -240,12 +245,9 @@ export function rewind(world: World, steps: readonly Commit[]): void {
 	}
 }
 
-/** 动词参数的声明面：类型 × 可选 × 重数 × 描述。 */
-export interface ParamSpec {
-	type: SlotType;
+/** 动词参数：值声明 + 可选 × 描述。 */
+export interface ParamSpec extends ValueDecl {
 	optional?: true;
-	/** 重数：缺省 one（标量），true 为非空序列。 */
-	many?: true;
 	description?: string;
 }
 
@@ -362,18 +364,19 @@ export function catalog(verbs: Readonly<Record<string, VerbDef>>): string {
 	return rows.join("\n");
 }
 
-/** 类型匹配：ref 的运行时表示是 id 字符串；many 为非空序列。 */
-function matchesScalar(type: SlotType, v: unknown): boolean {
-	switch (type) {
-		case "string": case "ref": return typeof v === "string";
-		case "number": return typeof v === "number";
-		case "boolean": return typeof v === "boolean";
+/** 值声明的形状谓词：ref 的运行时表示是 id 字符串，Num 须有限；与世界值同形。返回问题描述（不含位置前缀）。 */
+function valueProblem(type: SlotType, many: boolean, v: unknown): string | null {
+	if (Array.isArray(v) !== many) return `expects ${many ? "a non-empty sequence" : "a scalar"}, got ${got(v)}`;
+	if (many && (v as unknown[]).length === 0) return "expects a non-empty sequence, got an empty sequence";
+	for (const x of Array.isArray(v) ? v : [v]) {
+		if (type === "ref") {
+			if (typeof x !== "string") return `expects id reference, got ${got(x)}`;
+			continue;
+		}
+		if (typeof x !== type) return `expects ${type}, got ${got(x)}`;
+		if (type === "number" && !Number.isFinite(x)) return `expects a finite number, got ${got(x)}`;
 	}
-}
-
-function matchesParam(spec: ParamSpec, v: unknown): boolean {
-	if (spec.many === true) return Array.isArray(v) && v.length > 0 && v.every((x) => matchesScalar(spec.type, x));
-	return matchesScalar(spec.type, v);
+	return null;
 }
 
 /** 内核形态检查（动词表全集） */
@@ -390,7 +393,8 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 			if (!s.optional) out.push(`params.${name}: missing required parameter${desc(s)}`);
 			continue;
 		}
-		if (!matchesParam(s, v)) out.push(`params.${name}: must be ${s.many === true ? `a non-empty ${s.type} sequence` : s.type}${desc(s)}`);
+		const problem = valueProblem(s.type, s.many === true, v);
+		if (problem) out.push(`params.${name}: ${problem}${desc(s)}`);
 	}
 	return out;
 }
@@ -507,7 +511,7 @@ function sameEntity(a: Entity, b: Entity): boolean {
 	return ka.length === kb.length && ka.every((k) => sameValue(a.props[k] ?? null, b.props[k] ?? null));
 }
 
-const got = (v: Payload): string => {
+const got = (v: unknown): string => {
 	if (v === null) return "null";
 	if (typeof v === "number") return Number.isFinite(v) ? "number" : "non-finite number";
 	if (Array.isArray(v)) return "array";
@@ -515,17 +519,12 @@ const got = (v: Payload): string => {
 	return typeof v;
 };
 
-/** 注册槽的值契约：重数与值域；ref 追加在世。返回问题描述（不含位置前缀）。 */
+/** 注册槽的值契约：形状 + ref 在世。返回问题描述（不含位置前缀）。 */
 function slotValueProblem(d: SlotDef, v: Value, ids: ReadonlySet<string>): string | null {
-	const many = d.many === true;
-	if (Array.isArray(v) !== many) return `expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
-	for (const x of Array.isArray(v) ? v : [v]) {
-		if (d.type === "ref") {
-			if (typeof x !== "string") return `expects id reference, got ${got(x)}`;
-			if (!ids.has(x)) return `-> missing entity ${x}`;
-			continue;
-		}
-		if (typeof x !== d.type) return `expects ${d.type}, got ${got(x)}`;
+	const problem = valueProblem(d.type, d.many === true, v);
+	if (problem) return problem;
+	if (d.type === "ref") {
+		for (const x of Array.isArray(v) ? v : [v]) if (typeof x === "string" && !ids.has(x)) return `-> missing entity ${x}`;
 	}
 	return null;
 }
@@ -779,13 +778,23 @@ function isWeakSlot(d: SlotDef | undefined): boolean {
 	return d !== undefined && d.type === "ref" && d.strong === false;
 }
 
-/** 注册项按契约检查：值域 × 重数 × 呈现名 × ref 生命周期（strong 必填）。 */
-function validateSlotDef(where: string, d: unknown): void {
-	const raw = (d ?? {}) as { type?: unknown; many?: unknown; label?: unknown; strong?: unknown };
-	if (raw.type !== "string" && raw.type !== "number" && raw.type !== "boolean" && raw.type !== "ref") throw new Error(`${where}的 type 须为 string/number/boolean/ref，得到 ${String(raw.type)}`);
+/** 值声明按契约检查：公共轴（type × many）+ 位点附加；未知字段即违约。 */
+function validateDecl(where: string, param: boolean, d: unknown): void {
+	const raw = (d ?? {}) as Record<string, unknown>;
+	const allowed = param ? ["type", "many", "optional", "description"] : ["type", "many", "label", "strong"];
+	for (const k of Object.keys(raw)) {
+		if (!allowed.includes(k)) throw new Error(`${where}不接受字段「${k}」（${param ? "参数" : "注册槽"}声明：${allowed.join("/")}）`);
+	}
+	const type = raw.type;
+	if (type !== "string" && type !== "number" && type !== "boolean" && type !== "ref") throw new Error(`${where}的 type 须为 string/number/boolean/ref，得到 ${String(type)}`);
 	if (raw.many !== undefined && raw.many !== true) throw new Error(`${where}的 many 只能为 true（缺省即 one），得到 ${String(raw.many)}`);
+	if (param) {
+		if (raw.optional !== undefined && raw.optional !== true) throw new Error(`${where}的 optional 只能为 true（缺省即必填），得到 ${String(raw.optional)}`);
+		if (raw.description !== undefined && (typeof raw.description !== "string" || raw.description === "")) throw new Error(`${where}的 description 须为非空字符串，得到 ${JSON.stringify(raw.description)}`);
+		return;
+	}
 	if (raw.label !== undefined && raw.label !== null && (typeof raw.label !== "string" || raw.label === "")) throw new Error(`${where}的 label 须为 null 或非空字符串，得到 ${JSON.stringify(raw.label)}`);
-	if (raw.type === "ref") {
+	if (type === "ref") {
 		if (typeof raw.strong !== "boolean") throw new Error(`${where}的 ref 须声明 strong（true 强 / false 弱），得到 ${String(raw.strong)}`);
 	} else if (raw.strong !== undefined) {
 		throw new Error(`${where}的 strong 只对 ref 有意义`);
@@ -978,9 +987,7 @@ export class Simulation {
 				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
 				ruleIds.add(r.id);
 			}
-			for (const [p, s] of Object.entries(v.params)) {
-				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean" && s.type !== "ref") throw new Error(`动词 ${name} 的参数「${p}」的类型须为 string/number/boolean/ref，得到 ${String(s.type)}`);
-			}
+			for (const [p, s] of Object.entries(v.params)) validateDecl(`动词 ${name} 的参数「${p}」`, true, s);
 			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${name} 的 invisible 须为非空字符串`);
 			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${name} 无指称参数，invisible 文案不会被消费`);
 		}
@@ -997,8 +1004,8 @@ export class Simulation {
 			ticks.set(t.id, t.rules);
 		}
 		// props 与 relTypes 同制：注册即契约；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
-		for (const [k, d] of Object.entries(def.props ?? {})) validateSlotDef(`属性「${k}」`, d);
-		for (const [t, d] of Object.entries(def.relTypes ?? {})) validateSlotDef(`边类型「${t}」`, d);
+		for (const [k, d] of Object.entries(def.props ?? {})) validateDecl(`属性「${k}」`, false, d);
+		for (const [t, d] of Object.entries(def.relTypes ?? {})) validateDecl(`边类型「${t}」`, false, d);
 		this.ticks = ticks;
 		// 结构校验恒挂；作者不变式走 admit（历史不重审），开局世界在此另判一次以尽早显形 def 错误
 		const broken = integrityProblems(this.def, this.readState());
