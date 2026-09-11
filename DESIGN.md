@@ -187,7 +187,6 @@ price(s) = origin(s) ≠ clock ? (ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb))
 ## 面向作者的契约
 
 - **动词表**：`params` 声明（type×可选×重数×描述）派生宿主面、内核校验与规则参数的编译期类型；`type ∈ {lit(string), lit(number), lit(boolean), ref}`，`ref` 的值是实体 id（过感知门＝所见集），`lit(·)` 是字面；`many` 令参数为非空序列，与世界值同形——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。`private` 动词不进广告面（广告面 = 裁决面 ∖ private），由代码直接 apply——同一裁决边界与审查；其步不产尝试行，后果由状态视图与新见段承接。`clock` 动词每刻由泵以空参提案过同一扇门：无价、全弃权即默、授予禁携刻；其 deny 发声为失败刻。origin 由调用点决定：will（玩家经广告面）、clock（泵）、code（引擎直连）；private 只管广告面，与 origin 无关——公开动词亦可由 code 触发（世界因，不产尝试行），价对 code 通道照常计 cost。origin 随步入账，投影不再回查 def。
-- **法则纪律**：键控形态（规则按属性组合键控、量级存于属性载荷，随新实体自动泛化）与 authored 形态（互动逐实体书写）共用同一裁决与审查；键控禁止特判实体 id。规则的读通道唯一在 w⁻：同一值地址（实体×键、边）的多次写只能是一条预计算轨迹，从 w⁻ 重复派生的叠加增量按序覆盖。
 - **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`fault: world`（卫语句链、门、unanswered 闭合、游戏不变式）有世界腔 voice（缺省 noResponse）；`fault: engine`（integrity、授予形状违约、commit 拒绝、`*.crash`）只有 debug，probe 报 bug。覆盖面没有机械判据。
 
 ## 非目标
