@@ -310,6 +310,58 @@ export interface TickDef {
 	rules: Rule[];
 }
 
+/** 面向 AI 的动词派生面：广告与接口模式自此同源，不再各自手写。 */
+export interface VerbFace {
+	id: string;
+	label: string;
+	description: string;
+	cost: number;
+	params: readonly ParamFace[];
+}
+
+export interface ParamFace {
+	name: string;
+	type: SlotType;
+	/** ref 值即实体 id，过一次指称门。 */
+	ref: boolean;
+	many: boolean;
+	optional: boolean;
+	description?: string;
+}
+
+/** 由动词表构造式派生广告面，无对既有图的变换。 */
+export function verbFace(verbs: Readonly<Record<string, VerbDef>>): readonly VerbFace[] {
+	return Object.entries(verbs).map(([id, v]) => ({
+		id,
+		label: v.label,
+		description: v.description,
+		cost: v.cost,
+		params: Object.entries(v.params).map(([name, s]) => ({
+			name,
+			type: s.type,
+			ref: s.type === "ref",
+			many: s.many === true,
+			optional: s.optional === true,
+			...(s.description !== undefined && { description: s.description }),
+		})),
+	}));
+}
+
+/** 缺省广告排版：id、label、description、cost 与逐参数（类型、重数、可选、过门注记）。 */
+export function catalog(verbs: Readonly<Record<string, VerbDef>>): string {
+	const rows: string[] = [];
+	for (const v of verbFace(verbs)) {
+		rows.push(`${v.id} "${v.label}" — ${v.description} [cost ${v.cost}]`);
+		for (const p of v.params) {
+			const notes = [p.ref ? "ref (id of a visible or known entity)" : p.type];
+			if (p.many) notes.push("non-empty list");
+			if (p.optional) notes.push("optional");
+			rows.push(`  ${p.name}: ${notes.join(", ")}${p.description !== undefined ? ` — ${p.description}` : ""}`);
+		}
+	}
+	return rows.join("\n");
+}
+
 /** 类型匹配：ref 的运行时表示是 id 字符串；many 为非空序列。 */
 function matchesScalar(type: SlotType, v: unknown): boolean {
 	switch (type) {
@@ -364,7 +416,7 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 	return out;
 }
 
-/** 近况窗口内一条回合的呈现切片 */
+/** 近况内一条回合的呈现切片 */
 export interface RecentEntry {
 	time: number;
 	utterance: string;
@@ -396,8 +448,10 @@ export interface GameDef {
 	ticks?: TickDef[];
 	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, player: string, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
-	/** 近况窗口的回合记录数。 */
-	recentWindow: number;
+	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回要注入 AI 的记录子序列（须严格递增 seq 且取自传入记录）。此钩子只做选择，投影与言默判据归引擎。 */
+	recent?: (records: readonly ChronicleEntry[], base: readonly ChronicleEntry[]) => readonly ChronicleEntry[];
+	/** 缺省近况选择的窗口大小（回合记录数）；recent 缺席时必填，recent 在时作为 base 的参数（缺省即 base = 全量记录）。 */
+	recentWindow?: number;
 	/** 披露谓词：顶点格成员即可见；属性/边格谓词即变更行该侧判据。缺省常真，声明即整体替换。 */
 	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
 	/** 可指称谓词：指称门的域。披露缺省（顶点格 perceives）作为第三参数传入；缺省即披露。 */
@@ -408,6 +462,8 @@ export interface GameDef {
 	messages: Messages;
 	prompt: {
 		system: string;
+		/** act 工具描述：base = 协议约束 + 派生动词目录（catalog）；可委托或覆盖（本地化、分区、删减）。 */
+		tool?: (base: string) => string;
 		turn?: (kit: PromptKit & { view: string; utterance: string }) => string;
 		narrate?: (kit: PromptKit & { view: string; events: string[]; instruction: string }) => string;
 		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];

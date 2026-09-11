@@ -1,6 +1,6 @@
 // 会话文件保存全量审计：档案是单一追加日志——回合条目（证据，每回合恰一）+ 检查点条目（缓存）。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, clone, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, clone, deepFreeze, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
@@ -50,7 +50,7 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 		if (e.customType === TURN_RECORD_TYPE) {
 			const d = e.data as RawTurn | undefined;
 			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps) && d.steps.every(isCommit)) {
-				out.records.push({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps.map(completeLaw) });
+				out.records.push(deepFreeze({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps.map(completeLaw) }));
 			} else broken++;
 			continue;
 		}
@@ -67,13 +67,13 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 
 export interface Resumed {
 	sim: Simulation;
-	/** 近况窗口内的回合记录（已过完好判据）。 */
+	/** 全部存活回合记录（已过完好判据）；近况由 def.recent 从此选择。 */
 	records: ChronicleEntry[];
 	lastSeq: number;
 	warnings: string[];
 }
 
-/** 装载即对账：锚（开局/检查点）只验结构与 integrity，其后记录走 𝒞 重放（不重裁决、不掷骰，逐变更 prev 校验），终态跑一次 admit；链断则世界与近况同界截断，检查点领先于证据即拒绝装载。纪要完好按消费判据（试投影辖全窗口），坏点使其截断至其后完好子后缀。 */
+/** 装载即对账：锚（开局/检查点）只验结构与 integrity，其后记录走 𝒞 重放（不重裁决、不掷骰，逐变更 prev 校验），终态跑一次 admit；链断则世界与近况同界截断，检查点领先于证据即拒绝装载。纪要完好按消费判据（试投影辖全量，作者选择可消费任意记录），坏点使其截断至其后完好子后缀。 */
 export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const warnings: string[] = [];
 	const log = loadLog(entries, warnings);
@@ -125,10 +125,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	// 装载终点：终态对当下法则的零变更审查——历史不重审，当前世界必过 admit
 	const finallyDenied = sim.admit();
 	if (finallyDenied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(finallyDenied.point)}（${denialReasonText(finallyDenied)}）`);
-	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
-	const excess = records.length - def.recentWindow;
-	if (excess > 0) records.splice(0, excess);
-	// 纪要完好按消费判据：试投影辖全窗口，序位检查只辖覆盖段（重放段的连续性由对账强制）；坏点使近况截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
+	// 纪要完好按消费判据：近况选择可消费任意记录，故试投影辖全量；序位检查只辖覆盖段（重放段的连续性由对账强制）；坏点使记录截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
 	let cut = -1;
 	const after = afterWorlds(sim, records);
 	records.forEach((r, i) => {
@@ -153,10 +150,61 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	return { sim, records, lastSeq, warnings };
 }
 
-/** 近况与 act 结果同一变更行判据（刻账目闭合）；记录的提交边界由账本末世界逆推。 */
-export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
-	const after = afterWorlds(sim, records);
-	return records.map((r, i) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, after[i]!) }));
+/** 缺省近况选择：最后 recentWindow 条；recentWindow 缺席即全量（作者接管选择时的 base）。 */
+function baseRecent(def: GameDef, records: readonly ChronicleEntry[]): readonly ChronicleEntry[] {
+	const n = def.recentWindow;
+	return n !== undefined ? records.slice(Math.max(0, records.length - n)) : records;
+}
+
+/** 近况选择：作者钩子收全账本记录与缺省选择；抛错或非账本序子序列回落 base 并告警。 */
+function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings: string[]): readonly ChronicleEntry[] {
+	const base = baseRecent(def, records);
+	if (def.recent === undefined) return base;
+	let picked: readonly ChronicleEntry[];
+	try {
+		picked = def.recent(records, base);
+	} catch (e) {
+		warnings.push(`近况选择抛错（回落缺省窗口）：${errorText(e)}`);
+		return base;
+	}
+	const index = new Map(records.map((r, i) => [r.seq, i]));
+	let prev = -1;
+	const ordered = Array.isArray(picked) && (picked as readonly unknown[]).every((r) => {
+		const seq = r !== null && typeof r === "object" ? (r as { seq?: unknown }).seq : undefined;
+		const at = typeof seq === "number" ? index.get(seq) : undefined;
+		if (at === undefined || at <= prev) return false;
+		prev = at;
+		return true;
+	});
+	if (!ordered) {
+		warnings.push("近况选择须为账本序的子序列（严格递增 seq 且取自传入记录）：回落缺省窗口");
+		return base;
+	}
+	return picked;
+}
+
+/** 投影所选记录：自账本末世界逆推全账本至最早入选者，只取入选记录的提交边界；言默与 act 结果同判据。 */
+function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], selected: readonly ChronicleEntry[]): RecentEntry[] {
+	const wanted = new Set(selected.map((r) => r.seq));
+	const after = new Map<number, World>();
+	let need = wanted.size;
+	let w = sim.snapshot();
+	for (let i = records.length - 1; i >= 0 && need > 0; i--) {
+		const r = records[i]!;
+		if (wanted.has(r.seq)) {
+			after.set(r.seq, w);
+			need--;
+			if (need === 0) break;
+		}
+		w = clone(w);
+		rewind(w, r.steps);
+	}
+	return selected.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, after.get(r.seq)!) }));
+}
+
+/** 近况：选择（作者）× 投影（引擎）；AI 的跨回合记忆只经此一条路。 */
+export function recentEntries(sim: Simulation, records: readonly ChronicleEntry[], warnings: string[]): RecentEntry[] {
+	return projectRecent(sim, records, selectRecent(sim.def, records, warnings));
 }
 
 /** 各记录之后的世界：记录连续且末记录即当前世界，从账本末世界逐条逆推。 */

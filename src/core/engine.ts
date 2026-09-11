@@ -9,8 +9,8 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
-import { Simulation, deepFreeze, errorText, spineLines, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
+import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
+import { Simulation, catalog, deepFreeze, errorText, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type PromptKit, type RecentEntry, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -57,7 +57,7 @@ interface RunState {
 	warnings: string[];
 }
 
-/** 装载与定稿共享的档案态：records 是近况窗口源，lastSeq 是定稿序位 */
+/** 装载与定稿共享的档案态：records 是全部存活回合（近况选择与投影的源），lastSeq 是定稿序位 */
 interface Archive {
 	records: ChronicleEntry[];
 	lastSeq: number;
@@ -68,7 +68,7 @@ export class Engine {
 	readonly sim: Simulation;
 	private session: SessionHandle;
 	private readonly recent: RecentEntry[];
-	/** 定稿写点（act 工具尾）与近况窗口的共同源；records 只保留窗口内记录。 */
+	/** 定稿写点（act 工具尾）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly archive: Archive;
 	/** 装载期诊断：损坏纪要截断、档案链断、检查点弃置的显形出口。 */
 	readonly loadWarnings: readonly string[];
@@ -115,9 +115,9 @@ export class Engine {
 
 	/** 装载即对账（resume），档案单侧：引擎自日志组装世界。 */
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
-		if (def.recentWindow === undefined) throw new Error("GameDef.recentWindow 必填：近况窗口是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
+		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一：近况是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
+		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
-		if (!Number.isInteger(def.recentWindow) || def.recentWindow < 0) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const resumed = resume(def, sessionManager.getBranch());
@@ -221,8 +221,14 @@ export class Engine {
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
-		this.recent.length = 0;
-		this.recent.push(...projectWindow(this.sim, this.archive.records));
+		try {
+			const next = recentEntries(this.sim, this.archive.records, this.run.warnings);
+			this.recent.length = 0;
+			this.recent.push(...next);
+		} catch (e) {
+			// 呈现缺陷不得丢弃已定稿的账目：保留上一版近况并显形
+			this.run.warnings.push(`近况投影抛错（保留上一版）：${errorText(e)}`);
+		}
 	}
 
 	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
@@ -338,13 +344,10 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[])
 
 /** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到） */
 function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
-	const record: ChronicleEntry = { seq: archive.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: deepFreeze(run.steps) };
+	const record: ChronicleEntry = deepFreeze({ seq: archive.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: run.steps });
 	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
 	archive.records.push(record);
 	archive.lastSeq = record.seq;
-	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
-	const excess = archive.records.length - sim.def.recentWindow;
-	if (excess > 0) archive.records.splice(0, excess);
 	try {
 		sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: record.seq, world: sim.snapshot() });
 	} catch (e) {
@@ -365,25 +368,27 @@ type JsonSchema = {
 	minItems?: number;
 };
 
-/** 接口模式由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
-function hostParametersSchema(verbs: [string, VerbDef][]): JsonSchema {
-	const scalarSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type === "ref" ? "string" : spec.type, ...(spec.description !== undefined && { description: spec.description }) });
-	const paramSchema = (spec: ParamSpec): JsonSchema => spec.many === true
-		? { type: "array", items: scalarSchema(spec), minItems: 1, ...(spec.description !== undefined && { description: spec.description }) }
-		: scalarSchema(spec);
+/** 接口模式由派生面构造发射：与广告同源，无对既有 schema 图的变换。 */
+function hostParametersSchema(face: readonly VerbFace[]): JsonSchema {
+	const scalarSchema = (p: VerbFace["params"][number]): JsonSchema => ({
+		type: p.type === "ref" ? "string" : p.type,
+		...(p.description !== undefined && { description: p.description }),
+	});
+	const paramSchema = (p: VerbFace["params"][number]): JsonSchema => p.many
+		? { type: "array", items: scalarSchema(p), minItems: 1, ...(p.description !== undefined && { description: p.description }) }
+		: scalarSchema(p);
 	return {
-		anyOf: verbs.map(([name, v]) => {
-			const entries = Object.entries(v.params);
-			const required = entries.filter(([, s]) => !s.optional).map(([p]) => p);
+		anyOf: face.map((v) => {
+			const required = v.params.filter((p) => !p.optional).map((p) => p.name);
 			return {
 				type: "object",
 				required: ["verb", "params"],
 				properties: {
-					verb: { type: "string", const: name },
+					verb: { type: "string", const: v.id },
 					params: {
 						type: "object",
 						...(required.length > 0 && { required }),
-						properties: Object.fromEntries(entries.map(([p, s]) => [p, paramSchema(s)])),
+						properties: Object.fromEntries(v.params.map((p) => [p.name, paramSchema(p)])),
 						additionalProperties: false,
 					},
 				},
@@ -393,16 +398,23 @@ function hostParametersSchema(verbs: [string, VerbDef][]): JsonSchema {
 	};
 }
 
+/** act 工具描述缺省：协议约束 + 派生动词目录；作者经 prompt.tool 从 base 委托或覆盖。 */
+function baseToolDescription(def: GameDef): string {
+	return `Propose actions to the world; the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; one call opens this turn's adjudication window; an empty actions array is a refusal.\nAvailable verbs:\n${catalog(def.verbs)}`;
+}
+
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Archive, sessionManager: SessionManager) {
-	const verbs = Object.entries(def.verbs);
+	const base = baseToolDescription(def);
+	const description = def.prompt.tool?.(base) ?? base;
+	if (typeof description !== "string" || description.trim() === "") throw new Error("prompt.tool 须返回非空字符串（act 工具描述）");
 	return defineTool({
 		name: "act",
 		label: "act",
-		description: `Propose actions to the world (${verbs.map(([n]) => n).join("/")}); the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; referential params take ids of visible or known entities; an empty actions array is a refusal.`,
+		description,
 		parameters: {
 			type: "object",
 			properties: {
-				actions: { type: "array", items: hostParametersSchema(verbs) },
+				actions: { type: "array", items: hostParametersSchema(verbFace(def.verbs)) },
 			},
 		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {
