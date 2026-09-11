@@ -346,10 +346,13 @@ export interface GameDef {
 	identity?: string;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
-	/** 所指域：意志能点名什么（ref 参数门）。缺省全见。 */
-	naming?: (world: World, player: string) => (id: string) => boolean;
-	/** 所见域：呈现能显什么，按格求值（顶点格的成员即卡）。缺省顶点随所指、边/属性恒真；声明即接管全部格，边/属性截面随之存在。 */
-	sight?: (world: World, player: string) => (cell: Addr) => boolean;
+	/**
+	 * 感知：意志能点名、呈现能显什么，按格求值——所见谓词是全定义（顶点格成员即卡）。
+	 * 指称门与卡白名单读同一个所见集，不存在第二条命名轴：可指名者必在所见集，所见者必可指名。
+	 * 缺省全见；声明即接管全部格（未列格即 false），边/属性截面随之存在。钥匙是格：
+	 * 顶点格成员即卡，属性/边格的键截面即披露前提；缺席属性亦按格求值（枚举注册表键）。
+	 */
+	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
 	/** 状态视图的派生纹理；无指称声明面。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	invariants?: Invariant[];
@@ -362,18 +365,25 @@ export interface GameDef {
 	};
 }
 
-export interface InvariantCtx {
+/** 检查相读态：world 是提交后读态，before 是提交前读态（回滚锚），changes 是本次提交的全部变更。 */
+export interface CheckCtx {
 	def: GameDef;
-	/** 起点世界的冻结副本 */
-	genesis: World;
-	changes: Change[];
+	player: string;
 	source: Source;
+	before: World;
+	changes: readonly Change[];
 }
 
-/** null 通过；违反即整提交回滚并拒绝。收冻结读态，写入即抛。 */
+/** 世界腔违反理由；engine 侧违反附 debug。检查相的唯一出口。 */
+export interface Reason {
+	voice?: string;
+	debug?: string;
+}
+
+/** 检查相的作者否决点：null 通过，理由即整提交回滚并拒绝。收冻结读态，写入即抛。 */
 export interface Invariant {
 	id: string;
-	check: (world: World, ctx: InvariantCtx) => string | null;
+	check: (world: World, ctx: CheckCtx) => Reason | null;
 }
 
 function isScalarValue(v: unknown): v is Scalar {
@@ -409,67 +419,68 @@ const got = (v: Payload): string => {
 const integrityInvariant: Invariant = {
 	id: "integrity",
 	check: (world, ctx) => {
-		if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
-			if (!Array.isArray(world.relations)) return "integrity: world.relations must be an array";
+		const bad = (debug: string): Reason => ({ debug });
+		if (!Array.isArray(world.entities)) return bad("integrity: world.entities must be an array");
+			if (!Array.isArray(world.relations)) return bad("integrity: world.relations must be an array");
 			for (const k of Object.keys(world)) {
-				if (k !== "time" && k !== "entities" && k !== "relations") return `integrity: world.${k} is not part of the ledger shape`;
+				if (k !== "time" && k !== "entities" && k !== "relations") return bad(`integrity: world.${k} is not part of the ledger shape`);
 			}
 			const ids = new Set<string>();
 			for (const e of world.entities) {
-				if (e === null || typeof e !== "object" || Array.isArray(e)) return "integrity: entity must be a record";
+				if (e === null || typeof e !== "object" || Array.isArray(e)) return bad("integrity: entity must be a record");
 				ids.add(e.id);
 			}
-			if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
-			if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
-			if (!ids.has(ctx.def.playerId)) return `integrity: playerId -> missing entity ${ctx.def.playerId}`;
+			if (ids.size !== world.entities.length) return bad("integrity: duplicate entity ids");
+			if (!Number.isInteger(world.time) || world.time < 0) return bad("integrity: world.time must be a non-negative integer");
+			if (!ids.has(ctx.def.playerId)) return bad(`integrity: playerId -> missing entity ${ctx.def.playerId}`);
 			const registry = Object.entries(ctx.def.props);
 			const vocabulary = new Set(registry.map(([k]) => k));
 			for (const e of world.entities) {
-				if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
+				if (typeof e.id !== "string" || e.id === "") return bad("integrity: entity id must be non-empty string");
 				for (const k of Object.keys(e)) {
-					if (k !== "id" && k !== "props") return `integrity: ${e.id}.${k} is not part of the entity shape`;
+					if (k !== "id" && k !== "props") return bad(`integrity: ${e.id}.${k} is not part of the entity shape`);
 				}
-				if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return `integrity: ${e.id}.props must be a record`;
+				if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return bad(`integrity: ${e.id}.props must be a record`);
 				for (const k of Object.keys(e.props)) {
-					if (!vocabulary.has(k)) return `integrity: ${e.id}.${k} is not declared in the prop registry`;
+					if (!vocabulary.has(k)) return bad(`integrity: ${e.id}.${k} is not declared in the prop registry`);
 				}
 				for (const [p, pd] of registry) {
 					const v = e.props[p];
 					if (v === undefined) continue;
-					if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`;
+					if (!isValue(v)) return bad(`integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`);
 					const many = pd.many === true;
-					if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
-					if (p === ctx.def.identity && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
+					if (Array.isArray(v) !== many) return bad(`integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`);
+					if (p === ctx.def.identity && v === "") return bad(`integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`);
 					for (const x of Array.isArray(v) ? v : [v]) {
 						if (pd.type === "ref") {
-							if (typeof x !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(x)}`;
-							if (!ids.has(x)) return `integrity: ${e.id}.${p} -> missing entity ${x}`;
+							if (typeof x !== "string") return bad(`integrity: ${e.id}.${p} expects id reference, got ${got(x)}`);
+							if (!ids.has(x)) return bad(`integrity: ${e.id}.${p} -> missing entity ${x}`);
 							continue;
 						}
-						if (typeof x !== pd.type) return `integrity: ${e.id}.${p} expects ${pd.type}, got ${got(x)}`;
+						if (typeof x !== pd.type) return bad(`integrity: ${e.id}.${p} expects ${pd.type}, got ${got(x)}`);
 					}
 				}
 			}
 			const edgeIds = new Set<string>();
 			for (const r of world.relations ?? []) {
-				if (r === null || typeof r !== "object" || Array.isArray(r)) return "integrity: relation must be a record";
+				if (r === null || typeof r !== "object" || Array.isArray(r)) return bad("integrity: relation must be a record");
 				for (const k of Object.keys(r)) {
-					if (k !== "from" && k !== "to" && k !== "type" && k !== "value") return `integrity: relation.${k} is not part of the relation shape`;
+					if (k !== "from" && k !== "to" && k !== "type" && k !== "value") return bad(`integrity: relation.${k} is not part of the relation shape`);
 				}
-				if (typeof r.from !== "string" || r.from === "") return "integrity: relation.from must be non-empty string";
-				if (typeof r.to !== "string" || r.to === "") return "integrity: relation.to must be non-empty string";
-				if (typeof r.type !== "string" || r.type === "") return "integrity: relation.type must be non-empty string";
-				if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
+				if (typeof r.from !== "string" || r.from === "") return bad("integrity: relation.from must be non-empty string");
+				if (typeof r.to !== "string" || r.to === "") return bad("integrity: relation.to must be non-empty string");
+				if (typeof r.type !== "string" || r.type === "") return bad("integrity: relation.type must be non-empty string");
+				if (!ids.has(r.from) || !ids.has(r.to)) return bad(`integrity: relation ${r.type} -> missing endpoint`);
 				const eid = addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type });
-				if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
+				if (edgeIds.has(eid)) return bad(`integrity: duplicate relation ${r.from}->${r.to} (${r.type})`);
 				edgeIds.add(eid);
-				if (r.value === null || !isValue(r.value)) return `integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`;
+				if (r.value === null || !isValue(r.value)) return bad(`integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`);
 				const rd = ctx.def.relTypes?.[r.type];
 				if (rd) {
 					const many = rd.many === true;
-					if (Array.isArray(r.value) !== many) return `integrity: relation ${r.type} expects ${many ? "a sequence" : "a scalar"}, got ${got(r.value)}`;
+					if (Array.isArray(r.value) !== many) return bad(`integrity: relation ${r.type} expects ${many ? "a sequence" : "a scalar"}, got ${got(r.value)}`);
 					for (const x of Array.isArray(r.value) ? r.value : [r.value]) {
-						if (typeof x !== rd.type) return `integrity: relation ${r.type} expects ${rd.type}, got ${got(x)}`;
+						if (typeof x !== rd.type) return bad(`integrity: relation ${r.type} expects ${rd.type}, got ${got(x)}`);
 					}
 				}
 			}
@@ -514,18 +525,15 @@ function propLabelOf(def: GameDef, prop: string): string {
 	return label;
 }
 
-/** 一个提交边界上的呈现前提：脸表＋键截面（仅 sight 声明时存在）。由世界即时求值，不入账。 */
+/** 一个提交边界上的呈现前提：脸表＋键截面（仅 perceives 声明时存在）。由世界即时求值，不入账。 */
 export interface FieldView {
 	faces: Map<string, string | null>;
 	edgeKeys?: Set<string>;
 	propKeys?: Set<string>;
 }
 
-/** 所见域与格谓词的同一次求值：卡集合即谓词于顶点格的成员。 */
-export interface SightView {
-	within: (cell: Addr) => boolean;
-	cards: Set<string>;
-}
+/** 所见域的求值结果：所见谓词于顶点格的成员集。 */
+export type SightView = Set<string>;
 
 /** 无碰撞元组编码：成分字符集不受约束。 */
 function tupleKey(parts: readonly string[]): string {
@@ -770,8 +778,6 @@ export class Simulation {
 	readonly world: World;
 	/** 身份键 = def.identity；缺席时实体以 id 示人。 */
 	readonly identityKey: string | undefined;
-	/** 实际起点读态的冻结副本 */
-	private genesisCache?: World;
 	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位。 */
 	private attemptAt = -1;
 	private readonly attemptSeq = new Map<string, number>();
@@ -836,84 +842,67 @@ export class Simulation {
 		}
 		this.identityKey = identityKey;
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
-		const broken = this.checkInvariants({ kind: "init" }, this.readState(), []);
-		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.message}`);
+		const before = this.readState();
+		const broken = this.checkInvariants({ kind: "init" }, before, []);
+		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.denial.voice ?? broken.denial.debug}`);
 	}
 
 	get player(): string {
 		return this.def.playerId;
 	}
 
-	/** 所指域（意志能点名什么）：指称参数门。 */
-	domain(): Set<string> {
-		return this.namingIn(this.readState());
+	/** 所见域（呈现能显什么，也是意志能点名什么）：卡的存在域。 */
+	sights(world: World = this.readState()): SightView {
+		return this.sightView(world);
 	}
 
-	/** 所见域（呈现能显什么）：卡的存在域。 */
-	sights(): Set<string> {
-		return this.sightView(this.readState()).cards;
-	}
-
-	/** 所指谓词：缺省全见。 */
-	private namingOf(world: World): (id: string) => boolean {
-		return this.def.naming?.(world, this.player) ?? (() => true);
-	}
-
-	/** 所见谓词：缺省顶点随所指、边/属性恒真；作者声明 sight 即接管全部格。 */
-	private sightOf(world: World): (cell: Addr) => boolean {
-		const sight = this.def.sight?.(world, this.player);
-		if (sight) return sight;
-		const naming = this.def.naming?.(world, this.player);
-		if (!naming) return () => true;
-		return (cell) => cell.cell !== "vertex" || naming(cell.id);
-	}
-
-	private namingIn(world: World): Set<string> {
-		const within = this.namingOf(world);
-		return new Set(world.entities.map((e) => e.id).filter((id) => within(id)));
+	/** 所见谓词：缺省全见；声明即接管全部格。 */
+	private perceives(world: World): (cell: Addr) => boolean {
+		return this.def.perceives?.(world, this.player) ?? (() => true);
 	}
 
 	/** 所见域与格谓词的同一次求值：卡集合即谓词于顶点格的成员。 */
 	sightView(world: World): SightView {
-		const within = this.sightOf(world);
-		return { within, cards: new Set(world.entities.filter((e) => within({ cell: "vertex", id: e.id })).map((e) => e.id)) };
+		const within = this.perceives(world);
+		return new Set(world.entities.filter((e) => within({ cell: "vertex", id: e.id })).map((e) => e.id));
 	}
 
 	/** 边界脸表：所见域内实体 × 身份披露。由世界即时求值，不持久化。 */
-	private faceList(world: World, seen: SightView): Map<string, string | null> {
+	private faceList(world: World): Map<string, string | null> {
 		const key = this.identityKey;
+		const within = this.perceives(world);
 		const out = new Map<string, string | null>();
 		for (const e of world.entities) {
-			if (!seen.cards.has(e.id)) continue;
-			const readable = key !== undefined && seen.within({ cell: "prop", entity: e.id, prop: key });
+			if (!within({ cell: "vertex", id: e.id })) continue;
+			const readable = key !== undefined && within({ cell: "prop", entity: e.id, prop: key });
 			out.set(e.id, readable ? (designation(this.def, e) ?? null) : null);
 		}
 		return out;
 	}
 
 	/** 边键截面：边格谓词于键空间求值，端点闭合另行把门（见 changeLine）。 */
-	private edgeField(world: World, seen: SightView): string[] {
+	private edgeField(world: World, within: (cell: Addr) => boolean): string[] {
 		const out: string[] = [];
-		for (const r of world.relations) if (seen.within({ cell: "edge", from: r.from, to: r.to, type: r.type })) out.push(addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type }));
+		for (const r of world.relations) if (within({ cell: "edge", from: r.from, to: r.to, type: r.type })) out.push(addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type }));
 		return out;
 	}
 
 	/** 属性键截面：枚举注册表键而非在场键，属性格谓词对全集求值——缺席属性可感，在场由闭合另行把门。 */
-	private propField(world: World, seen: SightView): string[] {
+	private propField(world: World, within: (cell: Addr) => boolean): string[] {
 		const keys = Object.keys(this.def.props);
 		const out: string[] = [];
 		for (const e of world.entities) {
-			for (const k of keys) if (seen.within({ cell: "prop", entity: e.id, prop: k })) out.push(addrKey({ cell: "prop", entity: e.id, prop: k }));
+			for (const k of keys) if (within({ cell: "prop", entity: e.id, prop: k })) out.push(addrKey({ cell: "prop", entity: e.id, prop: k }));
 		}
 		return out;
 	}
 
-	/** 一个提交边界上的呈现前提：脸表＋键截面（仅 sight 声明时）；投影时由世界即时求值。 */
+	/** 一个提交边界上的呈现前提：脸表＋键截面（仅 perceives 声明时）；投影时由世界即时求值。 */
 	fieldView(world: World): FieldView {
-		const seen = this.sightView(world);
-		const faces = this.faceList(world, seen);
-		if (!this.def.sight) return { faces };
-		return { faces, edgeKeys: new Set(this.edgeField(world, seen)), propKeys: new Set(this.propField(world, seen)) };
+		const faces = this.faceList(world);
+		if (!this.def.perceives) return { faces };
+		const within = this.perceives(world);
+		return { faces, edgeKeys: new Set(this.edgeField(world, within)), propKeys: new Set(this.propField(world, within)) };
 	}
 
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
@@ -973,10 +962,6 @@ export class Simulation {
 		};
 	}
 
-	private genesis(): World {
-		return (this.genesisCache ??= this.readState());
-	}
-
 	/** 克隆覆写：冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账坐标。 */
 	private restore(s0: World): void {
 		Object.assign(this.world, JSON.parse(JSON.stringify(s0)) as World);
@@ -984,20 +969,16 @@ export class Simulation {
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
 	private commitChecked(s0: World, deltas: Delta[], source: Decision): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
-		const genesis = this.genesis();
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
 				return { ok: false, denial: out.refusal };
 			}
-			const inv = this.checkInvariants(source, genesis, out.changes);
+			const inv = this.checkInvariants(source, s0, out.changes);
 			if (inv) {
 				this.restore(s0);
-				const denial: Denial = inv.authored
-					? { law: `invariant.${inv.id}`, fault: "world", voice: inv.message }
-					: { law: `invariant.${inv.id}`, fault: "engine", debug: inv.message };
-				return { ok: false, denial };
+				return { ok: false, denial: inv.denial };
 			}
 			return { ok: true, changes: out.changes };
 		} catch (e) {
@@ -1007,14 +988,15 @@ export class Simulation {
 		}
 	}
 
-	private checkInvariants(source: Source, genesis: World, changes: Change[]): { id: string; message: string; authored: boolean } | null {
+	/** 审查：先 integrity 后游戏不变式；world 是提交后读态，before 是提交前读态（回滚锚），changes 是本次提交的全部变更。 */
+	private checkInvariants(source: Source, before: World, changes: Change[]): { id: string; denial: Denial } | null {
 		const world = this.readState();
-		const frozen = deepFreeze(changes);
-		const broken = integrityInvariant.check(world, { def: this.def, genesis, changes: frozen, source });
-		if (broken) return { id: "integrity", message: broken, authored: false };
+		const ctx: CheckCtx = { def: this.def, player: this.player, source, before, changes: deepFreeze(changes) };
+		const broken = integrityInvariant.check(world, ctx);
+		if (broken) return { id: "integrity", denial: { law: "invariant.integrity", fault: "engine", ...broken } };
 		for (const inv of this.def.invariants ?? []) {
-			const msg = inv.check(world, { def: this.def, genesis, changes: frozen, source });
-			if (msg) return { id: inv.id, message: msg, authored: true };
+			const reason = inv.check(world, ctx);
+			if (reason) return { id: inv.id, denial: reason.debug !== undefined ? { law: `invariant.${inv.id}`, fault: "engine", ...reason } : { law: `invariant.${inv.id}`, fault: "world", ...reason } };
 		}
 		return null;
 	}
@@ -1045,7 +1027,7 @@ export class Simulation {
 		const verb = this.staticForm(action);
 		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
 		const clock = origin === "clock";
-		const gate = this.namingIn(s0);
+		const gate = this.sightView(s0);
 		const r = this.adjudicateRaw(action, verb, gate, s0, addr, origin);
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.source);
@@ -1132,8 +1114,9 @@ export class Simulation {
 				}
 			}
 			this.world.time = record.time;
-			const broken = integrityInvariant.check(this.readState(), { def: this.def, genesis: s0, changes: [], source: { kind: "replay", seq: record.seq } });
-			if (broken) return fail(`integrity：${broken}`);
+			const ctx: CheckCtx = { def: this.def, player: this.player, source: { kind: "replay", seq: record.seq }, before: s0, changes: [] };
+			const broken = integrityInvariant.check(this.readState(), ctx);
+			if (broken) return fail(`${broken.debug}`);
 			return null;
 		} catch (e) {
 			return fail(errorText(e));
@@ -1168,13 +1151,14 @@ export class Simulation {
 		return JSON.parse(JSON.stringify(this.world)) as World;
 	}
 
-	/** 状态视图：卡的集合即所见域；模型可指名的必在所指域，所见可窄于所指。 */
+	/** 状态视图：卡的集合即所见域（门与卡白名单同源）。 */
 	digest(): string {
 		const w = this.readState();
 		const seen = this.sightView(w);
-		const entities = w.entities.filter((e) => seen.cards.has(e.id)).map((e) => this.cardOf(e, seen));
+		const within = this.perceives(w);
+		const entities = w.entities.filter((e) => seen.has(e.id)).map((e) => this.cardOf(e, seen, w));
 		const relations = w.relations
-			.filter((r) => !hiddenRel(this.def, r.type) && seen.cards.has(r.from) && seen.cards.has(r.to) && seen.within({ cell: "edge", from: r.from, to: r.to, type: r.type }))
+			.filter((r) => !hiddenRel(this.def, r.type) && seen.has(r.from) && seen.has(r.to) && within({ cell: "edge", from: r.from, to: r.to, type: r.type }))
 			.map((r) => ({ from: r.from, to: r.to, type: relName(this.def, r.type), value: r.value }));
 		const out: Record<string, unknown> = { time: w.time, relations, entities };
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
@@ -1182,9 +1166,10 @@ export class Simulation {
 		return JSON.stringify(out);
 	}
 
-	/** 卡：身份与属性按所见谓词遮蔽，值位指称须在所见域。 */
-	cardOf(e: Entity, seen: SightView): { id: string; name?: string; props: Record<string, Value> } {
-		return viewCard(this.def, e, seen.cards, (x, prop) => seen.within({ cell: "prop", entity: x.id, prop }));
+	/** 卡：身份与属性按所见谓词遮蔽，值位指称须在所见域（谓词于给定读态求值）。 */
+	cardOf(e: Entity, seen: SightView, world: World): { id: string; name?: string; props: Record<string, Value> } {
+		const within = this.perceives(world);
+		return viewCard(this.def, e, seen, (x, prop) => within({ cell: "prop", entity: x.id, prop }));
 	}
 
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */

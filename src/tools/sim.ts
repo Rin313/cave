@@ -303,7 +303,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	liveness: Map<string, { grant: number; deny: number; abstain: number; unreached: number }>;
 } {
 	const sim = new Simulation(def);
-	const scope = [...sim.domain()];
+	const scope = [...sim.sights()];
 	const rows: MapRow[] = [];
 	const grantRows = new Map<string, GrantRow>();
 	const grants = new Map<string, number>();

@@ -1,4 +1,4 @@
-import type { Delta, Entity, Fact, GameDef, PropDef, PromptKit, Q, ViewValue, World } from "../core/sim.ts";
+import type { Addr, Delta, Entity, Fact, GameDef, PropDef, PromptKit, Q, ViewValue, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, free, grant, ref, refParamsOf, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
@@ -405,16 +405,15 @@ const base: Omit<GameDef, "prompt"> = {
 		"猜疑": { type: "number", hidden: true },
 		"知晓": { type: "boolean", hidden: true },
 	},
-	// 卡随命名域；社会真相只经桶级披露与法则代笔流动（被测通道）；信文只对知晓者可感（判据 = 知晓边）；隐藏边由注册声明遮蔽
-	sight: (world, player) => {
-		const naming = sealsNaming(world, player);
-		return (cell) => {
-			if (cell.cell === "vertex") return naming(cell.id);
+	// 卡随感知域（顶点格）：居所链可见＋已引见者；信文只对知晓者可感（判据 = 知晓边）；隐藏边由注册声明遮蔽
+	perceives: (world, player) => {
+		const vis = sealsNaming(world, player);
+		return (cell: Addr): boolean => {
+			if (cell.cell === "vertex") return vis(cell.id);
 			if (cell.cell === "edge") return true;
 			return cell.prop !== "content" || relVal(world, player, cell.entity, "知晓") !== null;
 		};
 	},
-	naming: sealsNaming,
 	digestExtra: extraOf,
 };
 

@@ -296,7 +296,7 @@ function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]):
 		const seen = sim.sightView(w);
 		for (const id of revealed) {
 			const e = entity(w, id);
-			if (e) lines.push(JSON.stringify(sim.cardOf(e, seen)));
+			if (e) lines.push(JSON.stringify(sim.cardOf(e, seen, w)));
 		}
 	}
 	return lines;
