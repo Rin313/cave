@@ -161,6 +161,7 @@ const base: Omit<GameDef, "prompt"> = {
 				words: param("string", { description: "要说的话" }),
 			},
 			cost: 0,
+			invisible: "眼前没有这个人。",
 			rules: [{
 				id: "person",
 				judge: (q) => {

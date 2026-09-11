@@ -77,7 +77,7 @@ Denial   ::= (Point, ⟨text⟩?)                 -- 受众 engine 时文本必�
 ### 裁决
 
 ```
-verb = (label, description, schema, cost ∈ ℕ, rules)    -- 意志动词：唯一调用点是 will
+verb = (label, description, schema, cost ∈ ℕ, invisible?, rules)    -- 意志动词：唯一调用点是 will
 tick = (id, rules)                                      -- 常驻规则：唯一调用点是 clock（泵每刻空参）
 a    = (verb, params)      params : P ⇀ V               -- 一次尝试即一次裁决、一个时价、一个拒绝单位
 ref(a) ⊆ P                指称参数键集
@@ -174,6 +174,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : name
 - **动词表**：`params` 声明（type×可选×重数×描述）派生接口模式、内核校验与规则参数的编译期类型；`type ∈ {lit(string), lit(number), lit(boolean), ref}`，`ref` 值过指称门（域即可指称集），`lit(·)` 是字面；`many` 令参数为非空序列，与世界值同形——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。
 - **常驻规则**（`ticks`）：每刻按声明序由泵以空参提案过同一扇门（顺序 fold：后一条看得见前一条的后果）；无参数、无价、无呈现名；全弃权即默、不得携刻；deny 发声为失败刻。动词面 = 动词表（文本广告与接口模式两种编码）；意志动词的唯一调用点是 will。origin 是调用点的标记而非裁决内容：判定输入 `Q` 不含 origin，调用点特有的约束（空参、零价、不得携刻）由引擎在判定之外施加；origin 随步入账，投影不回查 def，两张表的 id 各自独立，同名不构成冲突。
 - **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被断言与探针消费，`text` 是世界腔答复（缺省回落 noResponse），`ticks` 覆写价；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。否决不携带涉及实体——指称落点在 action 参数与法则理由。受众规则见 `fault`。
+- **引擎点文本**（`Messages`，皆非空）：`noResponse` 是受众 world 点缺文本的兜底与受众 engine 点的隐身呈现；`timePassed` 承载静默刻聚合（`⏱ ×n` 计 |{at : 言@at = ∅}|）；`invisibleEntity` 是门否决的缺省文案，动词可携 `invisible` 覆写，缺省链 `verb.invisible? → messages.invisibleEntity? → noResponse`。文案只被呈现消费，不参与裁决。
 
 ## 非目标
 

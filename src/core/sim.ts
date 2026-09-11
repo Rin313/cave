@@ -69,11 +69,11 @@ export interface Action {
 }
 
 export interface Messages {
-	/** 所有法则未表态时的兜底回应。 */
+	/** 受众 world 点缺文本的兜底，兼受众 engine 点的隐身呈现；debug 只入 probe 与构造/装载诊断。 */
 	noResponse: string;
-	/** 指称参数不可见/不存在的统一文案 */
+	/** 指称门否决的缺省文案；动词可携 invisible 覆写。 */
 	invisibleEntity?: string;
-	/** 时间流逝的文案（刻步的段头与近况渲染）。 */
+	/** 静默刻聚合文案（⏱ ×n，n = |{at : 言@at = ∅}|）。 */
 	timePassed: string;
 }
 
@@ -289,6 +289,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	description: string;
 	params: P;
 	cost: number;
+	invisible?: string;
 	rules: { id: string; judge: (q: Q<ParamsOf<P>>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -296,6 +297,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 		description: spec.description,
 		params: spec.params,
 		cost: spec.cost,
+		...(spec.invisible !== undefined && { invisible: spec.invisible }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q as Q<ParamsOf<P>>) })),
 	};
 }
@@ -306,6 +308,8 @@ export interface VerbDef {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
+	/** 门否决文案：无指称参数时不可能被消费；缺省回落 messages.invisibleEntity。 */
+	invisible?: string;
 	rules: Rule[];
 }
 
@@ -358,14 +362,14 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 	if (v.ok) {
 		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
 		if (!Array.isArray(v.deltas)) out.push("deltas 须为序列");
-		if (v.reply !== undefined && typeof v.reply !== "string") out.push("reply 须为字符串");
-		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string"))) out.push("statements 须为字符串序列");
+		if (v.reply !== undefined && (typeof v.reply !== "string" || v.reply === "")) out.push("reply 须为非空字符串");
+		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string" && s !== ""))) out.push("statements 须为非空字符串序列");
 		return out;
 	}
 	const denial = v.denial as { point?: { law?: unknown }; text?: unknown } | undefined;
 	if (!denial || typeof denial !== "object") return [...out, "否决须携 denial"];
 	if (typeof denial.point?.law !== "string" || denial.point.law === "") out.push("否决的 law 须为非空字符串");
-	if (denial.text !== undefined && typeof denial.text !== "string") out.push("否决的 text 须为字符串");
+	if (denial.text !== undefined && (typeof denial.text !== "string" || denial.text === "")) out.push("否决的 text 须为非空字符串");
 	return out;
 }
 
@@ -691,9 +695,9 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return audienceOf(denial.point) === "world" ? (denial.text ?? def.messages.noResponse) : def.messages.noResponse;
 }
 
-/** 原始文本（含引擎 debug）：装载拒绝等非呈现用途。 */
-export function denialReasonText(def: GameDef, denial: Denial): string {
-	return audienceOf(denial.point) === "world" ? (denial.text ?? def.messages.noResponse) : (denial.text ?? "");
+/** 原始文本（含引擎 debug）：装载拒绝等非呈现用途；无文本即空串，不回落 noResponse。 */
+export function denialReasonText(denial: Denial): string {
+	return denial.text ?? "";
 }
 
 /** 脸 token：id 在某个提交边界上的呈现词。脸表由该边界的世界即时求值，行文不回读活世界。 */
@@ -902,6 +906,10 @@ export class Simulation {
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = clone(world ?? def.world);
+		const { messages } = def;
+		if (typeof messages.noResponse !== "string" || messages.noResponse.trim() === "") throw new Error("messages.noResponse 须为非空字符串");
+		if (typeof messages.timePassed !== "string" || messages.timePassed.trim() === "") throw new Error("messages.timePassed 须为非空字符串");
+		if (messages.invisibleEntity !== undefined && (typeof messages.invisibleEntity !== "string" || messages.invisibleEntity.trim() === "")) throw new Error("messages.invisibleEntity 须为非空字符串");
 		const invariantIds = new Set<string>();
 		for (const inv of def.invariants ?? []) {
 			if (typeof inv.id !== "string" || inv.id === "") throw new Error("不变式 id 须为非空字符串");
@@ -919,6 +927,8 @@ export class Simulation {
 			for (const [p, s] of Object.entries(v.params)) {
 				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean" && s.type !== "ref") throw new Error(`动词 ${name} 的参数「${p}」的类型须为 string/number/boolean/ref，得到 ${String(s.type)}`);
 			}
+			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${name} 的 invisible 须为非空字符串`);
+			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${name} 无指称参数，invisible 文案不会被消费`);
 		}
 		const ticks = new Map<string, readonly Rule[]>();
 		for (const t of def.ticks ?? []) {
@@ -953,7 +963,7 @@ export class Simulation {
 		if (broken) throw new Error(`初始世界破坏完整性：${broken}`);
 		if (world === undefined) {
 			const denied = this.admit();
-			if (denied) throw new Error(`初始世界违反 ${lawOf(denied.point)}：${denialReasonText(this.def, denied)}`);
+			if (denied) throw new Error(`初始世界违反 ${lawOf(denied.point)}：${denialReasonText(denied)}`);
 		}
 	}
 
@@ -1053,7 +1063,7 @@ export class Simulation {
 				return (Array.isArray(v) ? v : [v]).filter((id): id is string => typeof id === "string" && !gate.has(id));
 			});
 		if (invalid.length) {
-			const invisible = this.def.messages.invisibleEntity;
+			const invisible = this.def.verbs[action.verb]?.invisible ?? this.def.messages.invisibleEntity;
 			return { ok: false, denial: { point: { kind: "gate" }, ...(invisible !== undefined && { text: invisible }) } };
 		}
 		for (const r of rules) {

@@ -124,7 +124,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	}
 	// 装载终点：终态对当下法则的零变更审查——历史不重审，当前世界必过 admit
 	const finallyDenied = sim.admit();
-	if (finallyDenied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(finallyDenied.point)}（${denialReasonText(def, finallyDenied)}）`);
+	if (finallyDenied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(finallyDenied.point)}（${denialReasonText(finallyDenied)}）`);
 	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
 	const excess = records.length - def.recentWindow;
 	if (excess > 0) records.splice(0, excess);
