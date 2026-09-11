@@ -243,6 +243,9 @@ export interface ParamSpec {
 type BaseOf<T extends SlotType> = T extends "number" ? number : T extends "boolean" ? boolean : string;
 type ValueOfParam<S extends ParamSpec> = S extends { many: true } ? BaseOf<S["type"]>[] : BaseOf<S["type"]>;
 
+/** 参数声明的可选面：重数 × 可选 × 描述；type 只能由 param 的第一参数给出。 */
+type ParamOpts = Omit<ParamSpec, "type">;
+
 /** params 声明派生的编译期类型。 */
 export type ParamsOf<P extends Record<string, ParamSpec>> = {
 	[K in keyof P as P[K] extends { optional: true } ? never : K]: ValueOfParam<P[K]>;
@@ -250,24 +253,12 @@ export type ParamsOf<P extends Record<string, ParamSpec>> = {
 	[K in keyof P as P[K] extends { optional: true } ? K : never]?: ValueOfParam<P[K]>;
 };
 
-/** 指称参数：值是实体 id，过指称门。 */
-export function ref(description?: string): { type: "ref"; description?: string } {
-	return { type: "ref", ...(description !== undefined && { description }) };
-}
-
-/** 自由字符串：值按字面进入裁决。 */
-export function free(description?: string): { type: "string"; description?: string } {
-	return { type: "string", ...(description !== undefined && { description }) };
-}
-
-/** 多重指称参数：非空实体 id 序列，逐项过门。 */
-export function manyRef(description?: string): { type: "ref"; many: true; description?: string } {
-	return { type: "ref", many: true, ...(description !== undefined && { description }) };
-}
-
-/** 多重自由字符串参数。 */
-export function manyFree(description?: string): { type: "string"; many: true; description?: string } {
-	return { type: "string", many: true, ...(description !== undefined && { description }) };
+/** 参数声明：类型 × 重数 × 可选 × 描述；ref 值过指称门，many 即非空序列。 */
+export function param<T extends SlotType, O extends ParamOpts = object>(
+	type: T,
+	opts?: O & Record<Exclude<keyof O, keyof ParamOpts>, never>,
+): { type: T } & O {
+	return Object.assign({ type }, opts ?? ({} as O), { type });
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
@@ -520,22 +511,8 @@ export interface Handle {
 	name: string;
 }
 
-/** 一个提交边界上的呈现前提：脸表、格命名与披露谓词。由世界即时求值，不入账；命名只被呈现消费。 */
+/** 一个提交边界的求值：披露谓词、可见/可指称/已知域、脸表与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
 export interface FieldView {
-	faces: Map<string, string>;
-	name: (cell: Addr) => string | null;
-	discloses: (cell: Addr) => boolean;
-}
-
-/** 所见域的求值结果：可见、可指称与已知（并集）。 */
-export interface SightView {
-	visible: Set<string>;
-	referable: Set<string>;
-	known: Set<string>;
-}
-
-/** 一个提交边界的完整求值：披露、三个域、脸表与格命名。 */
-interface Boundary {
 	within: (cell: Addr) => boolean;
 	visible: Set<string>;
 	referable: Set<string>;
@@ -722,7 +699,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		// 每侧可显示 ⇔ 该边界对变更格有名且披露（缺席格与在场格同过一门）
 		const sidesOf = (c: Change): { prev: boolean; next: boolean } => {
 			const cell = cellOf(c);
-			return { prev: b.name(cell) !== null && b.discloses(cell), next: a.name(cell) !== null && a.discloses(cell) };
+			return { prev: b.name(cell) !== null && b.within(cell), next: a.name(cell) !== null && a.within(cell) };
 		};
 		const changeLine = (c: Change): string | null => {
 			const sides = sidesOf(c);
@@ -859,12 +836,6 @@ export class Simulation {
 		return this.def.playerId;
 	}
 
-	/** 可见、可指称与已知：已知 = 可见 ∪ 可指称（闭包与句柄面）。门只读可指称，不触命名——裁决不得经呈现钩子。 */
-	sightView(world: World = this.readState()): SightView {
-		const b = this.boundary(world);
-		return { visible: b.visible, referable: b.referable, known: b.known };
-	}
-
 	/** steps 之前的世界：自终态逆推变更（与投影同法）；rewind 不触钟，故钟取首步边界。步空即当前世界。 */
 	beforeWorld(steps: readonly Commit[]): World {
 		const w = this.snapshot();
@@ -923,8 +894,8 @@ export class Simulation {
 		};
 	}
 
-	/** 呈现边界：披露＋三个域＋脸表与格命名；脸表覆盖已知域，投影与闭包共用。 */
-	private boundaryView(world: World): Boundary {
+	/** 提交边界的求值：披露＋三个域＋脸表与格命名；脸表覆盖已知域，由世界即时求值。 */
+	fieldView(world: World = this.readState()): FieldView {
 		const base = this.boundary(world);
 		const name = this.naming(world);
 		const faces = new Map<string, string>();
@@ -933,12 +904,6 @@ export class Simulation {
 			faces.set(id, token ?? id);
 		}
 		return { ...base, faces, name };
-	}
-
-	/** 一个提交边界上的呈现前提：脸表、格命名与披露谓词；投影时由世界即时求值。 */
-	fieldView(world: World): FieldView {
-		const { faces, name, within } = this.boundaryView(world);
-		return { faces, name, discloses: within };
 	}
 
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
@@ -1245,7 +1210,7 @@ export class Simulation {
 	/** 状态视图：可见者出卡，可指称而不可见者出句柄（known）；关系过名字、披露与闭包（H）。 */
 	digest(): string {
 		const w = this.readState();
-		const b = this.boundaryView(w);
+		const b = this.fieldView(w);
 		const entities = w.entities.filter((e) => b.visible.has(e.id)).map((e) => this.cardOf(e, b, b.faces.get(e.id)!));
 		const known = w.entities.filter((e) => !b.visible.has(e.id) && b.referable.has(e.id)).map((e): Handle => ({ id: e.id, name: b.faces.get(e.id)! }));
 		const relations = w.relations
@@ -1262,7 +1227,7 @@ export class Simulation {
 	}
 
 	/** 卡：属性过格名＋披露＋指称闭包（H），名字与值同一呈现轴。 */
-	private cardOf(e: Entity, b: Boundary, name: string): Card {
+	private cardOf(e: Entity, b: FieldView, name: string): Card {
 		const props: { name: string; value: Value }[] = [];
 		for (const [k, v] of Object.entries(e.props)) {
 			const cell: PropAddr = { cell: "prop", entity: e.id, prop: k };
@@ -1277,14 +1242,14 @@ export class Simulation {
 
 	/** 可见域内实体的卡；不可见即 null（不产生非可见卡）。 */
 	card(world: World, id: string): Card | null {
-		const b = this.boundaryView(world);
+		const b = this.fieldView(world);
 		const e = entity(world, id);
 		return e !== undefined && b.visible.has(id) ? this.cardOf(e, b, b.faces.get(id)!) : null;
 	}
 
 	/** 可指称而不可见者的句柄；可见者已由卡承载。 */
 	handle(world: World, id: string): Handle | null {
-		const b = this.boundaryView(world);
+		const b = this.fieldView(world);
 		return b.referable.has(id) && !b.visible.has(id) ? { id, name: b.faces.get(id)! } : null;
 	}
 

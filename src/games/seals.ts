@@ -1,5 +1,5 @@
 import type { Addr, Delta, Entity, GameDef, PropDef, PromptKit, Q, Text, ViewValue, World } from "../core/sim.ts";
-import { D, defineVerb, deny, entity, free, grant, ref, refParamsOf, relVal } from "../core/sim.ts";
+import { D, defineVerb, deny, entity, grant, param, refParamsOf, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
 const SEALS_PROPS: Record<string, PropDef> = {
@@ -87,7 +87,7 @@ const base: Omit<GameDef, "prompt"> = {
 		take: defineVerb({
 			label: "拿取",
 			description: "把书案上的一封信拿到手里（持者是你的躯体）。",
-			params: { entity: ref("信件 id") },
+			params: { entity: param("ref", { description: "信件 id" }) },
 			cost: 0,
 			rules: [{
 				id: "desk",
@@ -102,7 +102,7 @@ const base: Omit<GameDef, "prompt"> = {
 		read: defineVerb({
 			label: "拆读",
 			description: "细读手里的一封信：拆封会留下断口，信文自此为你所知。",
-			params: { entity: ref("信件 id") },
+			params: { entity: param("ref", { description: "信件 id" }) },
 			cost: 0,
 			rules: [{
 				id: "held",
@@ -121,7 +121,7 @@ const base: Omit<GameDef, "prompt"> = {
 		forge: defineVerb({
 			label: "誊写",
 			description: "借着拆封的工夫重写手里这封信的信文（text 为新信文全文）——断口无法掩饰。",
-			params: { entity: ref("信件 id"), text: free("新信文全文") },
+			params: { entity: param("ref", { description: "信件 id" }), text: param("string", { description: "新信文全文" }) },
 			cost: 0,
 			rules: [{
 				id: "held",
@@ -141,7 +141,7 @@ const base: Omit<GameDef, "prompt"> = {
 		leave: defineVerb({
 			label: "放回",
 			description: "把手里的一封信放回书案（信件将照常送抵收信人）。",
-			params: { entity: ref("信件 id") },
+			params: { entity: param("ref", { description: "信件 id" }) },
 			cost: 0,
 			rules: [{
 				id: "held",
@@ -157,8 +157,8 @@ const base: Omit<GameDef, "prompt"> = {
 			label: "攀谈",
 			description: "与眼前的人说一句话",
 			params: {
-				target: ref("交谈对象 id"),
-				words: free("要说的话"),
+				target: param("ref", { description: "交谈对象 id" }),
+				words: param("string", { description: "要说的话" }),
 			},
 			cost: 0,
 			rules: [{
@@ -178,7 +178,7 @@ const base: Omit<GameDef, "prompt"> = {
 		unmask: defineVerb({
 			label: "揭面",
 			description: "揭下一位戴面具者的面具。",
-			params: { target: ref("对方 id") },
+			params: { target: param("ref", { description: "对方 id" }) },
 			cost: 0,
 			rules: [{
 				id: "masked",
@@ -194,7 +194,7 @@ const base: Omit<GameDef, "prompt"> = {
 		go: defineVerb({
 			label: "走动",
 			description: "沿廊走向另一个房间（dest 为地点 id，见关系路径）。走动耗一刻。",
-			params: { dest: ref("目的地 id") },
+			params: { dest: param("ref", { description: "目的地 id" }) },
 			cost: 1,
 			rules: [{
 				id: "path",
@@ -212,7 +212,7 @@ const base: Omit<GameDef, "prompt"> = {
 		channel: defineVerb({
 			label: "附身",
 			description: "把神魂迁入一件能容魂的器皿（占据＝居所的迁移，一条 delta 过门）。",
-			params: { entity: ref("器皿 id") },
+			params: { entity: param("ref", { description: "器皿 id" }) },
 			cost: 0,
 			rules: [{
 				id: "vessel",
@@ -227,7 +227,7 @@ const base: Omit<GameDef, "prompt"> = {
 		burn: defineVerb({
 			label: "掷火",
 			description: "把一样东西掷进火盆（被信或魂系着的东西，得先解开）。",
-			params: { entity: ref("目标 id") },
+			params: { entity: param("ref", { description: "目标 id" }) },
 			cost: 0,
 			rules: [{
 				id: "tied",
@@ -251,7 +251,7 @@ const base: Omit<GameDef, "prompt"> = {
 		wait: defineVerb({
 			label: "等候",
 			description: "在廊下站着：说等多久（span 为刻数，1–12，缺省一刻）。",
-			params: { span: { type: "number", optional: true, description: "刻数（1–12），缺省一刻" } },
+			params: { span: param("number", { optional: true, description: "刻数（1–12），缺省一刻" }) },
 			cost: 0,
 			rules: [{
 				id: "pass",

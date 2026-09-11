@@ -312,7 +312,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	tickLiveness: Map<string, { grant: number; deny: number; abstain: number }>;
 } {
 	const sim = new Simulation(def);
-	const scope = [...sim.sightView().referable];
+	const scope = [...sim.fieldView().referable];
 	const rows: MapRow[] = [];
 	const grantRows = new Map<string, GrantRow>();
 	const grants = new Map<string, number>();

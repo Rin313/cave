@@ -294,9 +294,9 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 
 /** 新见段 = 新进可见域 ∪ 新进可指称域（出卡优先，否则出句柄）；回合前所见域由步逆推重建，与投影同一判据。 */
 function revealedSince(sim: Simulation, steps: readonly Commit[]): string[] {
-	const after = sim.sightView();
+	const after = sim.fieldView();
 	// 钩子收冻结读态：与回合起点快照下的权限一致
-	const before = sim.sightView(deepFreeze(sim.beforeWorld(steps)));
+	const before = sim.fieldView(deepFreeze(sim.beforeWorld(steps)));
 	return [...new Set([
 		...[...after.visible].filter((id) => !before.visible.has(id)),
 		...[...after.known].filter((id) => !before.known.has(id)),
