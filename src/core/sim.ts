@@ -6,7 +6,7 @@ export type Scalar = string | number | boolean;
 /** 存储值：标量或其有限序列；缺席由键不在表达，故无 none。 */
 export type Value = Scalar | Scalar[];
 
-/** 槽写载荷：none（null）即删除。 */
+/** 格写载荷：none（null）即删除。 */
 export type Payload = Value | null;
 
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
@@ -29,20 +29,20 @@ export interface World {
 	relations: Rel[];
 }
 
-/** 账本格：顶点（存在）／槽（属性）／边（关系）——写与记录的共同坐标。 */
+/** 账本格：顶点（存在）／属性／边（关系）——写与记录的共同坐标。 */
 export type VertexAddr = { cell: "vertex"; id: string };
 export type PropAddr = { cell: "prop"; entity: string; prop: string };
 export type EdgeAddr = { cell: "edge"; from: string; to: string; type: string };
 export type SlotAddr = PropAddr | EdgeAddr;
 export type Addr = VertexAddr | SlotAddr;
 
-/** δ：绝对写，后态自含。顶点格的身份即实体 id，故 spawn 的格取自 next、despawn 的格取自 id；槽格后态是值或 none（写/删）。 */
+/** δ：绝对写，后态自含。顶点格的身份即实体 id，故 spawn 的格取自 next、despawn 的格取自 id；属性格与边格的后态是值或 none（写/删）。 */
 export type Delta =
 	| { cell: "vertex"; next: Entity }
 	| { cell: "vertex"; id: string; next: null }
 	| (SlotAddr & { next: Payload });
 
-/** 𝒞：记录是补全前态的 δ。顶点记录恰一侧为 ⊥（生/灭，不另存 id）；槽记录前后态相异。 */
+/** 𝒞：记录是补全前态的 δ。顶点记录恰一侧为 ⊥（生/灭，不另存 id）；属性/边记录前后态相异。 */
 export type Change =
 	| { cell: "vertex"; prev: null; next: Entity }
 	| { cell: "vertex"; prev: Entity; next: null }
@@ -69,17 +69,19 @@ export type Fact = string;
 export type SlotType = "string" | "number" | "boolean" | "ref";
 
 /**
- * 槽声明（属性与边类型共用）：类型 × 重数 × 呈现。type 定值域与解释；
- * many 声明重数；label 是模型面名字（属性缺席即非槽，边缺席即开口 token 原样）。
+ * 格声明（属性与边类型共用）：类型 × 重数 × 呈现。type 定值域与解释，many 声明重数；
+ * 呈现名 = hidden ? ⊥ : (label ?? fallback)——属性 fallback 缺席（键是内部标识），边 fallback 是 token（类型的公开身份）。
  * 属性可 ref（值即实体 id）；边值是字面（端点已是引用）。
- * 身份键在 GameDef.identity（结构上全域至多一），其属性恒为无 label 的非 many string。
+ * 身份键在 GameDef.identity（结构上全域至多一），其属性恒为无 label、未 hidden 的非 many string。
  */
 export interface PropDef {
 	type: SlotType;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: true;
-	/** 槽的模型面名字；缺席即不进槽呈现。 */
+	/** 呈现名；属性缺席即键不上模型面，边缺席即以 token 示人。 */
 	label?: string;
+	/** 静态隐藏：true 即不进任何呈现面（属性可无 label 隐藏；边以此为静态隐藏的唯一途径）。 */
+	hidden?: true;
 }
 
 /** 否决受众：world = 世界腔（玩家可见，voice 缺省即 noResponse）；engine = 引擎/作者契约违约（仅 debug）。 */
@@ -338,7 +340,7 @@ export interface GameDef {
 	world: World;
 	/** 属性注册表：κ 的全定义域，必填。 */
 	props: Record<string, PropDef>;
-	/** 边类型注册表（可选）：注册即获值域契约与模型面名；未注册即开口 token（字面、原样示人）。 */
+	/** 边类型注册表（可选）：注册即获值域契约、改名与静态隐藏能力；未注册即开口 token（字面、以 token 示人）。 */
 	relTypes?: Record<string, PropDef>;
 	/** 身份键：props 里的一个 string 属性，结构上全域至多一；其值提升为实体名，渲染取 `~` 形。 */
 	identity?: string;
@@ -346,7 +348,7 @@ export interface GameDef {
 	recentWindow: number;
 	/** 所指域：意志能点名什么（ref 参数门）。缺省全见。 */
 	naming?: (world: World, player: string) => (id: string) => boolean;
-	/** 所见域：呈现能显什么，按格求值（顶点格的成员即卡）。缺省顶点随所指、边/槽恒真；声明即接管全部格，边/属性截面随之存在。 */
+	/** 所见域：呈现能显什么，按格求值（顶点格的成员即卡）。缺省顶点随所指、边/属性恒真；声明即接管全部格，边/属性截面随之存在。 */
 	sight?: (world: World, player: string) => (cell: Addr) => boolean;
 	/** 状态视图的派生纹理；无指称声明面。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
@@ -475,10 +477,10 @@ const integrityInvariant: Invariant = {
 	},
 };
 
-/** 非槽且非身份的属性不进呈现面。 */
+/** 呈现名缺席的属性：显式 hidden，或无 label 且非身份（键是内部标识，不是名字）。 */
 function hiddenProp(def: GameDef, prop: string): boolean {
 	const pd = def.props[prop];
-	return pd !== undefined && pd.label === undefined && prop !== def.identity;
+	return pd !== undefined && (pd.hidden === true || (pd.label === undefined && prop !== def.identity));
 }
 
 function hasLabel(def: GameDef, prop: string): boolean {
@@ -497,7 +499,7 @@ export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perc
 	const name = def.identity === undefined || (perceiveProp !== undefined && !perceiveProp(e, def.identity)) ? undefined : designation(def, e);
 	const props: Record<string, Value> = {};
 	for (const [k, v] of Object.entries(e.props)) {
-		if (!hasLabel(def, k)) continue;
+		if (hiddenProp(def, k) || !hasLabel(def, k)) continue;
 		if (perceiveProp && !perceiveProp(e, k)) continue;
 		if (!refsWithin(def, k, v, vis)) continue;
 		props[propLabelOf(def, k)] = v;
@@ -505,7 +507,7 @@ export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perc
 	return { id: e.id, ...(name !== undefined && { name }), props };
 }
 
-/** 槽的模型面名字；加载期保证一切可渲染槽携非空 label。 */
+/** 属性的呈现名；加载期保证一切可渲染属性携非空 label。 */
 function propLabelOf(def: GameDef, prop: string): string {
 	const label = def.props[prop]?.label;
 	if (label === undefined) throw new Error(`属性「${prop}」无模型面名字：key 不进模型面`);
@@ -613,12 +615,17 @@ function isRefProp(def: Pick<GameDef, "props">, prop: string): boolean {
 	return def.props[prop]?.type === "ref";
 }
 
-/** 边类型的模型面名字：注册取 label，未注册即开口 token 原样。 */
+/** 边类型的呈现名：注册取 label，未注册即开口 token 原样；hidden 由 hiddenRel 先行遮蔽。 */
 function relName(def: Pick<GameDef, "relTypes">, type: string): string {
 	return def.relTypes?.[type]?.label ?? type;
 }
 
-/** 值位指称与边端点同过所见域：目标不在所见域则整槽遮蔽——披露的指称必有卡。 */
+/** 静态隐藏的注册边类型；开口 token 无隐藏能力（注册即取得）。 */
+function hiddenRel(def: Pick<GameDef, "relTypes">, type: string): boolean {
+	return def.relTypes?.[type]?.hidden === true;
+}
+
+/** 值位指称与边端点同过所见域：目标不在所见域则整属性遮蔽——披露的指称必有卡。 */
 function refsWithin(def: Pick<GameDef, "props">, prop: string, v: Value, vis: ReadonlySet<string>): boolean {
 	if (!isRefProp(def, prop)) return true;
 	for (const item of Array.isArray(v) ? v : [v]) if (typeof item === "string" && !vis.has(item)) return false;
@@ -639,8 +646,9 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 	return `${name}.${label}: ${val(c.prev, sides.prev, isRefProp(sim.def, c.prop))} → ${val(c.next, sides.next, isRefProp(sim.def, c.prop))}`;
 }
 
+/** 呈现面的变更行：隐藏属性与隐藏边零泄漏。 */
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
-	return changes.filter((c) => !(c.cell === "prop" && hiddenProp(def, c.prop)));
+	return changes.filter((c) => !(c.cell === "prop" && hiddenProp(def, c.prop)) && !(c.cell === "edge" && hiddenRel(def, c.type)));
 }
 
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
@@ -791,32 +799,39 @@ export class Simulation {
 				if (required.length) throw new Error(`时钟动词 ${name} 不得有必填参数：泵以空参提案过门，时钟不是能改错重提的调用者`);
 			}
 		}
-		// props 必填；label 非空且两两相异；identity 为结构事实，其属性须为无 label 的非 many string
-		const labels = new Map<string, string>();
+		// props 必填；呈现名只在位置内要求唯一，且按有效名（hidden 即无名）计算
+		const propNames = new Map<string, string>();
 		for (const [k, pd] of Object.entries(def.props)) {
 			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "ref") throw new Error(`属性「${k}」的类型须为 string/number/boolean/ref，得到 ${String(pd.type)}`);
 			if (pd.many !== undefined && pd.many !== true) throw new Error(`属性「${k}」的 many 只能为 true（缺省即 one），得到 ${String(pd.many)}`);
+			if (pd.hidden !== undefined && pd.hidden !== true) throw new Error(`属性「${k}」的 hidden 只能为 true（缺省即呈现），得到 ${String(pd.hidden)}`);
 			if (pd.label !== undefined) {
-				if (pd.label === "") throw new Error(`属性「${k}」的 label 须非空：key 不进模型面`);
-				const prev = labels.get(pd.label);
-				if (prev !== undefined) throw new Error(`属性 label 重复：「${pd.label}」为「${prev}」与「${k}」共有`);
-				labels.set(pd.label, k);
+				if (pd.label === "") throw new Error(`属性「${k}」的 label 须非空：键不进模型面`);
+				if (pd.hidden !== true) {
+					const prev = propNames.get(pd.label);
+					if (prev !== undefined) throw new Error(`属性呈现名重复：「${pd.label}」为「${prev}」与「${k}」共有`);
+					propNames.set(pd.label, k);
+				}
 			}
 		}
 		const identityKey = def.identity;
 		if (identityKey !== undefined) {
 			const pd = def.props[identityKey];
 			if (!pd) throw new Error(`identity「${identityKey}」未在 props 注册`);
-			if (pd.type !== "string" || pd.many === true || pd.label !== undefined) throw new Error(`identity「${identityKey}」须为无 label 的非 many string 属性`);
+			if (pd.type !== "string" || pd.many === true || pd.label !== undefined || pd.hidden === true) throw new Error(`identity「${identityKey}」须为无 label、未 hidden 的非 many string 属性`);
 		}
+		// 边类型呈现名：注册集内有效名（hidden 即无名）两两相异；开口 token 不在注册表，无法在 def 期穷举
+		const relNames = new Map<string, string>();
 		for (const [t, rd] of Object.entries(def.relTypes ?? {})) {
 			if (rd.type !== "string" && rd.type !== "number" && rd.type !== "boolean") throw new Error(`边类型「${t}」的值类型须为 string/number/boolean（边值是字面），得到 ${String(rd.type)}`);
 			if (rd.many !== undefined && rd.many !== true) throw new Error(`边类型「${t}」的 many 只能为 true（缺省即 one），得到 ${String(rd.many)}`);
-			if (rd.label === "") throw new Error(`边类型「${t}」的 label 须非空：token 不进模型面`);
-			if (rd.label !== undefined) {
-				const prev = labels.get(rd.label);
-				if (prev !== undefined) throw new Error(`label 重复：「${rd.label}」为「${prev}」与「${t}」共有`);
-				labels.set(rd.label, t);
+			if (rd.hidden !== undefined && rd.hidden !== true) throw new Error(`边类型「${t}」的 hidden 只能为 true（缺省即以 token 示人），得到 ${String(rd.hidden)}`);
+			if (rd.label === "") throw new Error(`边类型「${t}」的 label 须非空：空词不是名字`);
+			if (rd.hidden !== true) {
+				const name = rd.label ?? t;
+				const prev = relNames.get(name);
+				if (prev !== undefined) throw new Error(`边类型呈现名重复：「${name}」为「${prev}」与「${t}」共有`);
+				relNames.set(name, t);
 			}
 		}
 		this.identityKey = identityKey;
@@ -844,7 +859,7 @@ export class Simulation {
 		return this.def.naming?.(world, this.player) ?? (() => true);
 	}
 
-	/** 所见谓词：缺省顶点随所指、边/槽恒真；作者声明 sight 即接管全部格。 */
+	/** 所见谓词：缺省顶点随所指、边/属性恒真；作者声明 sight 即接管全部格。 */
 	private sightOf(world: World): (cell: Addr) => boolean {
 		const sight = this.def.sight?.(world, this.player);
 		if (sight) return sight;
@@ -883,7 +898,7 @@ export class Simulation {
 		return out;
 	}
 
-	/** 属性键截面：枚举注册表键而非在场键，槽格谓词对全集求值——缺席槽可感，在场由闭合另行把门。 */
+	/** 属性键截面：枚举注册表键而非在场键，属性格谓词对全集求值——缺席属性可感，在场由闭合另行把门。 */
 	private propField(world: World, seen: SightView): string[] {
 		const keys = Object.keys(this.def.props);
 		const out: string[] = [];
@@ -1159,7 +1174,7 @@ export class Simulation {
 		const seen = this.sightView(w);
 		const entities = w.entities.filter((e) => seen.cards.has(e.id)).map((e) => this.cardOf(e, seen));
 		const relations = w.relations
-			.filter((r) => seen.cards.has(r.from) && seen.cards.has(r.to) && seen.within({ cell: "edge", from: r.from, to: r.to, type: r.type }))
+			.filter((r) => !hiddenRel(this.def, r.type) && seen.cards.has(r.from) && seen.cards.has(r.to) && seen.within({ cell: "edge", from: r.from, to: r.to, type: r.type }))
 			.map((r) => ({ from: r.from, to: r.to, type: relName(this.def, r.type), value: r.value }));
 		const out: Record<string, unknown> = { time: w.time, relations, entities };
 		const extra = this.def.digestExtra?.(w, this.player) ?? {};
@@ -1167,7 +1182,7 @@ export class Simulation {
 		return JSON.stringify(out);
 	}
 
-	/** 卡：身份与槽按所见谓词遮蔽，值位指称须在所见域。 */
+	/** 卡：身份与属性按所见谓词遮蔽，值位指称须在所见域。 */
 	cardOf(e: Entity, seen: SightView): { id: string; name?: string; props: Record<string, Value> } {
 		return viewCard(this.def, e, seen.cards, (x, prop) => seen.within({ cell: "prop", entity: x.id, prop }));
 	}

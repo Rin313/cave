@@ -399,18 +399,18 @@ const base: Omit<GameDef, "prompt"> = {
 		],
 	},
 	props: SEALS_PROPS,
-	// 隐藏边注册值域：类型契约而非模型名（sight 已遮其呈现）
+	// 注册边（值域契约）：信任/猜疑/知晓静态隐藏，社会真相只经桶级披露与法则代笔流动
 	relTypes: {
-		"信任": { type: "number", label: "信任" },
-		"猜疑": { type: "number", label: "猜疑" },
-		"知晓": { type: "boolean", label: "知晓" },
+		"信任": { type: "number", hidden: true },
+		"猜疑": { type: "number", hidden: true },
+		"知晓": { type: "boolean", hidden: true },
 	},
-	// 卡随命名域；社会真相只经桶级披露与法则代笔流动（被测通道）；信文只对知晓者可感（判据 = 知晓边）
+	// 卡随命名域；社会真相只经桶级披露与法则代笔流动（被测通道）；信文只对知晓者可感（判据 = 知晓边）；隐藏边由注册声明遮蔽
 	sight: (world, player) => {
 		const naming = sealsNaming(world, player);
 		return (cell) => {
 			if (cell.cell === "vertex") return naming(cell.id);
-			if (cell.cell === "edge") return cell.type !== "信任" && cell.type !== "猜疑" && cell.type !== "知晓";
+			if (cell.cell === "edge") return true;
 			return cell.prop !== "content" || relVal(world, player, cell.entity, "知晓") !== null;
 		};
 	},
