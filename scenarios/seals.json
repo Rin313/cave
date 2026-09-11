@@ -32,7 +32,7 @@
 		{
 			"name": "言语与指称：known 生命周期×改名连续性（复合格）",
 			"steps": [
-				{ "name": "向书房里的灰衣人攀谈：不可指名（门答，动词 invisible 覆写，原样回显）", "action": { "verb": "talk", "params": { "target": "guest", "words": "借个火。" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有这个人", "lines": ["✗ 攀谈(guest,借个火。)：眼前没有这个人。"] } },
+				{ "name": "向书房里的灰衣人攀谈：不可指名（门答，动词 invisible 词表缺省）", "action": { "verb": "talk", "params": { "target": "guest", "words": "借个火。" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有这个人", "lines": ["✗ 攀谈(guest,借个火。)：眼前没有这个人。"] } },
 				{ "name": "六刻：流言＋交割＋夜笺入案（离屏生灭入账）＋灰衣人漂移入厅", "tick": 6, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·盐引.火漆: true → false; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ (+ 夜笺)[又有一封夜笺送到，搁在书案上。]", "⏱ (灰衣人.持者: 书房 → 正厅)[你瞥见太守与管家在廊下低语，谈了许久。; 灰衣人踱进了正厅，与管家寒暄。]", "⏱ 光阴虚度 ×2"], "viewIncludes": ["灰衣人", "夜笺"], "state": { "guest.in": "parlor", "letter_night.in": "desk" } } },
 				{ "name": "攀谈：原话物化为惰性记录（heard），introduced 标记对模型不可见", "action": { "verb": "talk", "params": { "target": "guest", "words": "面具下的眼睛像是认得我。" } }, "expect": { "ok": true, "lines": ["✓ 攀谈(灰衣人,面具下的眼睛像是认得我。)：你与灰衣人攀谈了一句。(灰衣人.闻言: null → 面具下的眼睛像是认得我。)"], "state": { "guest.heard": "面具下的眼睛像是认得我。", "guest.introduced": true } } },
 				{ "name": "揭面：真名出载荷，变更可说", "action": { "verb": "unmask", "params": { "target": "guest" } }, "expect": { "ok": true, "lines": ["✓ 揭面(沈青)：你揭下了面具。(~ 灰衣人 → 沈青; 沈青.面具: true → false)"], "viewIncludes": ["沈青"], "state": { "guest.mask": false } } },

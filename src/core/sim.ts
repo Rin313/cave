@@ -71,7 +71,7 @@ export interface Action {
 export interface Messages {
 	/** 引擎文本缺省：除 gate（invisibleEntity）外一切场合回落到此；debug 只入 probe 与构造/装载诊断。 */
 	noResponse: string;
-	/** 指称门否决的缺省文案；动词可携 invisible 覆写。 */
+	/** 指称门否决的缺省文案（say 的 base）；动词 invisible 更具体，优先。 */
 	invisibleEntity?: string;
 	/** 静默刻聚合文案（⏱ ×n，n = |{at : 言@at = ∅}|）。 */
 	timePassed: string;
@@ -298,7 +298,7 @@ export interface VerbDef {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 门否决文案：无指称参数时不可能被消费；缺省回落 messages.invisibleEntity。 */
+	/** 门否决文案（词表缺省，位于 say 的 base 之下，不进入记录）：无指称参数时不可能被消费；缺省回落 messages.invisibleEntity。 */
 	invisible?: string;
 	rules: Rule[];
 }
@@ -779,11 +779,10 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-/** 场合缺省：gate 用 invisibleEntity，其余一律 noResponse。 */
+/** 场合缺省：gate 先取动词 invisible 再取 invisibleEntity（词表缺省，不越级 say），其余一律 noResponse。 */
 function baseSpeech(def: GameDef, speech: Speech): string {
-	return speech.kind === "point" && speech.point.kind === "gate"
-		? (def.messages.invisibleEntity ?? def.messages.noResponse)
-		: def.messages.noResponse;
+	if (speech.kind !== "point" || speech.point.kind !== "gate") return def.messages.noResponse;
+	return def.verbs[speech.verb]?.invisible ?? def.messages.invisibleEntity ?? def.messages.noResponse;
 }
 
 function speechTag(speech: Speech): string {
@@ -1173,10 +1172,7 @@ export class Simulation {
 				const v = action.params[p];
 				return (Array.isArray(v) ? v : [v]).filter((id): id is string => typeof id === "string" && !gate.has(id));
 			});
-		if (invalid.length) {
-			const invisible = this.def.verbs[action.verb]?.invisible;
-			return { ok: false, denial: { point: { kind: "gate" }, ...(invisible !== undefined && { text: invisible }) } };
-		}
+		if (invalid.length) return { ok: false, denial: { point: { kind: "gate" } } };
 		for (const r of rules) {
 			const q = this.query(world, action.params, addr);
 			let v: Verdict | null;
