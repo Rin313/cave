@@ -163,7 +163,7 @@ function cmdState(gameId: string, runId: string, out: string | undefined): void 
 	console.log(`【${runId}】${gameId} 已进行 ${lastSeq} 回合`);
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 	if (out === undefined) {
-		console.log(JSON.stringify(JSON.parse(sim.digest()), null, 1));
+		console.log(JSON.stringify(sim.view(), null, 1));
 		return;
 	}
 	writeFileSync(out, `${JSON.stringify(sim.snapshot(), null, 1)}\n`, "utf8");

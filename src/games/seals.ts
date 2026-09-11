@@ -1,4 +1,4 @@
-import type { Addr, Delta, Entity, GameDef, PropDef, PromptKit, Q, Text, ViewValue, World } from "../core/sim.ts";
+import type { Addr, Delta, Entity, FieldView, GameDef, PropDef, PromptKit, Q, Text, ViewValue, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant, param, refParamsOf, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
@@ -48,8 +48,8 @@ const referenced = (q: Q, id: string): string | null => {
 	return null;
 };
 
-function extraOf(world: World, player: string): Record<string, ViewValue> {
-	const name = (id: string): string => nameOf(world, id);
+function extraOf(world: World, player: string, field: FieldView): Record<string, ViewValue> {
+	const name = (id: string): string => field.name({ cell: "vertex", id }) ?? id;
 	const affinity: string[] = [];
 	const seen = new Set<string>();
 	for (const r of world.relations) {
@@ -400,7 +400,10 @@ const base: Omit<GameDef, "prompt"> = {
 	},
 	// 指称门随可指称域：披露缺省（顶点格）并上已引见者——离屏仍可指名（出句柄目录，不出卡）
 	referable: (_world, _player, base) => (e) => base(e) || e.props.introduced === true,
-	digestExtra: extraOf,
+	view: (world, player, base, field) => {
+		const extra = extraOf(world, player, field);
+		return Object.keys(extra).length ? { ...base, extra } : base;
+	},
 };
 
 const stateHeader = "[State view] (the slice of the world visible to you; what is not in it cannot be referred to):";

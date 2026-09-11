@@ -112,29 +112,30 @@ price  =  origin = clock ? 0 : (ticks ?? cost)
 
 ### 感知
 
-感知与呈现钩子是 def 钩子，不入账本；签名收意志锚（非其推导值），命名与可指称另收引擎缺省实现作为可委托的 base；钩子可无视锚：
+感知与呈现钩子是 def 钩子，不入账本；签名收意志锚（非其推导值），命名、可指称与视图另收引擎缺省实现作为可委托的 base；钩子可无视锚：
 
 ```
 perceives   : World × Player → (格 → Bool)                          -- 披露：顶点格成员即可见；属性/边格谓词即变更行该侧判据；缺省常真
 referable   : World × Player × (实体 → Bool) → (实体 → Bool)         -- 可指称：指称门的域；第三参数 = 披露缺省（顶点格 perceives）
 name        : World × Player × (格 → Token?) → (格 → Token?)         -- 格命名；第三参数 = 注册表缺省（顶点 id、属性 label、边 present）；只被呈现消费
-digestExtra : World × Player → Record<string, ViewValue>            -- 派生纹理：读世界真相，非指称通道
+view        : World × Player × ViewBase × Γ → ViewValue             -- 状态视图：闭合基座上增补；缺省即基座，增补部分不入闭包
+Γ           ::= (格命名, 披露谓词, 脸表)                            -- 该边界的格视图
 ```
 
 - 披露只有一条轴：`perceives` 是引擎唯一的披露判定。可见域 `P(w) = { e : perceives(w, ⟨e⟩) }`，可指称域 `R(w) = { e : referable(w, e, baseP) }`（`baseP` 即披露缺省），已知域 `H(w) = P ∪ R`：指称门在提交期问 `ref 值 ∈ R(w⁻)?`，卡在呈现期用 P 闭合，一切结构化指称用 H 闭合；属性/边格的谓词值决定该格是否可显示。缺省常真（全见）、可指称缺省即披露；声明即接管总函数，缺省实现以第三参数入参，引擎不设暗回退。命名是另一条轴：唯一入口是 `name`（`label`、`present` 只是其缺省实现的字段）；名字存在性与披露互不代替（可显示 = 有名 ∧ 披露），但任一可独立遮蔽；`present: "hidden"` 只是“缺省无名”。名字不改变指称域（指称恒为 id），故跨位置、同卡同名都不构成机械歧义。
 - 结构化呈现须名字、披露、指称闭合同时成立：卡中属性 `name(⟨e,k⟩) ≠ ∅` ∧ `perceives(⟨e,k⟩)` ∧ `refs(k) ⊆ H`；关系 `name(⟨a,b,τ⟩) ≠ ∅` ∧ 端点 ⊆ H ∧ `perceives(⟨a,b,τ⟩)` ∧ 载荷指称 ⊆ H；变更行每侧可显示 ⇔ 该侧边界对变更格有名且披露，行内一切指称（顶点、端点、主语、被披露侧的值指称）须落在两边界 H 之并内，否则整行不渲染。顶点名在 H 上全（缺省回落 id），故「可指名者必在已知集，已知者必可指名（卡或句柄）」是结构化面的定义与闭合。
 - `perceives` 对缺席格同样求值：变更行每侧 = 该边界对变更格的谓词值；其值域为 Bool，不改变所指域。谓词读世界真相，不写入、不物化为内容。
-- `digestExtra` 与 reply/statements/散文在此闭包之外：可显示不在 P 中的名字与无名边的聚合，但不产生指称、不改变 P/R、不进指称门；「听说其名但不在场」有两条出口：并入 R 即出句柄目录（可指名），只留在纹理则不可指称。
+- `view` 声明即接管状态视图，第三参数 `base` 即引擎缺省（已过名字、披露与指称闭包），可原样委托或增补改写；增补部分与 reply/statements/散文在此闭包之外：可显示不在 P 中的名字与无名边的聚合（`Γ` 供命名与域对齐），但不产生指称、不改变 P/R、不进指称门；「听说其名但不在场」有两条出口：并入 R 即出句柄目录（可指名），只留在纹理则不可指称。
 
 ```
 P(w)   ::= { e : perceives(w, ⟨e⟩) }
 R(w)   ::= { e : referable(w, e) }
 H(w)   ::= P(w) ∪ R(w)
-view(w) = ( t,
-            entities  = { card(e) : id(e) ∈ P(w) },
-            relations = { r ∈ R : name(⟨a,b,τ⟩) ≠ ∅ ∧ {a, b} ⊆ H(w) ∧ perceives(w, ⟨a,b,τ⟩) ∧ 载荷指称 ⊆ H(w) },
-            known     = { (id(e), name(⟨e⟩)) : id(e) ∈ R(w)∖P(w) },
-            extra     = digestExtra(w, player) )
+viewBase(w) = ( t,
+                entities  = { card(e) : id(e) ∈ P(w) },
+                relations = { r ∈ R : name(⟨a,b,τ⟩) ≠ ∅ ∧ {a, b} ⊆ H(w) ∧ perceives(w, ⟨a,b,τ⟩) ∧ 载荷指称 ⊆ H(w) },
+                known     = { (id(e), name(⟨e⟩)) : id(e) ∈ R(w)∖P(w) } )
+view(w) = def.view?.(w, player, viewBase(w), Γ(w)) ?? viewBase(w)
 refs(k) ::= k 非指称 ? ∅ : 值的指称集
 card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : name(⟨e,k⟩) ≠ ∅ ∧ perceives(w, ⟨e,k⟩) ∧ refs(k) ⊆ H(w)] )   -- 序列承载；ref 值为 id
 ```

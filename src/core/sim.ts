@@ -389,8 +389,8 @@ export interface GameDef {
 	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
 	/** 可指称谓词：指称门的域。披露缺省（顶点格 perceives）作为第三参数传入；缺省即披露。 */
 	referable?: (world: World, player: string, base: (e: Entity) => boolean) => (e: Entity) => boolean;
-	/** 状态视图的派生纹理：读世界真相，非指称通道（不产生指称，不改变所见域）。 */
-	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
+	/** 状态视图：收冻结真相、闭合基座与该边界的格视图（命名、披露域、脸表）；返回任意 JSON，缺省即基座；增补部分在闭包之外。 */
+	view?: (world: World, player: string, base: ViewBase, field: FieldView) => ViewValue;
 	invariants?: Invariant[];
 	messages: Messages;
 	prompt: {
@@ -520,17 +520,17 @@ function integrityProblems(def: GameDef, world: World): string | null {
 }
 
 /** 实体卡：id 是指称身份（ref 参数用它），name 是顶点 token（只阅读）；props 以格名承载，名字随边界求值。 */
-export interface Card {
+export type Card = {
 	id: string;
 	name: string;
 	props: { name: string; value: Value }[];
-}
+};
 
 /** 可指称而不可见者的句柄：id 供指称参数，name 供阅读。 */
-export interface Handle {
+export type Handle = {
 	id: string;
 	name: string;
-}
+};
 
 /** 一个提交边界的求值：披露谓词、可见/可指称/已知域、脸表与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
 export interface FieldView {
@@ -541,6 +541,14 @@ export interface FieldView {
 	faces: Map<string, string>;
 	name: (cell: Addr) => string | null;
 }
+
+/** 闭合后的状态视图基座：卡、句柄、边（名字、披露与指称闭包同时成立）；作者视图钩子的缺省值与素材。 */
+export type ViewBase = {
+	time: number;
+	entities: Card[];
+	relations: { from: string; to: string; type: string; value: Value }[];
+	known?: Handle[];
+};
 
 /** 无碰撞元组编码：成分字符集不受约束。 */
 function tupleKey(parts: readonly string[]): string {
@@ -1295,23 +1303,32 @@ export class Simulation {
 		return JSON.parse(JSON.stringify(this.world)) as World;
 	}
 
-	/** 状态视图：可见者出卡，可指称而不可见者出句柄（known）；关系过名字、披露与闭包（H）。 */
-	digest(): string {
-		const w = this.readState();
-		const b = this.fieldView(w);
-		const entities = w.entities.filter((e) => b.visible.has(e.id)).map((e) => this.cardOf(e, b, b.faces.get(e.id)!));
-		const known = w.entities.filter((e) => !b.visible.has(e.id) && b.referable.has(e.id)).map((e): Handle => ({ id: e.id, name: b.faces.get(e.id)! }));
+	/** 闭合基座：可见者出卡，可指称而不可见者出句柄（known）；关系过名字、披露与闭包（H）。 */
+	private viewBase(w: World, field: FieldView): ViewBase {
+		const entities = w.entities.filter((e) => field.visible.has(e.id)).map((e) => this.cardOf(e, field, field.faces.get(e.id)!));
+		const known = w.entities.filter((e) => !field.visible.has(e.id) && field.referable.has(e.id)).map((e): Handle => ({ id: e.id, name: field.faces.get(e.id)! }));
 		const relations = w.relations
 			.filter((r) => {
 				const cell: EdgeAddr = { cell: "edge", from: r.from, to: r.to, type: r.type };
-				return b.name(cell) !== null && b.known.has(r.from) && b.known.has(r.to) && b.within(cell) && (!relRef(this.def, r.type) || valueRefsWithin(r.value, b.known));
+				return field.name(cell) !== null && field.known.has(r.from) && field.known.has(r.to) && field.within(cell) && (!relRef(this.def, r.type) || valueRefsWithin(r.value, field.known));
 			})
-			.map((r) => ({ from: r.from, to: r.to, type: b.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
-		const out: Record<string, unknown> = { time: w.time, relations, entities };
+			.map((r) => ({ from: r.from, to: r.to, type: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
+		const out: ViewBase = { time: w.time, relations, entities };
 		if (known.length) out.known = known;
-		const extra = this.def.digestExtra?.(w, this.player) ?? {};
-		if (Object.keys(extra).length) out.extra = extra;
-		return JSON.stringify(out);
+		return out;
+	}
+
+	/** 状态视图数据：闭合基座经作者钩子；序列化是边界的事（digest）。 */
+	view(): ViewValue {
+		const w = this.readState();
+		const field = this.fieldView(w);
+		const base = this.viewBase(w, field);
+		return this.def.view?.(w, this.player, base, field) ?? base;
+	}
+
+	/** 状态视图的规范序列化：探针、日志与 prompt 的便捷出口。 */
+	digest(): string {
+		return JSON.stringify(this.view());
 	}
 
 	/** 卡：属性过格名＋披露＋指称闭包（H），名字与值同一呈现轴。 */
