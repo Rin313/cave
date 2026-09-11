@@ -127,7 +127,7 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		const a = ex.steps[0];
 		if (a === undefined || a.origin === "clock") return ["（无尝试提交）"];
 		const denied = ex.steps.filter((s): s is Extract<Commit, { ok: false }> => s.origin === "clock" && !s.ok);
-		const reply = a.ok ? a.reply : renderDenial(sim.def, a.denial);
+		const reply = a.ok ? a.reply : renderDenial(sim.def, a.denial, a.action.verb);
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
 		if (e.reason !== undefined && !(reply ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${reply ?? ""}」`);
 		if (e.law !== undefined) {
@@ -172,7 +172,7 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 			actual: ex.error !== undefined
 				? `throw「${ex.error instanceof Error ? ex.error.message : String(ex.error)}」`
 				: a !== undefined && a.origin !== "clock"
-					? `ok=${a.ok}${a.ok ? "" : ` law=${lawOf(a.denial.point)}`} reason="${a.ok ? (a.reply ?? "") : renderDenial(def, a.denial)}"${denied ? ` 拦截刻×${denied}` : ""}`
+					? `ok=${a.ok}${a.ok ? "" : ` law=${lawOf(a.denial.point)}`} reason="${a.ok ? (a.reply ?? "") : renderDenial(def, a.denial, a.action.verb)}"${denied ? ` 拦截刻×${denied}` : ""}`
 					: "（无尝试提交）",
 			detail: problems.length ? problems.join(" | ") : "matches",
 		});
@@ -345,12 +345,12 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			}
 			else {
 				const bug = bugOf(step.denial);
-				rows.push({ verb: action.verb, op, law: lawOf(step.denial.point), reason: renderDenial(def, step.denial), ...(bug !== undefined && { bug }) });
+				rows.push({ verb: action.verb, op, law: lawOf(step.denial.point), reason: renderDenial(def, step.denial, step.action.verb), ...(bug !== undefined && { bug }) });
 			}
 			for (const t of elapsed) {
 				if (t.ok) continue;
 				const b = bugOf(t.denial);
-				if (b) rows.push({ verb: action.verb, op, law: lawOf(t.denial.point), reason: renderDenial(def, t.denial), bug: b });
+				if (b) rows.push({ verb: action.verb, op, law: lawOf(t.denial.point), reason: renderDenial(def, t.denial, t.action.verb), bug: b });
 			}
 		} catch (e) {
 			if (e instanceof ProtocolViolation) rows.push({ verb: action.verb, op, law: e.code, reason: "协议违约：探测组合越过动词 schema" });

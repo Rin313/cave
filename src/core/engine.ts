@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
-import { Simulation, catalog, deepFreeze, errorText, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type PromptKit, type RecentEntry, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type PromptKit, type RecentEntry, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -328,9 +328,18 @@ function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]):
 function skeletonSummary(sim: Simulation, steps: Commit[]): { text: string; warning?: string } {
 	try {
 		const lines = spineLines(sim, steps, sim.snapshot());
-		return { text: lines.length ? lines.join("\n") : sim.def.messages.noResponse };
+		return { text: lines.length ? lines.join("\n") : speak(sim.def, { kind: "noProposal" }) };
 	} catch (e) {
-		return { text: sim.def.messages.noResponse, warning: `骨架渲染失败：${errorText(e)}` };
+		return { text: interruptedText(sim.def), warning: `骨架渲染失败：${errorText(e)}` };
+	}
+}
+
+/** 投影失灵的最终兜底：say 自身失败时直取 noResponse。 */
+function interruptedText(def: GameDef): string {
+	try {
+		return speak(def, { kind: "interrupted", phase: "project" });
+	} catch {
+		return def.messages.noResponse;
 	}
 }
 
@@ -447,9 +456,9 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				// 投影失灵时不重入所见域：新见段缺席
 				const revealed = crashed ? [] : revealedSince(sim, steps);
 				const lines = formatTurnEvents(sim, steps, revealed);
-				if (crashed) lines.push(def.messages.noResponse);
+				if (crashed) lines.push(speak(def, { kind: "interrupted", phase: "adjudicate" }));
 				text = lines.join("\n");
-				if (text === "") text = def.messages.noResponse;
+				if (text === "") text = speak(def, { kind: "noProposal" });
 			} catch (e) {
 				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
 				run.warnings.push(`结果投影抛错：${errorText(e)}`);

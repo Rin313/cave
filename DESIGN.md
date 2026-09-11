@@ -72,7 +72,7 @@ Denial   ::= (Point, ⟨text⟩?)                 -- 受众 engine 时文本必�
 ```
 
 - `before` 是提交前读态（回滚锚）；`changes` 是本次提交的全部变更。integrity 恒挂：id 唯一、钟为非负整数、锚在世、身份非空、存储值 ∈ V、注册项类型契约（值与非空序列按 `type` 声明；注册 `ref` 追加引用在世）、边形状与三元组唯一。游戏不变式追加领域约束。任一违反 ⇒ 整提交回滚并拒绝。
-- 受众是 Point 的全函数（见 `fault`）：受众 world 的点携世界腔文本（缺省回落 noResponse），受众 engine 的点必携 debug；玩家侧恒 noResponse，debug 只有 probe 见。
+- 受众是 Point 的全函数（见 `fault`）：受众 world 的点携世界腔文本，受众 engine 的点必携 debug；玩家侧缺省 noResponse（`say` 可改写法），debug 只有 probe 见。
 - `admit` 是装载终点的零变更审查（当前世界 × 当下法则）：与零变更授予逐字段同形，proposal 是唯一判别；重放不跑 authored 不变式（历史由当时的法则裁判过）；检查点接纳只验结构完好与 integrity；终态必过 admit——装载拒绝即当下世界违反当下法则。
 
 ### 裁决
@@ -173,7 +173,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : name
 - **动词表**：`params` 由值声明（type×重数）加可选与描述构成，派生接口模式、内核校验与规则参数的编译期类型；`ref` 值过指称门（域即可指称集）；`many` 令参数为非空序列——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。全表另派生 AI 广告（`verbFace`／`catalog`：id、label、description、cost、逐参数的 type×重数×可选×ref 与过门注记）；`act` 工具描述缺省即协议约束＋该广告，作者经 `prompt.tool` 委托或覆盖——两种编码同源，不得双写。
 - **常驻规则**（`ticks`）：每刻按声明序由泵以空参提案过同一扇门（顺序 fold：后一条看得见前一条的后果）；无参数、无价、无呈现名；全弃权即默、不得携刻；deny 发声为失败刻。动词面 = 动词表（文本广告与接口模式两种编码）；意志动词的唯一调用点是 will。origin 是调用点的标记而非裁决内容：判定输入 `Q` 不含 origin，调用点特有的约束（空参、零价、不得携刻）由引擎在判定之外施加；origin 随步入账，投影不回查 def，两张表的 id 各自独立，同名不构成冲突。
 - **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被断言与探针消费，`text` 是世界腔答复（缺省回落 noResponse），`ticks` 覆写价；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。否决不携带涉及实体——指称落点在 action 参数与法则理由。受众规则见 `fault`。
-- **引擎点文本**（`Messages`，皆非空）：`noResponse` 是受众 world 点缺文本的兜底与受众 engine 点的隐身呈现；`timePassed` 承载静默刻聚合（`⏱ ×n` 计 |{at : 言@at = ∅}|）；`invisibleEntity` 是门否决的缺省文案，动词可携 `invisible` 覆写，缺省链 `verb.invisible? → messages.invisibleEntity? → noResponse`。文案只被呈现消费，不参与裁决。
+- **引擎文本**（`Messages` 皆非空；`say` 可接管总函数）：引擎合成读者侧文本的场合是闭集 `Speech`——记录点的 `(point, verb)`（rule/closure/gate/invariant/engine/crash）与边界情形 `noProposal`（空提案、未调 act、零行文）、`interrupted(adjudicate|project)`。解析序：具体声明（`deny` 的 text、`verb.invisible`）> `say(speech, base)` > `Messages` 缺省——`noResponse` 是除 gate 外一切场合的缺省（受众 engine 点的隐身呈现），`invisibleEntity?` 是 gate 的缺省。记录点场合的解析是记录与 def 的纯函数（act 结果与近况恒同）；边界场合不在账本；投影失灵先按 `interrupted(project)` 解析，`say` 失败时直取 `noResponse`。`timePassed` 承载静默刻聚合（`⏱ ×n` 计 |{at : 言@at = ∅}|），不属 `say`；回复/陈述是授予侧的逐次文本，亦不入 `say`。文案只被呈现消费，不参与裁决，不得改变言默。
 
 ## 非目标
 

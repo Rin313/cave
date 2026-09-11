@@ -69,7 +69,7 @@ export interface Action {
 }
 
 export interface Messages {
-	/** 受众 world 点缺文本的兜底，兼受众 engine 点的隐身呈现；debug 只入 probe 与构造/装载诊断。 */
+	/** 引擎文本缺省：除 gate（invisibleEntity）外一切场合回落到此；debug 只入 probe 与构造/装载诊断。 */
 	noResponse: string;
 	/** 指称门否决的缺省文案；动词可携 invisible 覆写。 */
 	invisibleEntity?: string;
@@ -135,6 +135,12 @@ export interface Denial {
 
 /** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse）。引擎违约走抛出。 */
 export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: Text };
+
+/** 引擎合成读者侧文本的场合：记录点的 (point, verb) 与两种边界情形。 */
+export type Speech =
+	| { kind: "point"; point: Point; verb: string }
+	| { kind: "noProposal" }
+	| { kind: "interrupted"; phase: "adjudicate" | "project" };
 
 /** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
 export class ProtocolViolation extends Error {
@@ -463,6 +469,8 @@ export interface GameDef {
 	/** 状态视图：收冻结真相、闭合基座与该边界的格视图（命名、披露域、脸表）；返回任意 JSON，缺省即基座；增补部分在闭包之外。 */
 	view?: (world: World, player: string, base: ViewBase, field: FieldView) => ViewValue;
 	invariants?: Invariant[];
+	/** 引擎文本解析：收场合与缺省实现 base，声明即接管总函数；返回值须为非空字符串。只被呈现消费。 */
+	say?: (speech: Speech, base: (speech: Speech) => string) => string;
 	messages: Messages;
 	prompt: {
 		system: string;
@@ -735,9 +743,30 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-/** 玩家侧文本：world 给文本（缺省 noResponse），engine 恒 noResponse。 */
-export function renderDenial(def: GameDef, denial: Denial): string {
-	return audienceOf(denial.point) === "world" ? (denial.text ?? def.messages.noResponse) : def.messages.noResponse;
+/** 场合缺省：gate 用 invisibleEntity，其余一律 noResponse。 */
+function baseSpeech(def: GameDef, speech: Speech): string {
+	return speech.kind === "point" && speech.point.kind === "gate"
+		? (def.messages.invisibleEntity ?? def.messages.noResponse)
+		: def.messages.noResponse;
+}
+
+function speechTag(speech: Speech): string {
+	return speech.kind === "point" ? lawOf(speech.point) : speech.kind;
+}
+
+/** 引擎文本解析：声明 say 即接管总函数，base 即缺省绑定。 */
+export function speak(def: GameDef, speech: Speech): string {
+	const base = (s: Speech): string => baseSpeech(def, s);
+	if (def.say === undefined) return base(speech);
+	const text = def.say(speech, base);
+	if (typeof text !== "string" || text.trim() === "") throw new Error(`GameDef.say 须返回非空字符串（场合 ${speechTag(speech)}）`);
+	return text;
+}
+
+/** 玩家侧文本：world 点携文本即用，其余按场合解析；engine 点的 debug 不过此门。 */
+export function renderDenial(def: GameDef, denial: Denial, verb: string): string {
+	if (audienceOf(denial.point) === "world" && denial.text !== undefined) return denial.text;
+	return speak(def, { kind: "point", point: denial.point, verb });
 }
 
 /** 原始文本（含引擎 debug）：装载拒绝等非呈现用途；无文本即空串，不回落 noResponse。 */
@@ -926,7 +955,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		if (s.origin !== "clock") {
 			flush();
 			granted = s.price;
-			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial);
+			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial, s.action.verb);
 			const statements = s.ok ? (s.statements ?? []) : [];
 			const tail = [
 				changes.length ? `(${changes.join("; ")})` : "",
@@ -940,7 +969,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 				if (s.reply !== undefined) held.reply.push(s.reply);
 				if (s.statements?.length) held.statements.push(...s.statements);
 			} else {
-				held.denials.push(renderDenial(sim.def, s.denial));
+				held.denials.push(renderDenial(sim.def, s.denial, s.action.verb));
 			}
 			if (held.changes.length || held.reply.length || held.statements.length || held.denials.length) said.set(s.at, held);
 		}
@@ -973,6 +1002,7 @@ export class Simulation {
 		if (typeof messages.noResponse !== "string" || messages.noResponse.trim() === "") throw new Error("messages.noResponse 须为非空字符串");
 		if (typeof messages.timePassed !== "string" || messages.timePassed.trim() === "") throw new Error("messages.timePassed 须为非空字符串");
 		if (messages.invisibleEntity !== undefined && (typeof messages.invisibleEntity !== "string" || messages.invisibleEntity.trim() === "")) throw new Error("messages.invisibleEntity 须为非空字符串");
+		if (def.say !== undefined && typeof def.say !== "function") throw new Error("GameDef.say 须为函数");
 		const invariantIds = new Set<string>();
 		for (const inv of def.invariants ?? []) {
 			if (typeof inv.id !== "string" || inv.id === "") throw new Error("不变式 id 须为非空字符串");
@@ -1112,7 +1142,7 @@ export class Simulation {
 				return (Array.isArray(v) ? v : [v]).filter((id): id is string => typeof id === "string" && !gate.has(id));
 			});
 		if (invalid.length) {
-			const invisible = this.def.verbs[action.verb]?.invisible ?? this.def.messages.invisibleEntity;
+			const invisible = this.def.verbs[action.verb]?.invisible;
 			return { ok: false, denial: { point: { kind: "gate" }, ...(invisible !== undefined && { text: invisible }) } };
 		}
 		for (const r of rules) {
