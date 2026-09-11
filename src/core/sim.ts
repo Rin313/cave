@@ -297,6 +297,9 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	};
 }
 
+/** 规则链：动词与常驻规则同构的规则序列；两者身份都是 (origin, id)，链内 id 唯一，校验共用。 */
+export type RuleChain = Rule[];
+
 /** 意志动词：唯一调用点是 will（玩家经动词面）。 */
 export interface VerbDef {
 	label: string;
@@ -305,13 +308,13 @@ export interface VerbDef {
 	cost: number;
 	/** 门否决文案（词表缺省，位于 say 的 base 之下，不进入记录）：无指称参数时不可能被消费；缺省回落 messages.invisibleEntity。 */
 	invisible?: string;
-	rules: Rule[];
+	rules: RuleChain;
 }
 
 /** 常驻规则：唯一调用点是泵（每刻一次，空参）。不进动词面、无参数、无价、无呈现名；id 只进账本与骰子地址。 */
 export interface TickDef {
 	id: string;
-	rules: Rule[];
+	rules: RuleChain;
 }
 
 /** 面向 AI 的动词派生面：广告与接口模式自此同源，不再各自手写。 */
@@ -648,9 +651,11 @@ export type Handle = {
 	name: string;
 };
 
-/** 一个提交边界的求值：披露谓词、可见/可指称/已知域与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
+/** 一个提交边界的求值：披露谓词、可显示谓词、可见/可指称/已知域与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
 export interface FieldView {
 	within: (cell: Addr) => boolean;
+	/** 结构化显示的唯一判据：有名 ∧ 披露；顶点名恒在，故退化为披露。 */
+	present: (cell: Addr) => boolean;
 	visible: Set<string>;
 	referable: Set<string>;
 	known: Set<string>;
@@ -736,13 +741,13 @@ function isPoint(v: unknown): v is Point {
 	}
 }
 
-/** 否决形状：Point + ⟨text⟩?；engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
+/** 否决形状：Point + ⟨text⟩?；文本非空；engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	const d = v as { point?: unknown; text?: unknown; reason?: unknown };
 	if (d.reason !== undefined) return false;
 	if (!isPoint(d.point)) return false;
-	if (d.text !== undefined && typeof d.text !== "string") return false;
+	if (d.text !== undefined && (typeof d.text !== "string" || d.text === "")) return false;
 	return audienceOf(d.point) !== "engine" || typeof d.text === "string";
 }
 
@@ -758,7 +763,7 @@ function isChange(v: unknown): boolean {
 	}
 }
 
-/** 步形状：授予行 law 必填非空；否决的 rule 可缺（gate/closure 无守卫）。 */
+/** 步形状：授予行 law 必填非空；世界腔文本非空；答复只属于 will；否决的 rule 可缺（gate/closure 无守卫）。 */
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
 	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
@@ -769,8 +774,9 @@ export function isCommit(s: unknown): boolean {
 	if (c.ok === true) {
 		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
 		if (typeof c.law !== "string" || c.law === "") return false;
-		if (c.reply !== undefined && typeof c.reply !== "string") return false;
-		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
+		if (c.reply !== undefined && (typeof c.reply !== "string" || c.reply === "")) return false;
+		if (c.origin === "clock" && c.reply !== undefined) return false;
+		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string" && x !== ""));
 	}
 	if (c.rule !== undefined && (typeof c.rule !== "string" || c.rule === "")) return false;
 	return isDenial(c.denial);
@@ -875,6 +881,16 @@ function validateDecl(where: string, param: boolean, d: unknown): void {
 	}
 }
 
+/** 规则链校验：id 非空且链内唯一；动词与常驻规则共用。 */
+function assertRules(where: string, rules: readonly Rule[]): void {
+	const ids = new Set<string>();
+	for (const r of rules) {
+		if (typeof r.id !== "string" || r.id === "") throw new Error(`${where} 的规则 id 须为非空字符串`);
+		if (ids.has(r.id)) throw new Error(`${where} 的规则 id 重复：${r.id}`);
+		ids.add(r.id);
+	}
+}
+
 /** 值是否含指称 id：弱载荷随目标删除级联的判据。 */
 function valueHasRef(v: Value, id: string): boolean {
 	return Array.isArray(v) ? v.includes(id) : v === id;
@@ -938,18 +954,20 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	{
 		let w = clone(worldAfter);
 		for (let i = n - 1; i >= 0; i--) {
-			afters[i] = w;
-			w = clone(w);
+			const at = steps[i]!.at;
+			const after = clone(w);
+			after.time = at;
+			afters[i] = deepFreeze(after);
 			rewind(w, [steps[i]!]);
-			befores[i] = w;
+			const before = clone(w);
+			before.time = at;
+			befores[i] = deepFreeze(before);
 		}
 	}
-	/** 一步的渲染器：脸、披露谓词与改名行都由该步的提交边界即时求值，行文不回读活世界。 */
+	/** 一步的渲染器：脸、披露谓词与改名行都由该步的提交边界（冻结读态）即时求值，行文不回读活世界。 */
 	const renderer = (i: number): { face: Face; renames: string[]; changeLine: (c: Change) => string | null } => {
 		const before = befores[i]!;
 		const after = afters[i]!;
-		before.time = steps[i]!.at;
-		after.time = steps[i]!.at;
 		const b = sim.fieldView(before);
 		const a = sim.fieldView(after);
 		// 跨边界脸查询：两侧已知域之并，域内取顶点 token（后态优先），域外不触命名
@@ -967,7 +985,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		// 每侧可显示 ⇔ 该边界对变更格有名且披露（缺席格与在场格同过一门）
 		const sidesOf = (c: Change): { prev: boolean; next: boolean } => {
 			const cell = cellOf(c);
-			return { prev: b.name(cell) !== null && b.within(cell), next: a.name(cell) !== null && a.within(cell) };
+			return { prev: b.present(cell), next: a.present(cell) };
 		};
 		const changeLine = (c: Change): string | null => {
 			const sides = sidesOf(c);
@@ -1058,12 +1076,7 @@ export class Simulation {
 		}
 		for (const [name, v] of Object.entries(def.verbs)) {
 			if (!Number.isInteger(v.cost) || v.cost < 0) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
-			const ruleIds = new Set<string>();
-			for (const r of v.rules) {
-				if (typeof r.id !== "string" || r.id === "") throw new Error(`动词 ${name} 的规则 id 须为非空字符串`);
-				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
-				ruleIds.add(r.id);
-			}
+			assertRules(`动词 ${name}`, v.rules);
 			for (const [p, s] of Object.entries(v.params)) validateDecl(`动词 ${name} 的参数「${p}」`, true, s);
 			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${name} 的 invisible 须为非空字符串`);
 			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${name} 无指称参数，invisible 文案不会被消费`);
@@ -1072,12 +1085,7 @@ export class Simulation {
 		for (const t of def.ticks ?? []) {
 			if (typeof t.id !== "string" || t.id === "") throw new Error("常驻规则 id 须为非空字符串");
 			if (ticks.has(t.id)) throw new Error(`常驻规则 id 重复：${t.id}`);
-			const ruleIds = new Set<string>();
-			for (const r of t.rules) {
-				if (typeof r.id !== "string" || r.id === "") throw new Error(`常驻规则 ${t.id} 的规则 id 须为非空字符串`);
-				if (ruleIds.has(r.id)) throw new Error(`常驻规则 ${t.id} 的规则 id 重复：${r.id}`);
-				ruleIds.add(r.id);
-			}
+			assertRules(`常驻规则 ${t.id}`, t.rules);
 			ticks.set(t.id, t.rules);
 		}
 		// props 与 relTypes 同制：注册即契约；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
@@ -1105,16 +1113,24 @@ export class Simulation {
 		return w;
 	}
 
-	/** 披露谓词：缺省全见；声明即接管全部格。 */
+	/** 披露谓词：缺省全见；声明即接管全部格，返回域外即缺陷。 */
 	private perceives(world: World): (cell: Addr) => boolean {
-		return this.def.perceives?.(world, this.player) ?? (() => true);
+		if (this.def.perceives === undefined) return () => true;
+		const within = this.def.perceives(world, this.player);
+		if (typeof within !== "function") throw new Error("GameDef.perceives 须返回谓词函数");
+		return within;
 	}
 
-	/** 三个域的求值：不触命名，门与投影分路。可指称缺省即顶点格披露。 */
+	/** 三个域的求值：不触命名，门与投影分路。可指称缺省即顶点格披露；声明即接管，返回域外即缺陷。 */
 	private boundary(world: World): { within: (cell: Addr) => boolean; visible: Set<string>; referable: Set<string>; known: Set<string> } {
 		const within = this.perceives(world);
 		const disclosed = (e: Entity): boolean => within({ cell: "vertex", id: e.id });
-		const refers = this.def.referable?.(world, this.player, disclosed) ?? disclosed;
+		let refers = disclosed;
+		if (this.def.referable !== undefined) {
+			const hook = this.def.referable(world, this.player, disclosed);
+			if (typeof hook !== "function") throw new Error("GameDef.referable 须返回谓词函数");
+			refers = hook;
+		}
 		const visible = new Set<string>();
 		const referable = new Set<string>();
 		for (const e of world.entities) {
@@ -1138,21 +1154,25 @@ export class Simulation {
 		};
 	}
 
-	/** 格命名：作者钩子收缺省实现，可委托或接管；顶点无名回落 id，属性/边无名即 null。 */
+	/** 格命名：作者钩子收缺省实现，可委托或接管；顶点无名回落 id，属性/边无名即 null；声明即全函数，返回域外即缺陷。 */
 	private naming(world: World): (cell: Addr) => string | null {
 		const base = this.defaultNaming();
-		const hook = this.def.name?.(world, this.player, base);
-		if (!hook) return base;
+		if (this.def.name === undefined) return base;
+		const hook = this.def.name(world, this.player, base);
+		if (typeof hook !== "function") throw new Error("GameDef.name 须返回命名函数");
 		return (cell) => {
 			const token = hook(cell);
-			if (typeof token === "string" && token !== "") return token;
-			return cell.cell === "vertex" ? cell.id : null;
+			if (token === null) return cell.cell === "vertex" ? cell.id : null;
+			if (typeof token !== "string" || token === "") throw new Error(`GameDef.name 须返回非空 token 或 null，得到 ${JSON.stringify(token)}`);
+			return token;
 		};
 	}
 
-	/** 提交边界的求值：披露＋三个域＋格命名；脸由命名在已知域上即时求值，不物化。 */
+	/** 提交边界的求值：披露＋三个域＋格命名＋可显示谓词；脸由命名在已知域上即时求值，不物化。 */
 	fieldView(world: World = this.readState()): FieldView {
-		return { ...this.boundary(world), name: this.naming(world) };
+		const field = this.boundary(world);
+		const name = this.naming(world);
+		return { ...field, name, present: (cell) => name(cell) !== null && field.within(cell) };
 	}
 
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
@@ -1250,10 +1270,14 @@ export class Simulation {
 		if (broken) return { point: { kind: "engine", check: "integrity" }, text: broken };
 		for (const inv of this.def.invariants ?? []) {
 			const reason = inv.check(world, ctx);
-			if (reason) return {
-				point: { kind: "invariant", id: inv.id, fault: reason.fault },
-				...(reason.fault === "world" ? (reason.reply !== undefined && { text: reason.reply }) : { text: reason.debug }),
-			};
+			if (!reason) continue;
+			if (reason.fault !== "world" && reason.fault !== "engine") throw new Error(`不变式 ${inv.id} 的 fault 须为 world/engine`);
+			if (reason.fault === "engine") {
+				if (typeof reason.debug !== "string" || reason.debug === "") throw new Error(`不变式 ${inv.id} 的 debug 须为非空字符串`);
+				return { point: { kind: "invariant", id: inv.id, fault: "engine" }, text: reason.debug };
+			}
+			if (reason.reply !== undefined && (typeof reason.reply !== "string" || reason.reply === "")) throw new Error(`不变式 ${inv.id} 的 reply 须为非空字符串`);
+			return { point: { kind: "invariant", id: inv.id, fault: "world" }, ...(reason.reply !== undefined && { text: reason.reply }) };
 		}
 		return null;
 	}
@@ -1473,7 +1497,7 @@ export class Simulation {
 			.filter((r) => {
 				const cell: EdgeAddr = { cell: "edge", from: r.from, to: r.to, type: r.type };
 				const rd = this.def.relTypes?.[r.type];
-				return field.name(cell) !== null && field.known.has(r.from) && field.known.has(r.to) && field.within(cell) && (rd?.type !== "ref" || valueRefsWithin(r.value, field.known));
+				return field.present(cell) && field.known.has(r.from) && field.known.has(r.to) && (rd?.type !== "ref" || valueRefsWithin(r.value, field.known));
 			})
 			.map((r) => ({ from: r.from, to: r.to, name: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
 		const out: ViewBase = { time: w.time, relations, entities };
@@ -1481,12 +1505,15 @@ export class Simulation {
 		return out;
 	}
 
-	/** 状态视图数据：闭合基座经作者钩子；序列化是边界的事（digest）。 */
+	/** 状态视图数据：闭合基座经作者钩子；null 是合法视图值，仅函数缺席回落基座。 */
 	view(): ViewValue {
 		const w = this.readState();
 		const field = this.fieldView(w);
 		const base = this.viewBase(w, field);
-		return this.def.view?.(w, this.player, base, field) ?? base;
+		if (this.def.view === undefined) return base;
+		const out = this.def.view(w, this.player, base, field);
+		if (out === undefined) throw new Error("GameDef.view 须返回 JSON 值（undefined 是缺陷）");
+		return out;
 	}
 
 	/** 状态视图的规范序列化（digestOf(view())）：探针与日志的便捷出口。 */
@@ -1499,11 +1526,9 @@ export class Simulation {
 		const props: { name: string; value: Value }[] = [];
 		for (const [k, v] of Object.entries(e.props)) {
 			const cell: PropAddr = { cell: "prop", entity: e.id, prop: k };
-			const token = b.name(cell);
-			if (token === null) continue;
-			if (!b.within(cell)) continue;
+			if (!b.present(cell)) continue;
 			if (!refsWithin(this.def.props?.[k], v, b.known)) continue;
-			props.push({ name: token, value: v });
+			props.push({ name: b.name(cell)!, value: v });
 		}
 		return { id: e.id, name, props };
 	}
