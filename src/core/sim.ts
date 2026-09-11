@@ -84,15 +84,14 @@ export interface PropDef {
 	hidden?: true;
 }
 
-/** 否决受众：world = 世界腔（玩家可见，voice 缺省即 noResponse）；engine = 引擎/作者契约违约（仅 debug）。 */
-export interface Denial {
-	/** 理由身份：作者 token 或引擎保留 id；前缀不承担分类。 */
-	law: string;
-	fault: "world" | "engine";
-	/** 作者世界语（不过投影），渲染为否决声；缺席即回落 noResponse。 */
-	voice?: Fact;
-	debug?: string;
-}
+/** 世界腔否决：玩家可见，voice 缺席即回落 noResponse；法则的否决恒此形。law 是理由身份：作者 token 或引擎保留 id，前缀不承担分类。 */
+export type Deny = { law: string; fault: "world"; voice?: Fact };
+
+/** 折叠后的否决（判定、门、审查、引擎自检共用）：受众与文本互斥，engine 只有 debug。 */
+export type Denial = Deny | { law: string; fault: "engine"; debug: string };
+
+/** 引擎自检的否决：只有 debug。 */
+export type EngineDenial = Extract<Denial, { fault: "engine" }>;
 
 /** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
 export class ProtocolViolation extends Error {
@@ -115,10 +114,10 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 授予：deltas 是轨迹，voice 是声，facts 是附加世界腔事实，ticks 覆写价。 */
+/** 授予：deltas 是轨迹，voice 是声，facts 是附加世界腔事实，ticks 覆写价。法则的否决就是世界的否决，恒 world 受众；作者的引擎违约走抛出。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; voice?: Fact; facts?: Fact[]; ticks?: number }
-	| { ok: false; denial: Denial };
+	| { ok: false; denial: Deny };
 
 export interface Rule {
 	id: string;
@@ -374,11 +373,13 @@ export interface CheckCtx {
 	changes: readonly Change[];
 }
 
-/** 世界腔违反理由；engine 侧违反附 debug。检查相的唯一出口。 */
-export interface Reason {
-	voice?: string;
-	debug?: string;
-}
+/** 检查相的唯一出口：受众显式二选一。world 缺 voice 回落 noResponse；engine 只有 debug（玩家侧 noResponse，probe 报 bug）。 */
+export type Reason =
+	| { fault: "world"; voice?: Fact }
+	| { fault: "engine"; debug: string };
+
+/** 引擎侧原因：只有 debug。 */
+export type EngineReason = Extract<Reason, { fault: "engine" }>;
 
 /** 检查相的作者否决点：null 通过，理由即整提交回滚并拒绝。收冻结读态，写入即抛。 */
 export interface Invariant {
@@ -416,77 +417,75 @@ const got = (v: Payload): string => {
 	return typeof v;
 };
 
-const integrityInvariant: Invariant = {
-	id: "integrity",
-	check: (world, ctx) => {
-		const bad = (debug: string): Reason => ({ debug });
-		if (!Array.isArray(world.entities)) return bad("integrity: world.entities must be an array");
-			if (!Array.isArray(world.relations)) return bad("integrity: world.relations must be an array");
-			for (const k of Object.keys(world)) {
-				if (k !== "time" && k !== "entities" && k !== "relations") return bad(`integrity: world.${k} is not part of the ledger shape`);
+/** 存储层 integrity：引擎自检，恒 engine 受众。 */
+function integrityProblems(def: GameDef, world: World): EngineReason | null {
+	const bad = (debug: string): EngineReason => ({ fault: "engine", debug });
+	if (!Array.isArray(world.entities)) return bad("integrity: world.entities must be an array");
+	if (!Array.isArray(world.relations)) return bad("integrity: world.relations must be an array");
+	for (const k of Object.keys(world)) {
+		if (k !== "time" && k !== "entities" && k !== "relations") return bad(`integrity: world.${k} is not part of the ledger shape`);
+	}
+	const ids = new Set<string>();
+	for (const e of world.entities) {
+		if (e === null || typeof e !== "object" || Array.isArray(e)) return bad("integrity: entity must be a record");
+		ids.add(e.id);
+	}
+	if (ids.size !== world.entities.length) return bad("integrity: duplicate entity ids");
+	if (!Number.isInteger(world.time) || world.time < 0) return bad("integrity: world.time must be a non-negative integer");
+	if (!ids.has(def.playerId)) return bad(`integrity: playerId -> missing entity ${def.playerId}`);
+	const registry = Object.entries(def.props);
+	const vocabulary = new Set(registry.map(([k]) => k));
+	for (const e of world.entities) {
+		if (typeof e.id !== "string" || e.id === "") return bad("integrity: entity id must be non-empty string");
+		for (const k of Object.keys(e)) {
+			if (k !== "id" && k !== "props") return bad(`integrity: ${e.id}.${k} is not part of the entity shape`);
+		}
+		if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return bad(`integrity: ${e.id}.props must be a record`);
+		for (const k of Object.keys(e.props)) {
+			if (!vocabulary.has(k)) return bad(`integrity: ${e.id}.${k} is not declared in the prop registry`);
+		}
+		for (const [p, pd] of registry) {
+			const v = e.props[p];
+			if (v === undefined) continue;
+			if (!isValue(v)) return bad(`integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`);
+			const many = pd.many === true;
+			if (Array.isArray(v) !== many) return bad(`integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`);
+			if (p === def.identity && v === "") return bad(`integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`);
+			for (const x of Array.isArray(v) ? v : [v]) {
+				if (pd.type === "ref") {
+					if (typeof x !== "string") return bad(`integrity: ${e.id}.${p} expects id reference, got ${got(x)}`);
+					if (!ids.has(x)) return bad(`integrity: ${e.id}.${p} -> missing entity ${x}`);
+					continue;
+				}
+				if (typeof x !== pd.type) return bad(`integrity: ${e.id}.${p} expects ${pd.type}, got ${got(x)}`);
 			}
-			const ids = new Set<string>();
-			for (const e of world.entities) {
-				if (e === null || typeof e !== "object" || Array.isArray(e)) return bad("integrity: entity must be a record");
-				ids.add(e.id);
+		}
+	}
+	const edgeIds = new Set<string>();
+	for (const r of world.relations ?? []) {
+		if (r === null || typeof r !== "object" || Array.isArray(r)) return bad("integrity: relation must be a record");
+		for (const k of Object.keys(r)) {
+			if (k !== "from" && k !== "to" && k !== "type" && k !== "value") return bad(`integrity: relation.${k} is not part of the relation shape`);
+		}
+		if (typeof r.from !== "string" || r.from === "") return bad("integrity: relation.from must be non-empty string");
+		if (typeof r.to !== "string" || r.to === "") return bad("integrity: relation.to must be non-empty string");
+		if (typeof r.type !== "string" || r.type === "") return bad("integrity: relation.type must be non-empty string");
+		if (!ids.has(r.from) || !ids.has(r.to)) return bad(`integrity: relation ${r.type} -> missing endpoint`);
+		const eid = addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type });
+		if (edgeIds.has(eid)) return bad(`integrity: duplicate relation ${r.from}->${r.to} (${r.type})`);
+		edgeIds.add(eid);
+		if (r.value === null || !isValue(r.value)) return bad(`integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`);
+		const rd = def.relTypes?.[r.type];
+		if (rd) {
+			const many = rd.many === true;
+			if (Array.isArray(r.value) !== many) return bad(`integrity: relation ${r.type} expects ${many ? "a sequence" : "a scalar"}, got ${got(r.value)}`);
+			for (const x of Array.isArray(r.value) ? r.value : [r.value]) {
+				if (typeof x !== rd.type) return bad(`integrity: relation ${r.type} expects ${rd.type}, got ${got(x)}`);
 			}
-			if (ids.size !== world.entities.length) return bad("integrity: duplicate entity ids");
-			if (!Number.isInteger(world.time) || world.time < 0) return bad("integrity: world.time must be a non-negative integer");
-			if (!ids.has(ctx.def.playerId)) return bad(`integrity: playerId -> missing entity ${ctx.def.playerId}`);
-			const registry = Object.entries(ctx.def.props);
-			const vocabulary = new Set(registry.map(([k]) => k));
-			for (const e of world.entities) {
-				if (typeof e.id !== "string" || e.id === "") return bad("integrity: entity id must be non-empty string");
-				for (const k of Object.keys(e)) {
-					if (k !== "id" && k !== "props") return bad(`integrity: ${e.id}.${k} is not part of the entity shape`);
-				}
-				if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return bad(`integrity: ${e.id}.props must be a record`);
-				for (const k of Object.keys(e.props)) {
-					if (!vocabulary.has(k)) return bad(`integrity: ${e.id}.${k} is not declared in the prop registry`);
-				}
-				for (const [p, pd] of registry) {
-					const v = e.props[p];
-					if (v === undefined) continue;
-					if (!isValue(v)) return bad(`integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`);
-					const many = pd.many === true;
-					if (Array.isArray(v) !== many) return bad(`integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`);
-					if (p === ctx.def.identity && v === "") return bad(`integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`);
-					for (const x of Array.isArray(v) ? v : [v]) {
-						if (pd.type === "ref") {
-							if (typeof x !== "string") return bad(`integrity: ${e.id}.${p} expects id reference, got ${got(x)}`);
-							if (!ids.has(x)) return bad(`integrity: ${e.id}.${p} -> missing entity ${x}`);
-							continue;
-						}
-						if (typeof x !== pd.type) return bad(`integrity: ${e.id}.${p} expects ${pd.type}, got ${got(x)}`);
-					}
-				}
-			}
-			const edgeIds = new Set<string>();
-			for (const r of world.relations ?? []) {
-				if (r === null || typeof r !== "object" || Array.isArray(r)) return bad("integrity: relation must be a record");
-				for (const k of Object.keys(r)) {
-					if (k !== "from" && k !== "to" && k !== "type" && k !== "value") return bad(`integrity: relation.${k} is not part of the relation shape`);
-				}
-				if (typeof r.from !== "string" || r.from === "") return bad("integrity: relation.from must be non-empty string");
-				if (typeof r.to !== "string" || r.to === "") return bad("integrity: relation.to must be non-empty string");
-				if (typeof r.type !== "string" || r.type === "") return bad("integrity: relation.type must be non-empty string");
-				if (!ids.has(r.from) || !ids.has(r.to)) return bad(`integrity: relation ${r.type} -> missing endpoint`);
-				const eid = addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type });
-				if (edgeIds.has(eid)) return bad(`integrity: duplicate relation ${r.from}->${r.to} (${r.type})`);
-				edgeIds.add(eid);
-				if (r.value === null || !isValue(r.value)) return bad(`integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`);
-				const rd = ctx.def.relTypes?.[r.type];
-				if (rd) {
-					const many = rd.many === true;
-					if (Array.isArray(r.value) !== many) return bad(`integrity: relation ${r.type} expects ${many ? "a sequence" : "a scalar"}, got ${got(r.value)}`);
-					for (const x of Array.isArray(r.value) ? r.value : [r.value]) {
-						if (typeof x !== rd.type) return bad(`integrity: relation ${r.type} expects ${rd.type}, got ${got(x)}`);
-					}
-				}
-			}
-			return null;
-	},
-};
+		}
+	}
+	return null;
+}
 
 /** 呈现名缺席的属性：显式 hidden，或无 label 且非身份（键是内部标识，不是名字）。 */
 function hiddenProp(def: GameDef, prop: string): boolean {
@@ -543,16 +542,17 @@ function tupleKey(parts: readonly string[]): string {
 /** 触发通道，由调用点决定并随步入账：意志（玩家经广告面提案）、时钟（泵逐刻自鸣）、代码（引擎直连 apply）。 */
 export type Origin = "will" | "clock" | "code";
 
-/** 裁决出处（发言者地址）。 */
-export type Decision =
-	| { kind: "rule"; rule: string }
-	| { kind: "gate"; law: "action.invisible" | "action.unanswered" };
+/** 门的自判：只否决，永不授予。 */
+export type GateLaw = "action.invisible" | "action.unanswered";
 
-/** 装载出处：审查的起点不是裁决。 */
-export type Ingest = { kind: "init" } | { kind: "replay"; seq: number };
+/** 授予的法则：一次裁决的发言者，也是审查的出处之一。 */
+export type RuleRef = { kind: "rule"; rule: string };
 
-/** 审查可见的出处。 */
-export type Source = Decision | Ingest;
+/** 裁决出处：步自含的发言者（授予的法则或关闭它的门）。 */
+export type Decision = RuleRef | { kind: "gate"; law: GateLaw };
+
+/** 审查出处：授予它的法则，或一次整世界接纳（变体开局／检查点）。 */
+export type Source = RuleRef | { kind: "admit" };
 
 /** 入账表态的机器身份：账本位置 (at, origin, verb, 序位)。对入账表态单射、且由账本前缀复原——随机是账本位置的纯函数。 */
 function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number): string {
@@ -560,12 +560,10 @@ function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number):
 }
 
 /** 可读渲染；不参与机器判定。 */
-function renderSource(s: Source): string {
+function renderSource(s: Decision): string {
 	switch (s.kind) {
 		case "rule": return `rule:${s.rule}`;
 		case "gate": return `gate:${s.law}`;
-		case "init": return "init";
-		case "replay": return `replay:${s.seq}`;
 	}
 }
 
@@ -592,7 +590,7 @@ export function entity(world: World, id: string): Entity | undefined {
 }
 
 export function renderDenial(def: GameDef, denial: Denial): string {
-	return denial.voice ?? def.messages.noResponse;
+	return denial.fault === "world" ? (denial.voice ?? def.messages.noResponse) : def.messages.noResponse;
 }
 
 /** 脸 token：id 在某个提交边界上的呈现词。脸表由该边界的世界即时求值，行文不回读活世界。 */
@@ -770,7 +768,7 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 
 /** 门内裁决的表态；source 是裁决出处，随提交入账。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; source: Decision; voice?: Fact; facts?: Fact[]; ticks?: number }
+	| { ok: true; deltas: Delta[]; source: RuleRef; voice?: Fact; facts?: Fact[]; ticks?: number }
 	| { ok: false; source: Decision; denial: Denial };
 
 export class Simulation {
@@ -843,8 +841,8 @@ export class Simulation {
 		this.identityKey = identityKey;
 		// 初始世界过审查：def 结构错误与损坏存档在此显形
 		const before = this.readState();
-		const broken = this.checkInvariants({ kind: "init" }, before, []);
-		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.denial.voice ?? broken.denial.debug}`);
+		const broken = this.checkInvariants({ kind: "admit" }, before, []);
+		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.denial.fault === "world" ? (broken.denial.voice ?? broken.denial.law) : broken.denial.debug}`);
 	}
 
 	get player(): string {
@@ -929,7 +927,7 @@ export class Simulation {
 			return { ok: false, source: { kind: "gate", law: "action.invisible" }, denial: { law: "action.invisible", fault: "world", ...(invisible !== undefined && { voice: invisible }) } };
 		}
 		for (const r of verb.rules) {
-			const source: Decision = { kind: "rule", rule: r.id };
+			const source: RuleRef = { kind: "rule", rule: r.id };
 			const q = this.query(world, action.params, addr);
 			let v: Verdict | null;
 			try {
@@ -968,7 +966,7 @@ export class Simulation {
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
-	private commitChecked(s0: World, deltas: Delta[], source: Decision): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
+	private commitChecked(s0: World, deltas: Delta[], source: RuleRef): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
@@ -992,11 +990,11 @@ export class Simulation {
 	private checkInvariants(source: Source, before: World, changes: Change[]): { id: string; denial: Denial } | null {
 		const world = this.readState();
 		const ctx: CheckCtx = { def: this.def, player: this.player, source, before, changes: deepFreeze(changes) };
-		const broken = integrityInvariant.check(world, ctx);
-		if (broken) return { id: "integrity", denial: { law: "invariant.integrity", fault: "engine", ...broken } };
+		const broken = integrityProblems(this.def, world);
+		if (broken) return { id: "integrity", denial: { law: "invariant.integrity", ...broken } };
 		for (const inv of this.def.invariants ?? []) {
 			const reason = inv.check(world, ctx);
-			if (reason) return { id: inv.id, denial: reason.debug !== undefined ? { law: `invariant.${inv.id}`, fault: "engine", ...reason } : { law: `invariant.${inv.id}`, fault: "world", ...reason } };
+			if (reason) return { id: inv.id, denial: { law: `invariant.${inv.id}`, ...reason } };
 		}
 		return null;
 	}
@@ -1114,9 +1112,8 @@ export class Simulation {
 				}
 			}
 			this.world.time = record.time;
-			const ctx: CheckCtx = { def: this.def, player: this.player, source: { kind: "replay", seq: record.seq }, before: s0, changes: [] };
-			const broken = integrityInvariant.check(this.readState(), ctx);
-			if (broken) return fail(`${broken.debug}`);
+			const broken = integrityProblems(this.def, this.readState());
+			if (broken) return fail(broken.debug);
 			return null;
 		} catch (e) {
 			return fail(errorText(e));
@@ -1173,14 +1170,14 @@ export class Simulation {
 	}
 
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */
-	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: Denial } {
+	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: EngineDenial } {
 		const changes: Change[] = [];
 		const upsertRel = (from: string, to: string, type: string, value: Value) => {
 			const hit = this.world.relations.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
 			else this.world.relations.push({ from, to, type, value });
 		};
-		const refuse = (debug: string): { refusal: Denial } => ({ refusal: { law: "invariant.commit", fault: "engine", debug: `commit: ${debug}` } });
+		const refuse = (debug: string): { refusal: EngineDenial } => ({ refusal: { law: "invariant.commit", fault: "engine", debug: `commit: ${debug}` } });
 		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
 		for (const d of deltas) {
 			if (d.cell === "vertex") {

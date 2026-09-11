@@ -50,10 +50,11 @@ Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V�
 属性格／边格的身份是 (实体,键)／(端点,类型)，顶点格的身份就是实体的 id：格坐标不另存顶点身份，顶点格只有生（⊥→ê）与灭（ê→⊥）两种转移，不存在实体的替换；故顶点记录恰一侧为 ⊥，`id = id(next ?? prev)`。`set/relSet` 是属性格／边格×后态的糖；`spawn(ê)` 的格即 ê 的顶点格，`despawn(e)` 的格即 ⟨e⟩。绝对写，后态自含；写 none 即删。幂等跳过与同址多写后者覆盖限于 `set/relSet`（属性格与边格）：`w ⊨ post(δ)` 即跳过（无边可删、无键可清的清除写是空操作）；顶点写不做跳过，重复 spawn（已在世）与缺世 despawn 是作者违约，拒绝而非覆盖。
 
 ```
-G : Δ* × Source → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
-Decision ::= rule(⟨rule⟩) | gate(⟨law⟩)       -- 裁决出处
-Ingest   ::= init | replay(⟨seq⟩)             -- 装载出处
-Source   ::= Decision | Ingest                -- 审查 ctx 的出处
+G : Δ* × ⟨rule⟩ → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
+Decision ::= rule(⟨rule⟩) | gate(⟨law⟩)       -- 步的裁决出处；随步入账；gate 的 law ∈ {action.invisible, action.unanswered}
+Source   ::= rule(⟨rule⟩) | admit             -- 审查出处：授予它的法则，或整世界接纳（变体开局／检查点）
+Reason   ::= world(voice?) | engine(debug)    -- 审查的受众与文本；world 缺 voice 回落 noResponse，engine 只有 debug
+Denial   ::= (law, Reason)                    -- 折叠后的否决：判定、门、审查、引擎自检共用
 ```
 
 `𝒞` 是变更记录序列，后态的完整 diff：prev/next 自含；顶点记录为生 `(⊥, ê)` 或灭 `(ê, ⊥)`，不另存 id，属性/边记录前后态相异（⊥ 即缺席）
@@ -67,10 +68,12 @@ despawn 级联删边，逐条入账且紧随 despawn 记录（弱引用随主消
 提交审查先执行校验（逐条，后到的 δ 可引用先到的后果——指向而非读值：spawn 后可 set 其属性；δ 无读原语，先到的值不可读），后不变式：
 
 ```
-ι : (w, ctx) → Reason?      ctx = (before, changes, source)
+ι : (w, ctx) → Reason?      ctx = (player, source, before, changes)
 ```
 
-before 是本次提交前的世界读态（回滚锚，不可越过的坐标边界）；changes 是本次提交的全部变更（逐条提交：一次尝试及其授予的刻）。integrity 恒挂：id 唯一、钟为非负整数、锚在世、词汇闭合、身份非空、存储值 ∈ V、类型契约（值与非空序列按 `type` 声明；`ref` 属性追加引用在世——标量与序列内逐项；注册边类型同受）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 Reason（voice）即玩家文案，integrity 违反只有 debug（回落 noResponse）。
+before 是本次提交前的世界读态（回滚锚，不可越过的坐标边界）；changes 是本次提交的全部变更（逐条提交：一次尝试及其授予的刻）。integrity 恒挂：id 唯一、钟为非负整数、锚在世、词汇闭合、身份非空、存储值 ∈ V、类型契约（值与非空序列按 `type` 声明；`ref` 属性追加引用在世——标量与序列内逐项；注册边类型同受）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 Reason 由作者显式选受众：world 的 voice 即玩家文案（缺省回落 noResponse），engine 的 debug 只有 probe；integrity 违反恒 engine。
+
+admit 的 ctx 是 before = w、changes = ∅——与零变更授予逐字段同形，故 source 是唯一判别；重放不跑 authored 不变式，故审查出处没有 replay。
 
 ### 裁决
 
@@ -81,12 +84,14 @@ ref(a) ⊆ P                指称参数键集（指称模式的参数）
 Q   = (world, player, params, roll)           world 为深冻结快照，params 冻结——attempt 入界即不可变，越权写即抛
 J   : Q → Grant ⊎ Deny ⊎ ⊥
 Grant ::= (Δ*, voice?, facts?, ticks ∈ ℕ?)    voice/facts 是作者世界语，不过投影
-Deny  ::= (law, fault, voice?, debug?)        fault ∈ {world, engine}
+Deny  ::= (law, voice?)                       法则的否决，恒 world 受众；作者的引擎违约走抛出 → rule.crash
 ```
+
+voice 是一次尝试的答复句（授予与否决皆可，至多一句）；facts 是授予在变更之外仍要说出的零至多句世界陈述；否决没有 facts——世界未变，没有后果可陈述。二者的差别是规范渲染中的位置，不是世界语义。
 
 卫语句链 `rules`：首个非 ⊥ 表态即判决；全弃权由引擎闭合为 `action.unanswered`。指称参数先过感知门（域即所见集），非指称参数按字面径由法则裁决，门与渲染不解析其内容。
 
-**判定与审查是同一物的两个相**。两者都是作者的具名否决点，差别只在时相与读入：判定（`Rule`）在提交前读世界真相 `w⁻`，携动词参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺` 与本次提交的前态 `before`、全部变更 `changes`，不携参数、不可授予。引擎把两者的出口折叠为同一 `Denial`：判定以 `Grant ⊎ Deny ⊎ ⊥` 表态，审查以 `Reason?` 表态（`voice` 即世界腔文案，`debug` 即引擎侧违约），违法同走 `invariant.⟨id⟩` 命名空间与同一回滚路径。角色语境共享同一组词汇：世界读态、player、source、changes——判定读提交前世界与 params/roll，审查读提交后世界与 before/changes，两相不交换语汇。
+**判定与审查是同一物的两个相**。两者都是作者的具名否决点，差别只在时相与读入：判定（`Rule`）在提交前读世界真相 `w⁻`，携动词参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺` 与本次提交的前态 `before`、全部变更 `changes`，不携参数、不可授予。引擎把两者的出口折叠为同一 `Denial = (law, Reason)`：判定的 `Deny(law, voice)` 折为 `world(voice)`（法则的否决就是世界的否决），门的 `gate(law)` 折为 `world(voice?)`，审查的 `Reason?` 由作者显式选 world 或 engine，违法同走 `invariant.⟨id⟩` 命名空间与同一回滚路径。角色语境共享同一组词汇：世界读态、player、source、changes——判定读提交前世界与 params/roll，审查读提交后世界与 before/changes，两相不交换语汇。
 
 ```
 roll(addr, key, sides) = 1 + ⌊h(addr, key) · sides⌋      h : 确定性哈希 → [0,1)
@@ -137,7 +142,7 @@ name(e) ::= 身份键缺席 ? ∅ : perceives(w, ⟨e,身份键⟩) ? 身份值(
 
 一切状态是 `w = (t, E, R)`，一切机械后果可说。
 
-∀ 变异恰一入口 `G(Δ*, source)`；`G` 全函数——确定性代码的崩溃在门内代谢为否决（法则崩溃 → `rule.crash`，链终止：意志照价、时钟成失败刻，同拍余者照跑、时刻照走；审计崩溃 → `invariant.crash`）。
+∀ 变异恰一入口 `G(Δ*, ⟨rule⟩)`；`G` 全函数——确定性代码的崩溃在门内代谢为否决（法则崩溃 → `rule.crash`，链终止：意志照价、时钟成失败刻，同拍余者照跑、时刻照走；审计崩溃 → `invariant.crash`）。
 
 **提交全序**　`G` 以裁决读态 `w⁻` 为回滚锚与出处锚。（门的原子性；重放公式使 `𝒞` 可复原任意时刻的世界——档案是信息主侧：在线裁决的因果主侧是 w⁻。世界状态是档案的派生检查点）
 
@@ -156,8 +161,6 @@ name(e) ::= 身份键缺席 ? ∅ : perceives(w, ⟨e,身份键⟩) ? 身份值(
 **判定跨度**　`span(s) = (脸表, 边键截面, 属性键截面)(w⁻, w⁺)`——尝试提交跨其提交边界，时钟提交跨其拍的提交边界。跨度是投影而不得是证据：`w⁻/w⁺` 由 genesis ⊕ 𝒞 重建（逆推逐变更取 prev），脸表/截面由 `perceives` 对重建世界即时求值。随步入账冻结会把呈现轴焊死在账本里；正确形状是冻结输入（账本）而非输入的函数。言默由重建边界重算，恒同——投影只可省略行文，不可重划。
 
 **事件投影**　AI 所得 = `Π(窗口, def) ⊕ 感知变更行 ⊕ 作者 voice/facts`。近况 `Π` 是记录的纯函数且永不持久化（记录的提交边界由账本末世界逆推重建，脸表与截面即时求值，投影不回读活世界）：窗口内回合记录按与 act 结果相同的变更行判据投影（推论·刻账目闭合），体量由 `recentWindow` 独自调节；言默同源重算。act 结果的新见段是同一装配线的回合内增量：本回合新进所见域的实体以状态视图同形的实体卡承载。
-
-**投影的消费分类**　进协议通道（约束裁决可行集）的投影，与真相的一致性机械保证；只服务工具与呈现的投影永不进协议通道，形态自由。豁免：`voice/facts` 进协议通道但属规则铸造的世界语，机械只保证送达——感知墙是缺省装配的纪律，不约束立法者。
 
 ## 主体性
 
@@ -187,7 +190,7 @@ price(s) = origin(s) ≠ clock ? (ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb))
 ## 面向作者的契约
 
 - **动词表**：`params` 声明（type×可选×重数×描述）派生宿主面、内核校验与规则参数的编译期类型；`type ∈ {lit(string), lit(number), lit(boolean), ref}`，`ref` 的值是实体 id（过感知门＝所见集），`lit(·)` 是字面；`many` 令参数为非空序列，与世界值同形——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。`private` 动词不进广告面（广告面 = 裁决面 ∖ private），由代码直接 apply——同一裁决边界与审查；其步不产尝试行，后果由状态视图与新见段承接。`clock` 动词每刻由泵以空参提案过同一扇门：无价、全弃权即默、授予禁携刻；其 deny 发声为失败刻。origin 由调用点决定：will（玩家经广告面）、clock（泵）、code（引擎直连）；private 只管广告面，与 origin 无关——公开动词亦可由 code 触发（世界因，不产尝试行），价对 code 通道照常计 cost。origin 随步入账，投影不再回查 def。
-- **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`fault: world`（卫语句链、门、unanswered 闭合、游戏不变式）有世界腔 voice（缺省 noResponse）；`fault: engine`（integrity、授予形状违约、commit 拒绝、`*.crash`）只有 debug，probe 报 bug。覆盖面没有机械判据。
+- **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`fault: world`（卫语句链、门、unanswered 闭合、声明为 world 的游戏不变式）有世界腔 voice（缺省 noResponse）；`fault: engine`（integrity、授予形状违约、commit 拒绝、`*.crash`、声明为 engine 的游戏不变式）只有 debug（玩家侧恒 noResponse），probe 报 bug。覆盖面没有机械判据。
 
 ## 非目标
 

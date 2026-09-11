@@ -37,15 +37,14 @@ function isSource(v: unknown): boolean {
 	}
 }
 
-/** 否决形状：受众与理由；旧形状（kind/notes）在此离场。 */
+/** 否决形状：受众与文本互斥；旧形状（kind/notes）在此离场。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	const d = v as { law?: unknown; fault?: unknown; voice?: unknown; debug?: unknown; notes?: unknown; kind?: unknown };
-	if (typeof d.law !== "string") return false;
-	if (d.fault !== "world" && d.fault !== "engine") return false;
-	if (d.voice !== undefined && typeof d.voice !== "string") return false;
-	if (d.debug !== undefined && typeof d.debug !== "string") return false;
-	return d.notes === undefined && d.kind === undefined;
+	if (typeof d.law !== "string" || d.notes !== undefined || d.kind !== undefined) return false;
+	if (d.fault === "world") return d.debug === undefined && (d.voice === undefined || typeof d.voice === "string");
+	if (d.fault === "engine") return d.voice === undefined && typeof d.debug === "string";
+	return false;
 }
 
 /** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。顶点记录恰一侧为 ⊥（生/灭），不另存 id。 */

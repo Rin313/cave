@@ -236,7 +236,7 @@ async function cmdVerify(): Promise<void> {
 /** bug 判据：引擎侧违约（必要性通道）。 */
 function bugOf(denial: Denial | undefined): string | undefined {
 	if (!denial || denial.fault !== "engine") return undefined;
-	return denial.debug ?? denial.law;
+	return denial.debug;
 }
 
 interface MapRow {
