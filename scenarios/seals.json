@@ -3,7 +3,7 @@
 	"name": "统一探针",
 	"scenarios": [
 		{
-			"name": "拆读：信文经 propPerception 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
+			"name": "拆读：信文经 sight 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
 			"steps": [
 				{ "name": "未持信而读：拒绝", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "read.notheld", "reason": "拿到手里", "lines": ["✗ 拆读(火漆信·盐引)：你得先把信拿到手里。"] } },
 				{ "name": "取信：持者变更可说（公共故事走机械行）；信文尚未入视野", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。(火漆信·盐引.持者: 书案 → 信使)"], "viewExcludes": ["盐引批文已托江苏会馆代办"] } },
@@ -74,10 +74,13 @@
 			]
 		},
 		{
-			"name": "占问：同刻同源同键恒同签（随机是世界纯函数）",
+			"name": "占问：随机是账本位置的纯函数——同刻各次尝试地址不同（序位入地址），不再共享命运",
 			"steps": [
-				{ "name": "零刻动词不推钟：首掷落定骰子地址", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
-				{ "name": "同刻再掷：地址未变，同签（确定性骰子）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } }
+				{ "name": "零刻动词不推钟：序位 0", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
+				{ "name": "第二次：序位 1（同刻不同尝试各别入账）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
+				{ "name": "第三次：序位 2——签变，同刻不再恒同签", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } },
+				{ "name": "第四次：序位 3", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
+				{ "name": "第五次：序位 4（address 含触发类别，故重放可复原）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } }
 			]
 		},
 		{

@@ -12,7 +12,7 @@ export function withDevWait(def: GameDef): GameDef {
 				label: "流逝",
 				description: "研究摇钟：推进 n 刻（工具层合成的内部动词，映射层不可见；场景 tick 脱糖经裸 apply 消费）。",
 				private: true,
-				params: { n: { domain: "number", optional: true, description: "刻数，缺省 1" } },
+				params: { n: { carrier: "number", optional: true, description: "刻数，缺省 1" } },
 				cost: 0,
 				rules: [{
 					id: "wait",

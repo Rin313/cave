@@ -293,7 +293,7 @@ function deltaShape(changes: Change[]): string {
 	return changes.map((c) => (c.cell === "prop" ? `prop:${c.prop}` : c.cell === "edge" ? `rel:${c.type}` : c.next === null ? "despawn" : "spawn")).sort().join("+");
 }
 
-/** 穷举指称参数 × 可见域（每动作在独立 Simulation 上裁决）；liveness 为法则×动词活性矩阵——永远弃权的法则只有此处可见。 */
+/** 穷举指称参数 × 所指域（每动作在独立 Simulation 上裁决）；liveness 为法则×动词活性矩阵——永远弃权的法则只有此处可见。 */
 function probeDef(def: GameDef, maxCombos = 10000): {
 	rows: MapRow[];
 	grants: Map<string, number>;
@@ -303,7 +303,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	liveness: Map<string, { grant: number; deny: number; abstain: number; unreached: number }>;
 } {
 	const sim = new Simulation(def);
-	const scope = [...sim.visible()];
+	const scope = [...sim.domain()];
 	const rows: MapRow[] = [];
 	const grantRows = new Map<string, GrantRow>();
 	const grants = new Map<string, number>();
@@ -362,11 +362,11 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	for (const verbName of Object.keys(def.verbs)) {
 		const verb = def.verbs[verbName]!;
 		const refs = refParamsOf(verb);
-		// 尝试空间的有限生成集：ref 穷举可见域，必填自由参数取类型代表常量——值条件法则之于常量，同状态条件之于初始世界，归作者判读
+		// 尝试空间的有限生成集：指称参数穷举所指域，必填自由参数取载体代表常量——值条件法则之于常量，同状态条件之于初始世界，归作者判读
 		const seed: Record<string, Scalar> = {};
 		for (const [p, s] of Object.entries(verb.params)) {
 			if (s.optional || refs.includes(p)) continue;
-			seed[p] = s.domain === "number" ? 1 : s.domain === "boolean" ? true : "…";
+			seed[p] = s.carrier === "number" ? 1 : s.carrier === "boolean" ? true : "…";
 		}
 		const generate = (idx: number, acc: Record<string, Scalar>): void => {
 			if (truncated) return;
@@ -396,8 +396,8 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
 	const { rows, grants, grantRows, total, truncated, liveness } = probeDef(def, maxCombos);
-	console.log(`=== 裁决地图（${def.id}）：可见域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
-	console.log("法则×动词活性矩阵（域＝初始世界×可见域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
+	console.log(`=== 裁决地图（${def.id}）：所指域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
+	console.log("法则×动词活性矩阵（域＝初始世界×所指域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
 	for (const [law, c] of liveness) {
 		const stated = c.grant + c.deny;
 		console.log(`  ${law.padEnd(18)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}${stated === 0 ? "  ⚠ 零表态" : ""}`);

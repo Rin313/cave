@@ -19,9 +19,9 @@ function hashStr(s: string): number {
 	return (h >>> 0) / 4294967296;
 }
 
-/** 同地址恒同值；sides 违约即抛，由 *.crash 通道代谢。 */
-export function roll(time: number, key: string, sides: number): number {
+/** 同地址恒同值；地址是决策事件的账本位置，不由玩家输入决定；sides 违约即抛，由 *.crash 通道代谢。 */
+export function roll(addr: string, key: string, sides: number): number {
 	if (!Number.isInteger(sides) || sides < 1) throw new Error(`roll: sides 须为 ≥1 的整数，得到 ${String(sides)}`);
-	const h = hashStr(JSON.stringify([time, key]));
+	const h = hashStr(JSON.stringify([addr, key]));
 	return 1 + Math.floor(h * sides);
 }

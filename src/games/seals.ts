@@ -3,19 +3,19 @@ import { D, defineVerb, deny, entity, free, grant, ref, refParamsOf, relVal } fr
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
 const SEALS_PROPS: Record<string, PropDef> = {
-	name: { domain: "string", identity: true },
-	kind: { domain: "string", label: "类别" },
-	in: { domain: "ref", label: "持者" },
-	space: { domain: "boolean", label: "场景" },
-	seal: { domain: "boolean", label: "火漆" },
-	sender: { domain: "ref", label: "寄信人" },
-	recipient: { domain: "ref", label: "收信人" },
-	content: { domain: "string", label: "信文" },
-	introduced: { domain: "boolean" },
-	vessel: { domain: "boolean" },
-	mask: { domain: "boolean", label: "面具" },
-	heard: { domain: "string", label: "闻言" },
-	trueName: { domain: "string" },
+	name: { carrier: "string", identity: true },
+	kind: { carrier: "string", label: "类别" },
+	in: { carrier: "string", reference: true, label: "持者" },
+	space: { carrier: "boolean", label: "场景" },
+	seal: { carrier: "boolean", label: "火漆" },
+	sender: { carrier: "string", reference: true, label: "寄信人" },
+	recipient: { carrier: "string", reference: true, label: "收信人" },
+	content: { carrier: "string", label: "信文" },
+	introduced: { carrier: "boolean" },
+	vessel: { carrier: "boolean" },
+	mask: { carrier: "boolean", label: "面具" },
+	heard: { carrier: "string", label: "闻言" },
+	trueName: { carrier: "string" },
 };
 
 const des = (e: Entity): string => {
@@ -36,11 +36,11 @@ const isLetter = (q: Q, id: string) => {
 /** 无主语动词的缺省主语：居所链最近宿主。 */
 const host = (q: Q): string => hostOf(q.world, q.player);
 
-/** 强引用宇宙单源于注册表声明（ref 型含数组值）；边是弱引用，随主消散。 */
+/** 强引用宇宙单源于注册表声明（指称模式含数组值）；边是弱引用，随主消散。 */
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
 		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
-			if (pd.domain !== "ref") continue;
+			if (pd.reference !== true) continue;
 			const v = e.props[k];
 			if (v === id || (Array.isArray(v) && v.includes(id))) return e.id;
 		}
@@ -67,6 +67,14 @@ function extraOf(world: World, player: string): Record<string, ViewValue> {
 	if (suspicion.length) out["对你的疑心"] = suspicion;
 	return out;
 }
+
+/** 所指域：视角锚 = hostOf；魂不可自见；已引见者（introduced）并入域。 */
+const sealsNaming = (world: World, player: string): ((id: string) => boolean) => {
+	const vis = inTreeVisible(world, hostOf(world, player), des);
+	vis.delete(player);
+	for (const e of world.entities) if (e.props.introduced === true) vis.add(e.id);
+	return (id) => vis.has(id);
+};
 
 const base: Omit<GameDef, "prompt"> = {
 	id: "seals",
@@ -246,7 +254,7 @@ const base: Omit<GameDef, "prompt"> = {
 		wait: defineVerb({
 			label: "等候",
 			description: "在廊下站着：说等多久（span 为刻数，1–12，缺省一刻）。",
-			params: { span: { domain: "number", optional: true, description: "刻数（1–12），缺省一刻" } },
+			params: { span: { carrier: "number", optional: true, description: "刻数（1–12），缺省一刻" } },
 			cost: 0,
 			rules: [{
 				id: "pass",
@@ -390,17 +398,16 @@ const base: Omit<GameDef, "prompt"> = {
 		],
 	},
 	props: SEALS_PROPS,
-	// 社会真相只经桶级披露与法则代笔流动（被测通道）
-	edgePerception: () => (r) => r.type !== "信任" && r.type !== "猜疑" && r.type !== "知晓",
-	// 信文只对知晓者可感（判据 = 知晓边）
-	propPerception: (world, player) => (e, prop) => prop !== "content" || relVal(world, player, e.id, "知晓") !== null,
-	// 视角锚 = hostOf；魂不可自见
-	grounding: (world, player) => {
-		const vis = inTreeVisible(world, hostOf(world, player), des);
-		vis.delete(player);
-		for (const e of world.entities) if (e.props.introduced === true) vis.add(e.id);
-		return [...vis];
+	// 卡随命名域；社会真相只经桶级披露与法则代笔流动（被测通道）；信文只对知晓者可感（判据 = 知晓边）
+	sight: (world, player) => {
+		const naming = sealsNaming(world, player);
+		return (cell) => {
+			if (cell.cell === "vertex") return naming(cell.id);
+			if (cell.cell === "edge") return cell.type !== "信任" && cell.type !== "猜疑" && cell.type !== "知晓";
+			return cell.prop !== "content" || relVal(world, player, cell.entity, "知晓") !== null;
+		};
 	},
+	naming: sealsNaming,
 	digestExtra: extraOf,
 };
 

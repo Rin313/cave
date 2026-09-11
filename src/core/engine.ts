@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
-import { Simulation, entity, spineLines, viewCard, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
+import { Simulation, entity, spineLines, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -200,7 +200,7 @@ export class Engine {
 	private beginRun(phase: "mapping" | "narration", utterance?: string): void {
 		const r = this.run;
 		r.phase = phase;
-		r.visibleBefore = phase === "mapping" ? this.sim.visible() : new Set();
+		r.visibleBefore = phase === "mapping" ? this.sim.sights() : new Set();
 		r.utterance = utterance;
 		r.settled = "";
 		r.current = "";
@@ -289,14 +289,14 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 	};
 }
 
-function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[], vis: ReadonlySet<string>): string[] {
+function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]): string[] {
 	const lines = spineLines(sim, steps);
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
-		const perceiveProp = sim.def.propPerception?.(w, sim.player);
+		const seen = sim.sightView(w);
 		for (const id of revealed) {
 			const e = entity(w, id);
-			if (e) lines.push(JSON.stringify(viewCard(sim.def, e, vis, perceiveProp)));
+			if (e) lines.push(JSON.stringify(sim.cardOf(e, seen)));
 		}
 	}
 	return lines;
@@ -335,7 +335,7 @@ function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunS
 	}
 }
 
-/** 宿主面 schema 走 JSON Schema 通道；domain 即值域（参数面无 any），ref 的 JSON 型是 string。 */
+/** 宿主面 schema 走 JSON Schema 通道；carrier 即载体（参数面无 any），指称参数的 JSON 型是 string。 */
 type JsonSchema = {
 	type?: string;
 	const?: string;
@@ -349,7 +349,7 @@ type JsonSchema = {
 
 /** 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
 function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
-	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.domain === "ref" ? "string" : spec.domain, ...(spec.description !== undefined && { description: spec.description }) });
+	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.carrier, ...(spec.description !== undefined && { description: spec.description }) });
 	return {
 		anyOf: publicVerbs.map(([name, v]) => {
 			const entries = Object.entries(v.params);
@@ -411,10 +411,10 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			}
 			let text: string;
 			try {
-				// 投影失灵时不重入 visible()：新见段缺席
-				const vis = crashed ? new Set<string>() : sim.visible();
+				// 投影失灵时不重入所见域：新见段缺席
+				const vis = crashed ? new Set<string>() : sim.sights();
 				const revealed = crashed ? [] : [...vis].filter((id) => !run.visibleBefore.has(id));
-				const lines = formatTurnEvents(sim, steps, revealed, vis);
+				const lines = formatTurnEvents(sim, steps, revealed);
 				if (crashed) lines.push(def.messages.noResponse);
 				text = lines.join("\n");
 				if (text === "") text = def.messages.noResponse;

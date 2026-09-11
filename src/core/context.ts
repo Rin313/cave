@@ -1,7 +1,7 @@
 // 会话文件保存全量审计。
 // 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, shownDepartedNames, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
@@ -41,11 +41,28 @@ function isSource(v: unknown): boolean {
 
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown };
+	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; field?: unknown };
 	if (typeof c.at !== "number" || !isSource(c.source) || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
+	if (!isField(c.field)) return false;
 	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	return a !== null && typeof a === "object" && typeof a.verb === "string" && a.params !== null && typeof a.params === "object";
+}
+
+/** 脸表：id → 名（null = 在世但无可披露名）。 */
+function isFaceList(v: unknown): boolean {
+	return Array.isArray(v) && v.every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === "string" && (p[1] === null || typeof p[1] === "string"));
+}
+
+function isSection(v: unknown): boolean {
+	if (v === undefined) return true;
+	return v !== null && typeof v === "object" && Array.isArray((v as { before?: unknown }).before) && Array.isArray((v as { after?: unknown }).after);
+}
+
+function isField(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	const f = v as { before?: unknown; after?: unknown; edges?: unknown; props?: unknown };
+	return isFaceList(f.before) && isFaceList(f.after) && isSection(f.edges) && isSection(f.props);
 }
 
 interface RawCheckpoint {
@@ -118,6 +135,8 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	let broken = false;
 	for (const r of log.records) {
 		if (r.seq <= boundary) {
+			// 检查点已含其后果：不重放世界，但序位演进必须补上
+			sim.seedAttempts(r);
 			records.push(r);
 			continue;
 		}
@@ -166,8 +185,7 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 
 /** 近况与 act 结果同一变更行判据（刻账目闭合） */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
-	const departed = shownDepartedNames(sim.def, records.flatMap((r) => r.steps));
-	return records.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, { departed }) }));
+	return records.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps) }));
 }
 
 export function verbatim(s: string): string {
