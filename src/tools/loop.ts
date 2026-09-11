@@ -52,7 +52,7 @@ function printAct(sim: Simulation, o: {
 	outcome: ActOutcome; brief?: boolean;
 }): void {
 	console.log(`\n【#${o.turn} act】${o.utterance}`);
-	for (const line of spineLines(sim, o.outcome.steps)) console.log(`  ${line}`);
+	for (const line of spineLines(sim, o.outcome.steps, sim.snapshot())) console.log(`  ${line}`);
 	warnWarnings(o.outcome.warnings);
 	const u = usageLine(o.outcome.usage);
 	if (u) console.log(u);

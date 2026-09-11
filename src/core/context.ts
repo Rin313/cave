@@ -1,7 +1,7 @@
 // 会话文件保存全量审计。
 // 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
@@ -48,12 +48,24 @@ function isDenial(v: unknown): boolean {
 	return d.notes === undefined && d.kind === undefined;
 }
 
+/** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。 */
+function isChange(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	const c = v as { cell?: unknown; id?: unknown; entity?: unknown; prop?: unknown; from?: unknown; to?: unknown; type?: unknown; prev?: unknown; next?: unknown };
+	switch (c.cell) {
+		case "vertex": return typeof c.id === "string" && "prev" in c && "next" in c;
+		case "prop": return typeof c.entity === "string" && typeof c.prop === "string" && "prev" in c && "next" in c;
+		case "edge": return typeof c.from === "string" && typeof c.to === "string" && typeof c.type === "string" && "prev" in c && "next" in c;
+		default: return false;
+	}
+}
+
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; field?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; notes?: unknown };
+	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; changes?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; notes?: unknown };
 	if (typeof c.at !== "number" || !isSource(c.source) || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
-	if (!isField(c.field)) return false;
 	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
+	if (!Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
 	if (c.notes !== undefined) return false;
@@ -62,22 +74,6 @@ function isCommit(s: unknown): boolean {
 		return c.facts === undefined || (Array.isArray(c.facts) && c.facts.every((f) => typeof f === "string"));
 	}
 	return isDenial(c.denial);
-}
-
-/** 脸表：id → 名（null = 在世但无可披露名）。 */
-function isFaceList(v: unknown): boolean {
-	return Array.isArray(v) && v.every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === "string" && (p[1] === null || typeof p[1] === "string"));
-}
-
-function isSection(v: unknown): boolean {
-	if (v === undefined) return true;
-	return v !== null && typeof v === "object" && Array.isArray((v as { before?: unknown }).before) && Array.isArray((v as { after?: unknown }).after);
-}
-
-function isField(v: unknown): boolean {
-	if (v === null || typeof v !== "object") return false;
-	const f = v as { before?: unknown; after?: unknown; edges?: unknown; props?: unknown };
-	return isFaceList(f.before) && isFaceList(f.after) && isSection(f.edges) && isSection(f.props);
 }
 
 interface RawCheckpoint {
@@ -176,13 +172,14 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	if (excess > 0) records.splice(0, excess);
 	// 纪要完好按消费判据：试投影辖全窗口，序位检查只辖覆盖段（重放段的连续性由对账强制）；坏点使近况截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
 	let cut = -1;
+	const after = afterWorlds(sim, records);
 	records.forEach((r, i) => {
 		const prev = records[i - 1];
 		const gap = prev !== undefined && prev.seq <= boundary && r.seq !== prev.seq + 1 ? `序位断裂 ${prev.seq}→${r.seq}` : null;
 		let reason = gap;
 		if (!reason) {
 			try {
-				spineLines(sim, r.steps);
+				spineLines(sim, r.steps, after[i]!);
 			} catch (e) {
 				reason = `投影失败：${errorText(e)}`;
 			}
@@ -198,9 +195,22 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	return { sim, records, lastSeq, warnings };
 }
 
-/** 近况与 act 结果同一变更行判据（刻账目闭合） */
+/** 近况与 act 结果同一变更行判据（刻账目闭合）；记录的提交边界由账本末世界逆推。 */
 export function projectWindow(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
-	return records.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps) }));
+	const after = afterWorlds(sim, records);
+	return records.map((r, i) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, after[i]!) }));
+}
+
+/** 各记录之后的世界：记录连续且末记录即当前世界，从账本末世界逐条逆推。 */
+function afterWorlds(sim: Simulation, records: readonly ChronicleEntry[]): World[] {
+	let w = sim.snapshot();
+	const out: World[] = new Array(records.length);
+	for (let i = records.length - 1; i >= 0; i--) {
+		out[i] = w;
+		w = JSON.parse(JSON.stringify(w)) as World;
+		rewind(w, records[i]!.steps);
+	}
+	return out;
 }
 
 export function verbatim(s: string): string {

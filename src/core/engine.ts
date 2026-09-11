@@ -251,7 +251,7 @@ export class Engine {
 	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
 		this.assertLive();
 		this.beginRun("narration");
-		const kit: PromptKit & { view: string; events: string[]; instruction: string } = { view: this.sim.digest(), events: spineLines(this.sim, steps), instruction, recent: this.recent };
+		const kit: PromptKit & { view: string; events: string[]; instruction: string } = { view: this.sim.digest(), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 		await this.session.prompt(this.sim.def.prompt?.narrate?.(kit) ?? kit.instruction);
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
 	}
@@ -290,7 +290,7 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 }
 
 function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]): string[] {
-	const lines = spineLines(sim, steps);
+	const lines = spineLines(sim, steps, sim.snapshot());
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
 		const seen = sim.sightView(w);
@@ -304,7 +304,7 @@ function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]):
 
 function skeletonSummary(sim: Simulation, steps: Commit[]): { text: string; warning?: string } {
 	try {
-		const lines = spineLines(sim, steps);
+		const lines = spineLines(sim, steps, sim.snapshot());
 		return { text: lines.length ? lines.join("\n") : sim.def.messages.noResponse };
 	} catch (e) {
 		return { text: sim.def.messages.noResponse, warning: `骨架渲染失败：${errorText(e)}` };
@@ -345,11 +345,15 @@ type JsonSchema = {
 	additionalProperties?: boolean;
 	anyOf?: JsonSchema[];
 	items?: JsonSchema;
+	minItems?: number;
 };
 
 /** 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
 function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
-	const paramSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type === "ref" ? "string" : spec.type, ...(spec.description !== undefined && { description: spec.description }) });
+	const scalarSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type === "ref" ? "string" : spec.type, ...(spec.description !== undefined && { description: spec.description }) });
+	const paramSchema = (spec: ParamSpec): JsonSchema => spec.many === true
+		? { type: "array", items: scalarSchema(spec), minItems: 1, ...(spec.description !== undefined && { description: spec.description }) }
+		: scalarSchema(spec);
 	return {
 		anyOf: publicVerbs.map(([name, v]) => {
 			const entries = Object.entries(v.params);

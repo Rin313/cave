@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, refParamsOf, renderDenial, spineLines } from "../core/sim.ts";
-import type { Action, Change, Commit, Denial, GameDef, Q, Scalar, VerbDef, Verdict } from "../core/sim.ts";
+import type { Action, Change, Commit, Denial, GameDef, Q, Value, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -99,7 +99,7 @@ function runStep(sim: Simulation, step: ScenarioStep): { steps: Commit[]; error?
 	try {
 		const action: Action = step.tick != null
 			? devWait(step.tick)
-			: { verb: step.action!.verb, params: step.action!.params as Record<string, Scalar> };
+			: { verb: step.action!.verb, params: step.action!.params as Record<string, Value> };
 		const res = sim.apply(action, step.tick != null ? "code" : "will");
 		return { steps: [res.step, ...res.elapsed] };
 	} catch (e) {
@@ -139,7 +139,7 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		if (c !== "ok") p.push(`state: ${c}`);
 	}
 	if (e.lines) {
-		const got = spineLines(sim, ex.steps);
+		const got = spineLines(sim, ex.steps, sim.snapshot());
 		if (got.length !== e.lines.length || e.lines.some((l, i) => got[i] !== l)) p.push(`lines: 期望 ${JSON.stringify(e.lines)}，实际 ${JSON.stringify(got)}`);
 	}
 	if (e.viewIncludes?.length || e.viewExcludes?.length) {
@@ -363,19 +363,29 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		const verb = def.verbs[verbName]!;
 		const refs = refParamsOf(verb);
 		// 尝试空间的有限生成集：指称参数穷举所指域，必填自由参数取载体代表常量——值条件法则之于常量，同状态条件之于初始世界，归作者判读
-		const seed: Record<string, Scalar> = {};
+		const seed: Record<string, Value> = {};
 		for (const [p, s] of Object.entries(verb.params)) {
 			if (s.optional || refs.includes(p)) continue;
-			seed[p] = s.type === "number" ? 1 : s.type === "boolean" ? true : "…";
+			const base = s.type === "number" ? 1 : s.type === "boolean" ? true : "…";
+			seed[p] = s.many === true ? [base] : base;
 		}
-		const generate = (idx: number, acc: Record<string, Scalar>): void => {
+		// 指称参数的有限生成集：many 取逐元素单例与全域
+		const candidates = (p: string): Value[] => {
+			if (verb.params[p]?.many === true) {
+				const singles = scope.map((v): Value => [v]);
+				return scope.length > 1 ? [...singles, [...scope]] : singles;
+			}
+			return [...scope];
+		};
+		const generate = (idx: number, acc: Record<string, Value>): void => {
 			if (truncated) return;
 			if (idx === refs.length) {
 				probeAction({ verb: verbName, params: { ...seed, ...acc } });
 				return;
 			}
-			for (const v of scope) {
-				acc[refs[idx]!] = v;
+			const p = refs[idx]!;
+			for (const v of candidates(p)) {
+				acc[p] = v;
 				generate(idx + 1, acc);
 			}
 		};

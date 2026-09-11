@@ -10,6 +10,10 @@ export function errorText(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
 }
 
+export function clone<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function hashStr(s: string): number {
 	let h = 0x811c9dc5;
 	for (let i = 0; i < s.length; i++) {
