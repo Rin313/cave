@@ -36,7 +36,7 @@ export type EdgeAddr = { cell: "edge"; from: string; to: string; type: string };
 export type SlotAddr = PropAddr | EdgeAddr;
 export type Addr = VertexAddr | SlotAddr;
 
-/** δ：绝对写，后态自含。顶点格的身份即实体 id，故 spawn 的格取自 next、despawn 的格取自 id；属性格与边格的后态是值或 none（写/删）。 */
+/** δ：绝对写，后态自含；顶点格的 id 取自 next（生）或自身（灭）。 */
 export type Delta =
 	| { cell: "vertex"; next: Entity }
 	| { cell: "vertex"; id: string; next: null }
@@ -62,7 +62,7 @@ export interface Messages {
 	timePassed: string;
 }
 
-/** 规则产生的世界腔文本（答复与陈述），进结果视图供叙述跟随。 */
+/** 世界腔文本：答复与陈述。 */
 export type Text = string;
 
 /** 字面类型：边值的值域；边值是字面载荷，端点已是引用。 */
@@ -71,10 +71,7 @@ export type LitType = "string" | "number" | "boolean";
 /** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称（值位指称只注册在属性上）。 */
 export type SlotType = LitType | "ref";
 
-/**
- * 属性声明：值域 × 重数 × 呈现。label 即呈现名，缺席即内部变量（键不进模型面）。
- * ref 是强引用：值即实体 id，须在世、渲染为脸。
- */
+/** 属性声明：type 值域，many 重数（缺省 one），label 呈现名（缺席即内部变量）。ref 是强引用：值即实体 id，须在世。 */
 export interface PropDef {
 	type: SlotType;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
@@ -83,10 +80,7 @@ export interface PropDef {
 	label?: string;
 }
 
-/**
- * 边类型注册：值域契约 × 呈现。注册可选，未注册即开口 token（值按字面、无契约、无静态隐藏）。
- * present 三态：缺席即 token（类型的公开身份），"hidden" 即静态遮蔽，{ label } 即改名。
- */
+/** 边类型注册：值域契约 × 呈现。未注册即开口 token（字面、无契约、无静态隐藏）。present：缺席即 token，"hidden" 即无名，{label} 即改名。 */
 export interface RelDef {
 	type: LitType;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
@@ -94,7 +88,7 @@ export interface RelDef {
 	present?: "hidden" | { label: string };
 }
 
-/** 裁决点：一次尝试的最终发言者。rule 的 law 是作者理由 token（必填），只被呈现与探针消费；gate 与 closure 无载荷，呈现身份由 lawOf 产生。 */
+/** 裁决点。rule 的 law 只被呈现与探针消费；gate/closure 无载荷，呈现身份由 lawOf 产生。 */
 export type Point =
 	| { kind: "rule"; law: string }
 	| { kind: "gate" }
@@ -112,18 +106,18 @@ export function audienceOf(point: Point): "world" | "engine" {
 	}
 }
 
-/** 作者 invariant 结果的输入形态：受众与文本；落到记录时受众进点、文本单存。 */
+/** invariant 结果：受众与文本；落到记录时受众进点、文本单存。 */
 export type Reason =
 	| { fault: "world"; reply?: Text }
 	| { fault: "engine"; debug: string };
 
-/** 折叠后的否决：判定、门、闭合、审查、自检、崩溃共用同一记录形状；engine 受众必携文本。 */
+/** 否决的公共记录形状；engine 受众必携文本。 */
 export interface Denial {
 	point: Point;
 	text?: Text;
 }
 
-/** 作者可构造的否决：Denial 在 rule 点上的特化。text 是受众消息（rule 点恒 world，读作答复）；law 只被断言与探针消费；引擎违约走抛出 → crash(rule)。 */
+/** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse）。引擎违约走抛出。 */
 export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: Text };
 
 /** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
@@ -138,10 +132,7 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/**
- * world 为深冻结裁决读态，越权写即抛；一切后果经返回值表达。P 为参数的编译期形状（defineVerb 从 params 声明派生）。
- * 两个调用点不相交（意志动词唯一调用者是 will，常驻规则唯一调用者是泵），故判定输入不含 origin：调用点由声明决定，不是规则读得到的变量。
- */
+/** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状。判定输入不含 origin。 */
 export interface Q<P = Record<string, Value>> {
 	readonly world: World;
 	readonly player: string;
@@ -150,7 +141,7 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 授予：deltas 是变更序列，reply 是答复句（每步至多一条；无提案者的步上入账时前插进 statements），statements 是授予许可的 0..n 条世界腔陈述。否决：RuleDenial 是 Denial 在 rule 点上的特化；作者的引擎违约走抛出。ticks 覆写价，两分支同轴。 */
+/** 裁决结果；ticks 覆写价，授予与否决同轴。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; reply?: Text; statements?: Text[]; ticks?: number }
 	| { ok: false; denial: RuleDenial; ticks?: number };
@@ -190,7 +181,7 @@ function addrKey(a: Addr): string {
 	}
 }
 
-/** 𝒞 反推 δ：绝对写、后态自含——重放不需读前值。 */
+/** 𝒞 反推 δ：绝对写、后态自含。 */
 function deltaOf(c: Change): Delta {
 	switch (c.cell) {
 		case "vertex": return c.prev === null ? { cell: "vertex", next: c.next } : { cell: "vertex", id: c.prev.id, next: null };
@@ -199,10 +190,7 @@ function deltaOf(c: Change): Delta {
 	}
 }
 
-/**
- * 账本逆推：把某记录之后的世界就地回退到该记录之前——逐变更取 prev。
- * 逆序处理同址多写；顶点与边均不级联（边变更已在记录中显式列出）。
- */
+/** 就地回退：逐变更取 prev；逆序处理同址多写；顶点与边均不级联（边变更已显式列出）。 */
 export function rewind(world: World, steps: readonly Commit[]): void {
 	for (let s = steps.length - 1; s >= 0; s--) {
 		const step = steps[s]!;
@@ -252,7 +240,7 @@ export interface ParamSpec {
 type BaseOf<T extends SlotType> = T extends "number" ? number : T extends "boolean" ? boolean : string;
 type ValueOfParam<S extends ParamSpec> = S extends { many: true } ? BaseOf<S["type"]>[] : BaseOf<S["type"]>;
 
-/** 规则参数的编译期类型，由 params 声明推导；重数与世界值对称（多重性不是批次）。 */
+/** params 声明派生的编译期类型。 */
 export type ParamsOf<P extends Record<string, ParamSpec>> = {
 	[K in keyof P as P[K] extends { optional: true } ? never : K]: ValueOfParam<P[K]>;
 } & {
@@ -380,18 +368,11 @@ export interface GameDef {
 	relTypes?: Record<string, RelDef>;
 	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
-	/**
-	 * 脸：所见域上的命名，缺省 id。只被呈现消费，不产生指称（指称恒为 id）；所见域内须返回非空串，否则回落 id。
-	 * 改名不是格：一步内 token 变化即派生出 `~ 旧 → 新`。
-	 */
+	/** 脸：所见域上的命名，缺省 id；只被呈现消费。所见域内返回空串则回落 id。 */
 	face?: (world: World, player: string) => (e: Entity) => string;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
-	/**
-	 * 披露谓词：顶点格成员即卡，属性/边格的谓词值即变更行每一侧的判据（缺席格与在场格同过一门）。
-	 * 缺省常真（全见），声明即整体替换（无格级缺省回退）；命名在注册表，两轴互不代替。
-	 * 指称门与卡白名单读同一个所见集：可指名者必在所见集，所见者必可指名——对结构化面的定义与闭合。
-	 */
+	/** 披露谓词：顶点格成员即卡；属性/边格谓词即变更行该侧判据。缺省常真，声明即整体替换。指称门与卡白名单同源。 */
 	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
 	/** 状态视图的派生纹理：读世界真相，非指称通道（不产生指称，不改变所见域）。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
@@ -575,7 +556,7 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 步一律携公共载荷 action（clock 步的 verb 即常驻规则 id，params 恒空）。价 = origin=clock ? 0 : (ticks ?? cost)，两分支同轴。授予记授予法则；否决记裁决点与受众——授予轨迹不入账。 */
+/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = origin=clock ? 0 : (ticks ?? cost)；授予记法则，否决记 Point 与受众。 */
 export type Commit =
 	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; reply?: Text; statements?: Text[] }
 	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial };
@@ -852,7 +833,7 @@ export class Simulation {
 			}
 		}
 		this.ticks = ticks;
-		// 结构校验恒挂；作者不变式走 admit（装载终点判当下世界，历史不重审），开局世界在此另判一次以尽早显形 def 错误
+		// 结构校验恒挂；作者不变式走 admit（历史不重审），开局世界在此另判一次以尽早显形 def 错误
 		const broken = integrityProblems(this.def, this.readState());
 		if (broken) throw new Error(`初始世界破坏完整性：${broken}`);
 		if (world === undefined) {
@@ -876,7 +857,7 @@ export class Simulation {
 		return this.def.perceives?.(world, this.player) ?? (() => true);
 	}
 
-	/** 所见域＋脸表的同一次求值：卡集合即谓词于顶点格的成员；脸在所见域上全（非空串，否则回落 id）。 */
+	/** 所见域＋脸表的同一次求值；脸在所见域上全（空串回落 id）。 */
 	private boundaryView(world: World): { within: (cell: Addr) => boolean; seen: SightView; faces: Map<string, string> } {
 		const within = this.perceives(world);
 		const token = this.def.face?.(world, this.player) ?? ((e: Entity) => e.id);
@@ -1005,7 +986,7 @@ export class Simulation {
 		return null;
 	}
 
-	/** 历史原子性：异常逃逸 ⇒ 世界恢复调用前原状再抛。attempt 入界即冻结（Q.params 与步记录同一对象），Resolution 出界即冻结（记录是证据而非视图）。 */
+	/** 异常逃逸 ⇒ 世界恢复调用前原状再抛；attempt 入界即冻结（Q.params 与步记录同一对象），Resolution 出界即冻结。 */
 	apply(action: Action): Resolution {
 		deepFreeze(action);
 		const s0 = this.readState();
@@ -1083,7 +1064,7 @@ export class Simulation {
 		return out;
 	}
 
-	/** 尝试行恒可说而指称不经跨度门：合法性由裁决读态的所指域判（门已把），脸面由该步所见域给，未过所见者原样回显。 */
+	/** 尝试行不经跨度门；未过所见者原样回显。 */
 	describeAction(s: Commit, face: Face): string {
 		const action = s.action;
 		const verb = this.def.verbs[action.verb];
@@ -1131,7 +1112,7 @@ export class Simulation {
 		return null;
 	}
 
-	/** 重放一条回合记录：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审——历史由当时的法则裁判过。链断回滚并返回原因。 */
+	/** 重放：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审。链断回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
 		const seqAt = this.attemptAt;

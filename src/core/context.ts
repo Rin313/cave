@@ -1,5 +1,4 @@
-// 会话文件保存全量审计。
-// 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
+// 会话文件保存全量审计：档案是单一追加日志——回合条目（证据，每回合恰一）+ 检查点条目（缓存）。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { Simulation, audienceOf, denialReasonText, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type Point, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
@@ -42,7 +41,7 @@ function isPoint(v: unknown): v is Point {
 	}
 }
 
-/** 否决形状：Point + ⟨text⟩?；受众是点的全函数，engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
+/** 否决形状：Point + ⟨text⟩?；engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	const d = v as { point?: unknown; text?: unknown; reason?: unknown };
@@ -52,7 +51,7 @@ function isDenial(v: unknown): boolean {
 	return audienceOf(d.point) !== "engine" || typeof d.text === "string";
 }
 
-/** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。顶点记录恰一侧为 ⊥（生/灭），不另存 id。 */
+/** 变更形状：投影与重放共用；顶点记录恰一侧为 ⊥（生/灭）。 */
 function isChange(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	const c = v as { cell?: unknown; entity?: unknown; prop?: unknown; from?: unknown; to?: unknown; type?: unknown; prev?: unknown; next?: unknown };
@@ -89,7 +88,7 @@ export interface LogEntries {
 	checkpoint?: CheckpointEntry;
 }
 
-/** 信封粗筛：损坏条目在此丢弃（无 seq 或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
+/** 信封粗筛；最终完好判据是装载对账与试投影。 */
 function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries {
 	const out: LogEntries = { records: [] };
 	let broken = 0;
@@ -121,7 +120,7 @@ export interface Resumed {
 	warnings: string[];
 }
 
-/** 装载即对账：锚（开局/检查点）只验结构与 integrity，其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；终态跑一次 admit（当下世界 × 当下法则），拒绝即装载失败。链断（序位断裂、prev 不符、完整性失败）则世界与近况同界截断；检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要（试投影辖全窗口，序位检查只辖覆盖段——重放段的连续性由对账强制），截断而非剔除 */
+/** 装载即对账：锚（开局/检查点）只验结构与 integrity，其后记录走 𝒞 重放（不重裁决、不掷骰，逐变更 prev 校验），终态跑一次 admit；链断则世界与近况同界截断，检查点领先于证据即拒绝装载。纪要完好按消费判据（试投影辖全窗口），坏点使其截断至其后完好子后缀。 */
 export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const warnings: string[] = [];
 	const log = loadLog(entries, warnings);
