@@ -401,9 +401,9 @@ const base: Omit<GameDef, "prompt"> = {
 	props: SEALS_PROPS,
 	// 注册边（值域契约）：信任/猜疑/知晓静态隐藏，社会真相只经桶级披露与法则代笔流动
 	relTypes: {
-		"信任": { type: "number", hidden: true },
-		"猜疑": { type: "number", hidden: true },
-		"知晓": { type: "boolean", hidden: true },
+		"信任": { type: "number", present: "hidden" },
+		"猜疑": { type: "number", present: "hidden" },
+		"知晓": { type: "boolean", present: "hidden" },
 	},
 	// 卡随感知域（顶点格）：居所链可见＋已引见者；信文只对知晓者可感（判据 = 知晓边）；隐藏边由注册声明遮蔽
 	perceives: (world, player) => {
