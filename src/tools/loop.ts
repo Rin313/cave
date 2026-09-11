@@ -1,7 +1,7 @@
 // 编译通过、场景通过、e2e 映射与表达准确都是伪信号，不证明设计正确；验证靠阅读 e2e 会话与分析源码。e2e 的 provider 用 `opencode-go`，model 用 `mimo-v2.5`。
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
 import { resume } from "../core/context.ts";
 import { spineLines, type Simulation } from "../core/sim.ts";
@@ -25,12 +25,12 @@ function requireRunDir(gameId: string, runId: string): { dir: string; sessionFil
 }
 
 /** 引擎配置按游戏 id 命名空间读取环境变量，多游戏并存互不覆盖。 */
-function engineOptsFromEnv(gameId: string): { provider: string; model: string; thinkingLevel?: string } {
+function engineOptsFromEnv(gameId: string): { provider: string; model: string; thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"] } {
 	const prefix = gameId.toUpperCase();
 	const provider = process.env[`${prefix}_PROVIDER`];
 	const model = process.env[`${prefix}_MODEL`];
 	if (!provider || !model) throw new Error(`模型未配置：请设置 ${prefix}_PROVIDER 与 ${prefix}_MODEL 环境变量`);
-	const thinkingLevel = process.env[`${prefix}_THINKING`];
+	const thinkingLevel = process.env[`${prefix}_THINKING`] as CreateAgentSessionOptions["thinkingLevel"] | undefined;
 	return { provider, model, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
@@ -159,7 +159,7 @@ async function cmdRender(gameId: string, runId: string, instruction: string): Pr
 function cmdState(gameId: string, runId: string, out: string | undefined): void {
 	const { sessionFile } = requireRunDir(gameId, runId);
 	const def = getGame(gameId);
-	const { sim, lastSeq, warnings } = resume(def, SessionManager.open(sessionFile).getEntries());
+	const { sim, lastSeq, warnings } = resume(def, SessionManager.open(sessionFile).getBranch());
 	console.log(`【${runId}】${gameId} 已进行 ${lastSeq} 回合`);
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 	if (out === undefined) {

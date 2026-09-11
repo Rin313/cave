@@ -17,7 +17,7 @@ export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
 	provider: string;
 	model: string;
-	thinkingLevel?: string;
+	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 	sessionManager?: SessionManager;
 }
 
@@ -48,16 +48,15 @@ export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
 
-/** mapping 相位文本丢弃，narration 相位文本留作回合叙述（不入账）；settled/current 的归属镜像 pi 的事件语义。 */
+/** mapping 相位文本丢弃，narration 相位文本留作回合叙述（不入账），结算时从消息账本重读。 */
 interface RunState {
 	phase: "mapping" | "narration";
 	visibleBefore: Set<string>;
 	utterance?: string | undefined;
-	settled: string;
-	current: string;
+	messageStart: number;
+	entryStart: number;
 	steps: Commit[];
 	warnings: string[];
-	usage: TokenUsage[];
 }
 
 /** 装载与定稿共享的档案态：records 是近况窗口源，lastSeq 是定稿序位 */
@@ -97,29 +96,11 @@ export class Engine {
 			switch (event.type) {
 				case "message_update":
 					if (event.assistantMessageEvent.type === "text_delta" && this.run.phase === "narration") {
-						const delta = event.assistantMessageEvent.delta;
-						this.run.current += delta;
-						this.emit({ type: "narration_delta", delta });
-					}
-					break;
-				case "message_end":
-					// error 生成暂扣在 current，由重试作废或定稿裁决
-					if (event.message.role === "assistant" && this.run.phase === "narration" && event.message.stopReason !== "error") {
-						this.run.settled += this.run.current;
-						this.run.current = "";
+						this.emit({ type: "narration_delta", delta: event.assistantMessageEvent.delta });
 					}
 					break;
 				case "auto_retry_start":
-					if (this.run.phase === "narration") {
-						this.run.current = "";
-						this.emit({ type: "narration_reset" });
-					}
-					break;
-				case "agent_end":
-					for (const m of event.messages ?? []) {
-						const u = (m as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } }).usage;
-						if (m.role === "assistant" && u) this.run.usage.push({ input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
-					}
+					if (this.run.phase === "narration") this.emit({ type: "narration_reset" });
 					break;
 			}
 		});
@@ -141,7 +122,7 @@ export class Engine {
 		if (!Number.isInteger(def.recentWindow) || def.recentWindow < 0) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-		const resumed = resume(def, sessionManager.getEntries());
+		const resumed = resume(def, sessionManager.getBranch());
 		const archive: Archive = { records: resumed.records, lastSeq: resumed.lastSeq, dead: null };
 
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
@@ -150,7 +131,7 @@ export class Engine {
 
 		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", visibleBefore: new Set(), settled: "", current: "", steps: [], warnings: [], usage: [] };
+		const run: RunState = { phase: "mapping", visibleBefore: new Set(), messageStart: 0, entryStart: 0, steps: [], warnings: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
@@ -176,7 +157,7 @@ export class Engine {
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
 			modelRuntime,
-			thinkingLevel: thinkingLevel as never,
+			thinkingLevel,
 			resourceLoader: loader,
 			settingsManager,
 			sessionManager,
@@ -202,10 +183,9 @@ export class Engine {
 		r.phase = phase;
 		r.visibleBefore = phase === "mapping" ? this.sim.sights() : new Set();
 		r.utterance = utterance;
-		r.settled = "";
-		r.current = "";
+		r.messageStart = this.session.messages.length;
+		r.entryStart = this.session.sessionManager.getEntries().length;
 		r.warnings = [];
-		r.usage = [];
 		r.steps = [];
 	}
 
@@ -234,7 +214,7 @@ export class Engine {
 			steps: this.run.steps,
 			narration,
 			warnings: this.run.warnings,
-			usage: this.run.usage,
+			usage: this.collectUsage(),
 		};
 	}
 
@@ -253,16 +233,41 @@ export class Engine {
 		this.beginRun("narration");
 		const kit: PromptKit & { view: string; events: string[]; instruction: string } = { view: this.sim.digest(), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 		await this.session.prompt(this.sim.def.prompt?.narrate?.(kit) ?? kit.instruction);
-		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.run.usage };
+		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.collectUsage() };
 	}
 
 	private settleNarration(steps: Commit[]): string {
-		const text = this.run.settled + this.run.current;
+		const text = this.narrationText();
 		if (text.trim() === "") {
 			this.run.warnings.push("散文为空。");
 			return this.fallbackSummary(steps);
 		}
 		return text;
+	}
+
+	/** 叙述 = 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文。 */
+	private narrationText(): string {
+		const messages = this.session.messages.slice(this.run.messageStart);
+		const firstAct = messages.findIndex((m) => m.role === "toolResult" && m.toolName === "act");
+		let text = "";
+		for (const m of messages.slice(firstAct + 1)) {
+			if (m.role !== "assistant" || m.stopReason === "error") continue;
+			for (const c of m.content) if (c.type === "text") text += c.text;
+		}
+		return text;
+	}
+
+	/** 用量按档案新增条目重读；被重试作废的尝试已计费且已入档，仍计入。 */
+	private collectUsage(): TokenUsage[] {
+		const out: TokenUsage[] = [];
+		for (const e of this.session.sessionManager.getEntries().slice(this.run.entryStart)) {
+			if (e.type !== "message") continue;
+			const m = e.message;
+			if (m.role !== "assistant") continue;
+			const u = m.usage;
+			if (u) out.push({ input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
+		}
+		return out;
 	}
 
 	private fallbackSummary(steps: Commit[]): string {
