@@ -94,9 +94,6 @@ export interface RelDef {
 	present?: "hidden" | { label: string };
 }
 
-/** 世界腔否决（法则的具名否决）：玩家可见，reply 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
-export type Deny = { law: string; reply?: Text };
-
 /** 裁决点：一次尝试的最终发言者。rule 的 law 是作者理由 token（必填），只被呈现与探针消费；gate 与 closure 无载荷，呈现身份由 lawOf 产生。 */
 export type Point =
 	| { kind: "rule"; law: string }
@@ -126,6 +123,9 @@ export interface Denial {
 	text?: Text;
 }
 
+/** 作者可构造的否决：Denial 在 rule 点上的特化。text 是受众消息（rule 点恒 world，读作答复）；law 只被断言与探针消费；引擎违约走抛出 → crash(rule)。 */
+export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: Text };
+
 /** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
 export class ProtocolViolation extends Error {
 	readonly code: "action.unknown" | "action.schema";
@@ -150,10 +150,10 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 授予：deltas 是变更序列，reply 是答复句（每步至多一条；无提案者的步上入账时前插进 statements），statements 是授予许可的 0..n 条世界腔陈述，ticks 覆写价。法则的否决恒 world 受众；作者的引擎违约走抛出。 */
+/** 授予：deltas 是变更序列，reply 是答复句（每步至多一条；无提案者的步上入账时前插进 statements），statements 是授予许可的 0..n 条世界腔陈述。否决：RuleDenial 是 Denial 在 rule 点上的特化；作者的引擎违约走抛出。ticks 覆写价，两分支同轴。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; reply?: Text; statements?: Text[]; ticks?: number }
-	| { ok: false; denial: Deny };
+	| { ok: false; denial: RuleDenial; ticks?: number };
 
 export interface Rule {
 	id: string;
@@ -170,8 +170,8 @@ export function grant(deltas: Delta[], opts: { reply?: Text; statements?: Text[]
 	};
 }
 
-export function deny(law: string, reply?: Text): Verdict {
-	return { ok: false, denial: { law, ...(reply !== undefined && { reply }) } };
+export function deny(law: string, text?: Text, ticks?: number): Verdict {
+	return { ok: false, denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(ticks !== undefined && { ticks }) };
 }
 
 export const D = {
@@ -575,7 +575,7 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 步一律携公共载荷 action（clock 步的 verb 即常驻规则 id，params 恒空）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众——授予轨迹不入账。 */
+/** 步一律携公共载荷 action（clock 步的 verb 即常驻规则 id，params 恒空）。价 = origin=clock ? 0 : (ticks ?? cost)，两分支同轴。授予记授予法则；否决记裁决点与受众——授予轨迹不入账。 */
 export type Commit =
 	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; reply?: Text; statements?: Text[] }
 	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial };
@@ -779,7 +779,7 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 /** 门内裁决的表态；授予记法则，否决自带裁决点。 */
 type RawResult =
 	| { ok: true; deltas: Delta[]; rule: string; reply?: Text; statements?: Text[]; ticks?: number }
-	| { ok: false; denial: Denial };
+	| { ok: false; denial: Denial; ticks?: number };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -936,16 +936,14 @@ export class Simulation {
 				return { ok: false, denial: { point: { kind: "crash", site: "rule" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
+			if (v.ticks !== undefined) {
+				if (clock) return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 常驻规则不得延伸时间` } };
+				if (!Number.isInteger(v.ticks) || v.ticks < 0) return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
+			}
 			if (v.ok) {
-				if (clock && v.ticks !== undefined) {
-					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 常驻规则不得延伸时间` } };
-				}
-				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
-					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
-				}
 				return { ok: true, deltas: v.deltas, rule: r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, denial: { point: { kind: "rule", law: v.denial.law }, ...(v.denial.reply !== undefined && { text: v.denial.reply }) } };
+			return { ok: false, denial: v.denial, ...(v.ticks !== undefined && { ticks: v.ticks }) };
 		}
 		return { ok: false, denial: { point: { kind: "closure" } } };
 	}
@@ -1057,7 +1055,7 @@ export class Simulation {
 			const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
 			return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 		}
-		return { at, origin, action, price, ok: false, denial: r.denial };
+		return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: false, denial: r.denial };
 	}
 
 	/** 取序位不消耗；仅当步确定入账才 markAttempt——默与崩溃不移动任何地址。 */
