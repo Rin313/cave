@@ -100,7 +100,7 @@ function runStep(sim: Simulation, step: ScenarioStep): { steps: Commit[]; error?
 		const action: Action = step.tick != null
 			? devWait(step.tick)
 			: { verb: step.action!.verb, params: step.action!.params as Record<string, Value> };
-		const res = sim.apply(action, step.tick != null ? "code" : "will");
+		const res = sim.apply(action);
 		return { steps: [res.step, ...res.elapsed] };
 	} catch (e) {
 		return { steps: [], error: e };
@@ -142,7 +142,9 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		if (c !== "ok") p.push(`state: ${c}`);
 	}
 	if (e.lines) {
-		const got = spineLines(sim, ex.steps, sim.snapshot());
+		const rendered = spineLines(sim, ex.steps, sim.snapshot());
+		// tick 步的合成 will 行不属事件流：只投影其推钟的刻
+		const got = step.tick != null ? rendered.slice(1) : rendered;
 		if (got.length !== e.lines.length || e.lines.some((l, i) => got[i] !== l)) p.push(`lines: 期望 ${JSON.stringify(e.lines)}，实际 ${JSON.stringify(got)}`);
 	}
 	if (e.viewIncludes?.length || e.viewExcludes?.length) {
@@ -326,8 +328,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		trace.length = 0;
 		const op = opLabel(action);
 		try {
-			const origin = instrumented.verbs[action.verb]?.private === true ? "code" : "will";
-			const { step, elapsed } = new Simulation(instrumented).apply(action, origin);
+			const { step, elapsed } = new Simulation(instrumented).apply(action);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
 				const rule = step.rule;

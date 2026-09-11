@@ -197,7 +197,7 @@ async function main() {
 输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：session.jsonl 是机器全量档案（回合记录与检查点，装载对账的主侧），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
 batch 话语文件每行一条（同一引擎会话内顺序执行，A/B 话语集用）；空行与 # 注释跳过。
 --select 由本工具并合进话语（transcript 记 raw/selection 分解）。
-render 是研究仪器操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合）。
+render 是研究操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合）。
 state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用）。
 --game 恒必填：run 按游戏分目录，无跨游戏消歧。
 环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）

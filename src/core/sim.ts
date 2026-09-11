@@ -148,7 +148,7 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 授予：deltas 是变更序列，reply 是答复句（每步至多一条），statements 是授予许可的 0..n 条世界腔陈述，ticks 覆写价。法则的否决恒 world 受众；作者的引擎违约走抛出。 */
+/** 授予：deltas 是变更序列，reply 是答复句（每步至多一条；无提案者的步上入账时前插进 statements），statements 是授予许可的 0..n 条世界腔陈述，ticks 覆写价。法则的否决恒 world 受众；作者的引擎违约走抛出。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; reply?: Text; statements?: Text[]; ticks?: number }
 	| { ok: false; denial: Deny };
@@ -307,7 +307,7 @@ export interface VerbDef {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 不进动词面、不可被 will 提案；`private ∧ clock` 由泵调用，`private ∧ ¬clock` 仅仪器直连（不入账）。 */
+	/** 不进动词面；private ⇒ clock（不广告的常驻声音，由泵逐刻调用）。 */
 	private?: boolean;
 	clock?: boolean;
 	rules: Rule[];
@@ -562,8 +562,8 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-/** 来源：will（玩家经动词面）、clock（泵逐刻）入账；code 是仪器直连（进程内，不入账、不可施于活实例）。 */
-export type Origin = "will" | "clock" | "code";
+/** 入账来源：will（玩家经动词面）、clock（泵逐刻）。 */
+export type Origin = "will" | "clock";
 
 /** 提案者：审查上下文用；rule 携授予法则与本次尝试的 origin/action，admit 是以零变更审查整世界（装载终点）。 */
 export type Proposal =
@@ -754,8 +754,6 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		if (s.origin !== "clock") {
 			flush();
 			granted = s.price;
-			// 直连步不入事件流（仪器域：不入账、不投影）
-			if (s.origin === "code") continue;
 			const { face, changeLine } = renderer(i);
 			const changes = s.ok ? narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null) : [];
 			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial);
@@ -822,6 +820,7 @@ export class Simulation {
 				const required = Object.values(v.params).filter((s) => !s.optional);
 				if (required.length) throw new Error(`时钟动词 ${name} 不得有必填参数：泵以空参提案过门，时钟不是能改错重提的调用者`);
 			}
+			if (v.private && !v.clock) throw new Error(`动词 ${name} 声明为 private 但非 clock：private 只用于不进动词面的常驻声音，private ∧ ¬clock 不可达`);
 		}
 		// props 必填；呈现名（label）只在位置内要求唯一
 		const propNames = new Map<string, string>();
@@ -1012,11 +1011,11 @@ export class Simulation {
 	}
 
 	/** 历史原子性：异常逃逸 ⇒ 世界恢复调用前原状再抛。attempt 入界即冻结（Q.params 与步记录同一对象），Resolution 出界即冻结（记录是证据而非视图）。 */
-	apply(action: Action, origin: Exclude<Origin, "clock"> = "will"): Resolution {
+	apply(action: Action): Resolution {
 		deepFreeze(action);
 		const s0 = this.readState();
 		try {
-			const res = this.applyInner(action, s0, origin);
+			const res = this.applyInner(action, s0);
 			// 序位随账目一同提交：apply 失败（钩子/投影崩溃）时世界回滚，未入账的尝试不得移动地址
 			this.markAttempt(res.step.at, res.step.origin, res.step.action.verb);
 			for (const c of res.elapsed) this.markAttempt(c.at, c.origin, c.action.verb);
@@ -1027,8 +1026,8 @@ export class Simulation {
 		}
 	}
 
-	private applyInner(action: Action, s0: World, origin: Exclude<Origin, "clock">): Resolution {
-		const step = this.attempt(s0, action, origin);
+	private applyInner(action: Action, s0: World): Resolution {
+		const step = this.attempt(s0, action, "will");
 		return { step, elapsed: this.pump(step.price) };
 	}
 
@@ -1044,7 +1043,10 @@ export class Simulation {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
 			if (!cc.ok)
 				return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: cc.denial, proposedBy: r.rule };
-			return { at, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, rule: r.rule, changes: cc.changes, ...(r.reply !== undefined && { reply: r.reply }), ...(r.statements !== undefined && { statements: r.statements }) };
+			// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
+			const reply = clock ? undefined : r.reply;
+			const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
+			return { at, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, rule: r.rule, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 		}
 		return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: r.denial };
 	}
