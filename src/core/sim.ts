@@ -62,8 +62,8 @@ export interface Messages {
 	timePassed: string;
 }
 
-/** 规则产生的世界腔文本，进结果视图供叙述跟随。 */
-export type Fact = string;
+/** 规则产生的世界腔文本（答复与陈述），进结果视图供叙述跟随。 */
+export type Text = string;
 
 /** 字面类型：边值的值域；边值是字面载荷，端点已是引用。 */
 export type LitType = "string" | "number" | "boolean";
@@ -95,8 +95,8 @@ export interface RelDef {
 	present?: "hidden" | { label: string };
 }
 
-/** 世界腔否决（法则的具名否决）：玩家可见，voice 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
-export type Deny = { law: string; fault: "world"; voice?: Fact };
+/** 世界腔否决（法则的具名否决）：玩家可见，reply 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
+export type Deny = { law: string; fault: "world"; reply?: Text };
 
 /** 裁决点：一次尝试的最终发言者。law 只出现在 rule 上，是作者理由 token（缺省即 rule id），只被呈现与探针消费。 */
 export type Point =
@@ -107,9 +107,9 @@ export type Point =
 	| { kind: "engine"; check: "integrity" | "commit" | "grant" }
 	| { kind: "crash"; site: "rule" | "invariant" };
 
-/** 受众与文本互斥：world 缺 voice 回落 noResponse，engine 只有 debug。 */
+/** 受众与文本互斥：world 缺 reply 回落 noResponse，engine 只有 debug。 */
 export type Reason =
-	| { fault: "world"; voice?: Fact }
+	| { fault: "world"; reply?: Text }
 	| { fault: "engine"; debug: string };
 
 /** 引擎侧原因：只有 debug。 */
@@ -142,9 +142,9 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 授予：deltas 是变更序列，voice 是答复句，facts 是附加世界腔事实，ticks 覆写价。法则的否决恒 world 受众；作者的引擎违约走抛出。 */
+/** 授予：deltas 是变更序列，reply 是答复句（每步至多一条），statements 是授予许可的 0..n 条世界腔陈述，ticks 覆写价。法则的否决恒 world 受众；作者的引擎违约走抛出。 */
 export type Verdict =
-	| { ok: true; deltas: Delta[]; voice?: Fact; facts?: Fact[]; ticks?: number }
+	| { ok: true; deltas: Delta[]; reply?: Text; statements?: Text[]; ticks?: number }
 	| { ok: false; denial: Deny };
 
 export interface Rule {
@@ -152,18 +152,18 @@ export interface Rule {
 	judge: (q: Q) => Verdict | null;
 }
 
-export function grant(deltas: Delta[], opts: { voice?: Fact; facts?: Fact[]; ticks?: number } = {}): Verdict {
+export function grant(deltas: Delta[], opts: { reply?: Text; statements?: Text[]; ticks?: number } = {}): Verdict {
 	return {
 		ok: true,
 		deltas,
-		...(opts.voice !== undefined && { voice: opts.voice }),
-		...(opts.facts !== undefined && { facts: opts.facts }),
+		...(opts.reply !== undefined && { reply: opts.reply }),
+		...(opts.statements !== undefined && { statements: opts.statements }),
 		...(opts.ticks !== undefined && { ticks: opts.ticks }),
 	};
 }
 
-export function deny(law: string, voice?: Fact): Verdict {
-	return { ok: false, denial: { law, fault: "world", ...(voice !== undefined && { voice }) } };
+export function deny(law: string, reply?: Text): Verdict {
+	return { ok: false, denial: { law, fault: "world", ...(reply !== undefined && { reply }) } };
 }
 
 export const D = {
@@ -594,7 +594,7 @@ export function lawOf(point: Point): string {
 
 /** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众，曾被授予而拦回者记提案法则。 */
 export type Commit =
-	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; voice?: Fact; facts?: Fact[] }
+	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; reply?: Text; statements?: Text[] }
 	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial; proposedBy?: string };
 
 export interface Resolution {
@@ -614,14 +614,14 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-/** 玩家侧文本：world 给 voice（缺省 noResponse），engine 恒 noResponse。 */
+/** 玩家侧文本：world 给 reply（缺省 noResponse），engine 恒 noResponse。 */
 export function renderDenial(def: GameDef, denial: Denial): string {
-	return denial.reason.fault === "world" ? (denial.reason.voice ?? def.messages.noResponse) : def.messages.noResponse;
+	return denial.reason.fault === "world" ? (denial.reason.reply ?? def.messages.noResponse) : def.messages.noResponse;
 }
 
 /** 原始文本（含引擎 debug）：装载拒绝等非呈现用途。 */
 export function denialReasonText(def: GameDef, denial: Denial): string {
-	return denial.reason.fault === "world" ? (denial.reason.voice ?? def.messages.noResponse) : denial.reason.debug;
+	return denial.reason.fault === "world" ? (denial.reason.reply ?? def.messages.noResponse) : denial.reason.debug;
 }
 
 /** 脸 token：id 在某个提交边界上的呈现词。脸表由该边界的世界即时求值，行文不回读活世界。 */
@@ -739,11 +739,11 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	};
 	const msgs = sim.def.messages;
 	const lines: string[] = [];
-	const said = new Map<number, { changes: string[]; voice: Fact[]; facts: Fact[]; denials: string[] }>();
+	const said = new Map<number, { changes: string[]; reply: Text[]; statements: Text[]; denials: string[] }>();
 	let granted = 0;
 	const flush = (): void => {
-		for (const { changes, voice, facts, denials } of said.values()) {
-			const spoken = [...voice, ...facts];
+		for (const { changes, reply, statements, denials } of said.values()) {
+			const spoken = [...reply, ...statements];
 			if (changes.length || spoken.length) lines.push(`⏱ ${[
 				changes.length ? `(${changes.join("; ")})` : "",
 				spoken.length ? `[${spoken.join("; ")}]` : "",
@@ -763,24 +763,24 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			if (s.origin === "code") continue;
 			const { face, changeLine } = renderer(i);
 			const changes = s.ok ? narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null) : [];
-			const voice = s.ok ? s.voice : renderDenial(sim.def, s.denial);
-			const facts = s.ok ? (s.facts ?? []) : [];
+			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial);
+			const statements = s.ok ? (s.statements ?? []) : [];
 			const tail = [
 				changes.length ? `(${changes.join("; ")})` : "",
-				facts.length ? `[${facts.join("; ")}]` : "",
+				statements.length ? `[${statements.join("; ")}]` : "",
 			].join("");
-			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, face)}${voice !== undefined ? `：${voice}` : ""}${tail}`);
+			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, face)}${reply !== undefined ? `：${reply}` : ""}${tail}`);
 		} else {
 			const { changeLine } = renderer(i);
-			const held = said.get(s.at) ?? { changes: [], voice: [], facts: [], denials: [] };
+			const held = said.get(s.at) ?? { changes: [], reply: [], statements: [], denials: [] };
 			if (s.ok) {
 				held.changes.push(...narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null));
-				if (s.voice !== undefined) held.voice.push(s.voice);
-				if (s.facts?.length) held.facts.push(...s.facts);
+				if (s.reply !== undefined) held.reply.push(s.reply);
+				if (s.statements?.length) held.statements.push(...s.statements);
 			} else {
 				held.denials.push(renderDenial(sim.def, s.denial));
 			}
-			if (held.changes.length || held.voice.length || held.facts.length || held.denials.length) said.set(s.at, held);
+			if (held.changes.length || held.reply.length || held.statements.length || held.denials.length) said.set(s.at, held);
 		}
 	}
 	flush();
@@ -793,7 +793,7 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 
 /** 门内裁决的表态；授予记法则，否决自带裁决点。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; rule: string; voice?: Fact; facts?: Fact[]; ticks?: number }
+	| { ok: true; deltas: Delta[]; rule: string; reply?: Text; statements?: Text[]; ticks?: number }
 	| { ok: false; denial: Denial };
 
 export class Simulation {
@@ -934,7 +934,7 @@ export class Simulation {
 			});
 		if (invalid.length) {
 			const invisible = this.def.messages.invisibleEntity;
-			return { ok: false, denial: { point: { kind: "gate", law: "action.invisible" }, reason: { fault: "world", ...(invisible !== undefined && { voice: invisible }) } } };
+			return { ok: false, denial: { point: { kind: "gate", law: "action.invisible" }, reason: { fault: "world", ...(invisible !== undefined && { reply: invisible }) } } };
 		}
 		for (const r of verb.rules) {
 			const point: Point = { kind: "rule", rule: r.id };
@@ -953,9 +953,9 @@ export class Simulation {
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, reason: { fault: "engine", debug: `${renderPoint(point)}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } } };
 				}
-				return { ok: true, deltas: v.deltas, rule: r.id, ...(v.voice !== undefined && { voice: v.voice }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
+				return { ok: true, deltas: v.deltas, rule: r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, denial: { point: { kind: "rule", rule: r.id, law: v.denial.law }, reason: { fault: "world", ...(v.denial.voice !== undefined && { voice: v.denial.voice }) } } };
+			return { ok: false, denial: { point: { kind: "rule", rule: r.id, law: v.denial.law }, reason: { fault: "world", ...(v.denial.reply !== undefined && { reply: v.denial.reply }) } } };
 		}
 		return { ok: false, denial: { point: { kind: "closure" }, reason: { fault: "world" } } };
 	}
@@ -1046,7 +1046,7 @@ export class Simulation {
 			const cc = this.commitChecked(s0, r.deltas, r.rule);
 			if (!cc.ok)
 				return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: cc.denial, proposedBy: r.rule };
-			return { at, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, rule: r.rule, changes: cc.changes, ...(r.voice !== undefined && { voice: r.voice }), ...(r.facts !== undefined && { facts: r.facts }) };
+			return { at, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, rule: r.rule, changes: cc.changes, ...(r.reply !== undefined && { reply: r.reply }), ...(r.statements !== undefined && { statements: r.statements }) };
 		}
 		return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: r.denial };
 	}
@@ -1071,7 +1071,7 @@ export class Simulation {
 			for (const [name, v] of Object.entries(this.def.verbs)) {
 				if (!v.clock) continue;
 				const c = this.attempt(this.readState(), { verb: name, params: {} }, "clock");
-				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || c.voice !== undefined || !!c.facts?.length) out.push(c);
+				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || c.reply !== undefined || !!c.statements?.length) out.push(c);
 			}
 		}
 		return out;

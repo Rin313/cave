@@ -45,9 +45,9 @@ function isPoint(v: unknown): boolean {
 /** 受众与文本互斥。 */
 function isReason(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
-	const r = v as { fault?: unknown; voice?: unknown; debug?: unknown };
-	if (r.fault === "world") return r.debug === undefined && (r.voice === undefined || typeof r.voice === "string");
-	if (r.fault === "engine") return r.voice === undefined && typeof r.debug === "string";
+	const r = v as { fault?: unknown; reply?: unknown; debug?: unknown };
+	if (r.fault === "world") return r.debug === undefined && (r.reply === undefined || typeof r.reply === "string");
+	if (r.fault === "engine") return r.reply === undefined && typeof r.debug === "string";
 	return false;
 }
 
@@ -72,15 +72,15 @@ function isChange(v: unknown): boolean {
 
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; proposedBy?: unknown };
+	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown; proposedBy?: unknown };
 	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
 	if (c.origin !== "will" && c.origin !== "clock") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
 	if (c.ok === true) {
 		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
-		if (c.voice !== undefined && typeof c.voice !== "string") return false;
-		return c.facts === undefined || (Array.isArray(c.facts) && c.facts.every((f) => typeof f === "string"));
+		if (c.reply !== undefined && typeof c.reply !== "string") return false;
+		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
 	}
 	if (!isDenial(c.denial)) return false;
 	return c.proposedBy === undefined || typeof c.proposedBy === "string";

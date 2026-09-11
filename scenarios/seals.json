@@ -84,10 +84,10 @@
 			]
 		},
 		{
-			"name": "离屏交割：prop 行主语过门——主语出域则变更行静默，知识由 Fact 与回看承接",
+			"name": "离屏交割：prop 行主语过门——主语出域则变更行静默，知识由陈述与回看承接",
 			"steps": [
 				{ "name": "去书房", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true } },
-				{ "name": "三刻：t4 交割在书房外发生——火漆/持者/边行全静默，Fact 照言", "tick": 3, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ [太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewExcludes": ["火漆信·盐引", "火漆信·粮价", "书案"] } }
+				{ "name": "三刻：t4 交割在书房外发生——火漆/持者/边行全静默，陈述照言", "tick": 3, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ [太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewExcludes": ["火漆信·盐引", "火漆信·粮价", "书案"] } }
 			]
 		},
 		{
