@@ -417,7 +417,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
 	const { rows, grants, grantRows, total, truncated, liveness, tickLiveness } = probeDef(def, maxCombos);
-	console.log(`=== 裁决地图（${def.id}）：所指域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
+	console.log(`=== 裁决地图（${gameId}）：所指域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×所指域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
 	for (const [law, c] of liveness) {
 		const stated = c.grant + c.deny;

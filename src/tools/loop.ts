@@ -92,7 +92,7 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
 		appendTranscript(dir, { phase: "start", scene, warnings, usage });
-		console.log(`【${runId}·start】${def.title}`);
+		console.log(`【${runId}·start】${gameId}`);
 		console.log(scene);
 		warnWarnings(warnings);
 		const u = usageLine(usage);

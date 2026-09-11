@@ -83,8 +83,6 @@ const sealsReferable = (world: World, player: string): Set<string> => {
 };
 
 const base: Omit<GameDef, "prompt"> = {
-	id: "seals",
-	title: "统一探针",
 	playerId: "player",
 	face: () => des,
 	recentWindow: 6,

@@ -2,7 +2,7 @@ import type { GameDef } from "../core/sim.ts";
 import { seals } from "./seals.ts";
 
 export const GAMES: Record<string, GameDef> = {
-	[seals.id]: seals,
+	seals,
 };
 
 export function getGame(id: string): GameDef {
