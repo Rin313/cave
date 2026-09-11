@@ -62,7 +62,7 @@ export interface Messages {
 	timePassed: string;
 }
 
-/** 规则铸造的世界腔，进结果视图供叙述跟随。 */
+/** 规则产生的世界腔文本，进结果视图供叙述跟随。 */
 export type Fact = string;
 
 /** 字面类型：边值的值域；边值是字面载荷，端点已是引用。 */
@@ -95,7 +95,7 @@ export interface RelDef {
 	present?: "hidden" | { label: string };
 }
 
-/** 世界腔否决（法则的裁决面）：玩家可见，voice 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
+/** 世界腔否决（法则的具名否决）：玩家可见，voice 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
 export type Deny = { law: string; fault: "world"; voice?: Fact };
 
 /** 裁决点：一次尝试的最终发言者。law 只出现在 rule 上，是作者理由 token（缺省即 rule id），只被呈现与探针消费。 */
@@ -138,11 +138,11 @@ export interface Q<P = Record<string, Value>> {
 	readonly world: World;
 	readonly player: string;
 	readonly params: P;
-	/** 确定性骰子；key 以出处路径限定，重名不共享命运。 */
+	/** 确定性骰子；key 以出处路径限定，不同出处的同名 key 不共享结果。 */
 	roll(key: string, sides: number): number;
 }
 
-/** 授予：deltas 是轨迹，voice 是声，facts 是附加世界腔事实，ticks 覆写价。法则的否决就是世界的否决，恒 world 受众；作者的引擎违约走抛出。 */
+/** 授予：deltas 是变更序列，voice 是答复句，facts 是附加世界腔事实，ticks 覆写价。法则的否决恒 world 受众；作者的引擎违约走抛出。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; voice?: Fact; facts?: Fact[]; ticks?: number }
 	| { ok: false; denial: Deny };
@@ -251,7 +251,7 @@ export type ParamsOf<P extends Record<string, ParamSpec>> = {
 	[K in keyof P as P[K] extends { optional: true } ? K : never]?: ValueOfParam<P[K]>;
 };
 
-/** 指称参数：值是实体 id，过所指门。 */
+/** 指称参数：值是实体 id，过指称门。 */
 export function ref(description?: string): { type: "ref"; description?: string } {
 	return { type: "ref", ...(description !== undefined && { description }) };
 }
@@ -301,7 +301,7 @@ export interface VerbDef {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 不进广告面、不可被 will 提案；仍可由代码直连 apply。 */
+	/** 不进动词面、不可被 will 提案；仍可由代码直连 apply。 */
 	private?: boolean;
 	clock?: boolean;
 	rules: Rule[];
@@ -321,7 +321,7 @@ function matchesParam(spec: ParamSpec, v: unknown): boolean {
 	return matchesScalar(spec.type, v);
 }
 
-/** 内核形态检查（裁决面全集） */
+/** 内核形态检查（动词表全集） */
 function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[] {
 	if (params === null || typeof params !== "object" || Array.isArray(params)) return ["params: must be an object"];
 	const out: string[] = [];
@@ -375,13 +375,12 @@ export interface GameDef {
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
 	/**
-	 * 感知：意志能点名、呈现能显什么，按格求值——所见谓词是全定义（顶点格成员即卡）。
-	 * 指称门与卡白名单读同一个所见集，不存在第二条命名轴：可指名者必在所见集，所见者必可指名。
-	 * 缺省全见；声明即接管全部格（未列格即 false）。钥匙是格：
-	 * 顶点格成员即卡，属性/边格的披露谓词即变更行每一侧的判据（缺席格与在场格同过一门）。
+	 * 披露谓词：顶点格成员即卡，属性/边格的谓词值即变更行每一侧的判据（缺席格与在场格同过一门）。
+	 * 缺省常真（全见），声明即整体替换（无格级缺省回退）；命名在注册表，两轴互不代替。
+	 * 指称门与卡白名单读同一个所见集：可指名者必在所见集，所见者必可指名——对结构化面的定义与闭合。
 	 */
 	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
-	/** 状态视图的派生纹理；无指称声明面。 */
+	/** 状态视图的派生纹理：读世界真相，非指称通道（不产生指称，不改变所见域）。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	invariants?: Invariant[];
 	messages: Messages;
@@ -412,7 +411,7 @@ function isScalarValue(v: unknown): v is Scalar {
 	return typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核；空序列无席位（缺席是唯一的零，空序列不是它的拼写）。 */
+/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核；空序列不是值（表示无只用缺席）。 */
 function isValue(v: unknown): v is Value {
 	return isScalarValue(v) || (Array.isArray(v) && v.length > 0 && v.every(isScalarValue));
 }
@@ -512,7 +511,7 @@ function hasLabel(def: GameDef, prop: string): boolean {
 	return def.props[prop]?.label !== undefined;
 }
 
-/** 有呈现面的属性：有 label，或身份（脸槽，行文取 ~ 形）。 */
+/** 有呈现名的属性：有 label，或身份（脸槽，行文取 ~ 形）。 */
 function presentableProp(def: GameDef, prop: string): boolean {
 	return hasLabel(def, prop) || prop === def.identity;
 }
@@ -558,7 +557,7 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-/** 触发通道，由调用点决定并随步入账：意志（玩家经广告面提案）、时钟（泵逐刻自鸣）、代码（引擎直连 apply）。 */
+/** 来源，由调用点决定并随步入账：意志（玩家经动词面提案）、时钟（泵逐刻自鸣）、代码（引擎直连 apply）。 */
 export type Origin = "will" | "clock" | "code";
 
 /** 提案者：审查上下文用；admit 是以零变更审查整世界（装载终点）。 */
@@ -620,7 +619,7 @@ export function renderDenial(def: GameDef, denial: Denial): string {
 	return denial.reason.fault === "world" ? (denial.reason.voice ?? def.messages.noResponse) : def.messages.noResponse;
 }
 
-/** 原始文本（含引擎 debug）：装载拒绝等非呈现面用。 */
+/** 原始文本（含引擎 debug）：装载拒绝等非呈现用途。 */
 export function denialReasonText(def: GameDef, denial: Denial): string {
 	return denial.reason.fault === "world" ? (denial.reason.voice ?? def.messages.noResponse) : denial.reason.debug;
 }
@@ -681,7 +680,7 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 	return `${name}.${label}: ${val(c.prev, sides.prev, isRefProp(sim.def, c.prop))} → ${val(c.next, sides.next, isRefProp(sim.def, c.prop))}`;
 }
 
-/** 呈现面的变更行：无呈现名的属性与静态隐藏边零泄漏。 */
+/** 可呈现的变更行：无呈现名的属性与静态隐藏边零泄漏。 */
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 	return changes.filter((c) => !(c.cell === "prop" && !presentableProp(def, c.prop)) && !(c.cell === "edge" && hiddenRel(def, c.type)));
 }
@@ -697,7 +696,7 @@ function referentsOf(sim: Simulation, c: Change, face: Face, sides: { prev: bool
 	return out;
 }
 /**
- * 事件流的规范单行渲染（✓/✗/⏱/×n）。可说性由世界即时判据，言默不随消费面改变（刻账目闭合）。
+ * 事件流的规范单行渲染（✓/✗/⏱/×n）。各行是否呈现由世界即时判据，言默不随消费面改变（刻账目闭合）。
  * worldAfter 是 steps 之后的世界，据此逆推每步的提交边界；t 不入变更，渲染前归位。
  */
 export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter: World): string[] {
@@ -1137,7 +1136,7 @@ export class Simulation {
 		}
 	}
 
-	/** 逐变更 prev 校验：记录前值须与重放世界相符；消散行的边可已随 despawn 消散（后态已成立即通过）。 */
+	/** 逐变更 prev 校验：记录前值须与重放世界相符；被 despawn 连带删除的边可已不在（后态已成立即通过）。 */
 	private verifyChange(c: Change): string | null {
 		switch (c.cell) {
 			case "vertex": {

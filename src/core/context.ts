@@ -27,7 +27,7 @@ interface RawTurn {
 	steps?: unknown;
 }
 
-/** 信封粗筛：损坏条目在此离场（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
+/** 信封粗筛：损坏条目在此丢弃（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
 function isPoint(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	const p = v as { kind?: unknown; rule?: unknown; law?: unknown; id?: unknown; check?: unknown; site?: unknown };
@@ -51,7 +51,7 @@ function isReason(v: unknown): boolean {
 	return false;
 }
 
-/** 否决形状：Point + Reason；旧形状（law/fault/kind/notes）在此离场。 */
+/** 否决形状：Point + Reason；旧形状（law/fault/kind/notes）在此弃置。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
 	const d = v as { point?: unknown; reason?: unknown };
@@ -96,7 +96,7 @@ export interface LogEntries {
 	checkpoint?: CheckpointEntry;
 }
 
-/** 信封粗筛：损坏条目在此离场（无 seq 或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
+/** 信封粗筛：损坏条目在此丢弃（无 seq 或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
 function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries {
 	const out: LogEntries = { records: [] };
 	let broken = 0;

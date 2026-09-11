@@ -71,7 +71,7 @@ export class Engine {
 	readonly sim: Simulation;
 	private session: SessionHandle;
 	private readonly recent: RecentEntry[];
-	/** 共享档案态：定稿写点（act 工具尾）与近况窗口的共同源；records 只保留窗口内记录。 */
+	/** 定稿写点（act 工具尾）与近况窗口的共同源；records 只保留窗口内记录。 */
 	private readonly archive: Archive;
 	/** 装载期诊断：损坏纪要截断、档案链断、检查点弃置的显形出口。 */
 	readonly loadWarnings: readonly string[];
@@ -239,7 +239,7 @@ export class Engine {
 	}
 
 	private assertLive(): void {
-		if (this.archive.dead !== null) throw new Error(`引擎已毒化（${this.archive.dead}）：须重启进程由日志对账`);
+		if (this.archive.dead !== null) throw new Error(`引擎状态已不可信（${this.archive.dead}）：须重启进程由日志对账`);
 	}
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
@@ -331,11 +331,11 @@ function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunS
 	try {
 		sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: record.seq, world: sim.snapshot() });
 	} catch (e) {
-		run.warnings.push(`检查点追加失败（缓存迟到，装载对账治愈）：${errorText(e)}`);
+		run.warnings.push(`检查点追加失败（缓存可迟到，由装载对账补上）：${errorText(e)}`);
 	}
 }
 
-/** 宿主面 schema 走 JSON Schema 通道；ref 的 JSON 型是 string。 */
+/** 接口模式走 JSON Schema 通道；ref 的 JSON 型是 string。 */
 type JsonSchema = {
 	type?: string;
 	const?: string;
@@ -348,7 +348,7 @@ type JsonSchema = {
 	minItems?: number;
 };
 
-/** 宿主面由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
+/** 接口模式由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
 function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
 	const scalarSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type === "ref" ? "string" : spec.type, ...(spec.description !== undefined && { description: spec.description }) });
 	const paramSchema = (spec: ParamSpec): JsonSchema => spec.many === true
@@ -394,14 +394,14 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				return { content: [{ type: "text", text: " " }], details: {}, terminate: true };
 			}
 			const proposed = (params.actions ?? []) as Action[];
-			// 形态校验完全托付宿主面（execute 前整批拦截）
+			// 形态校验完全托付接口模式（execute 前整批拦截）
 			run.phase = "narration";
 			const steps: Commit[] = [];
 			let crashed: string | null = null;
 			try {
 				applyBatch(sim, proposed, steps);
 			} catch (e) {
-				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛代谢为可审计回合——已裁决步照常入账
+				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛，已裁决步照常入账
 				crashed = errorText(e);
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}

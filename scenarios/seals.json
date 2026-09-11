@@ -67,7 +67,7 @@
 			"name": "等候：越域由法则拒绝而非改写——世界不代映射器重释意图",
 			"steps": [
 				{ "name": "一刻授予：刻步全静默，聚合归账", "action": { "verb": "wait", "params": { "span": 1 } }, "expect": { "ok": true, "lines": ["✓ 等候(1)：你静静站了一会儿。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
-				{ "name": "缺省一刻：可选参数省略过形态校验（广告面与内核面对可选性判定一致）；落在流言刻，有言成块", "action": { "verb": "wait", "params": {} }, "expect": { "ok": true, "lines": ["✓ 等候：你静静站了一会儿。", "⏱ [你瞥见太守与管家在廊下低语，谈了许久。]"], "state": { "$world.time": 2 } } },
+				{ "name": "缺省一刻：可选参数省略过形态校验（接口模式与内核面对可选性判定一致）；落在流言刻，有言成块", "action": { "verb": "wait", "params": {} }, "expect": { "ok": true, "lines": ["✓ 等候：你静静站了一会儿。", "⏱ [你瞥见太守与管家在廊下低语，谈了许久。]"], "state": { "$world.time": 2 } } },
 				{ "name": "过长：拒绝而非钳到 12，钟不动", "action": { "verb": "wait", "params": { "span": 999 } }, "expect": { "ok": false, "law": "wait.span", "reason": "等不了那么久", "lines": ["✗ 等候(999)：你等不了那么久。"], "state": { "$world.time": 2 } } },
 				{ "name": "半刻：时间以刻计，不静默取整", "action": { "verb": "wait", "params": { "span": 2.5 } }, "expect": { "ok": false, "law": "wait.span", "reason": "时间以刻计", "lines": ["✗ 等候(2.5)：时间以刻计，没有半刻。"], "state": { "$world.time": 2 } } },
 				{ "name": "零刻：不成等候", "action": { "verb": "wait", "params": { "span": 0 } }, "expect": { "ok": false, "law": "wait.span", "reason": "那不算等候", "lines": ["✗ 等候(0)：那不算等候。"], "state": { "$world.time": 2 } } }
@@ -80,7 +80,7 @@
 				{ "name": "第二次：序位 1（同刻不同尝试各别入账）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
 				{ "name": "第三次：序位 2——签变，同刻不再恒同签", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } },
 				{ "name": "第四次：序位 3", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第五次：序位 4（address 含触发类别，故重放可复原）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } }
+				{ "name": "第五次：序位 4（address 含来源，故重放可复原）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } }
 			]
 		},
 		{

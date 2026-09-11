@@ -36,7 +36,7 @@ const isLetter = (q: Q, id: string) => {
 /** 无主语动词的缺省主语：居所链最近宿主。 */
 const host = (q: Q): string => hostOf(q.world, q.player);
 
-/** 强引用宇宙单源于注册表声明（指称模式含数组值）；边是弱引用，随主消散。 */
+/** 强引用关系由属性注册表声明派生（指称模式含数组值）；边是弱引用，随实体删除。 */
 const referenced = (q: Q, id: string): string | null => {
 	for (const e of q.world.entities) {
 		for (const [k, pd] of Object.entries(SEALS_PROPS)) {
