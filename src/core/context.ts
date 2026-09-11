@@ -1,6 +1,6 @@
 // 会话文件保存全量审计：档案是单一追加日志——回合条目（证据，每回合恰一）+ 检查点条目（缓存）。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, audienceOf, denialReasonText, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type Point, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, denialReasonText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
@@ -24,61 +24,6 @@ interface RawTurn {
 	time?: unknown;
 	utterance?: unknown;
 	steps?: unknown;
-}
-
-/** 信封粗筛：损坏条目在此丢弃（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
-function isPoint(v: unknown): v is Point {
-	if (v === null || typeof v !== "object") return false;
-	const p = v as { kind?: unknown; law?: unknown; id?: unknown; fault?: unknown; check?: unknown; site?: unknown };
-	switch (p.kind) {
-		case "rule": return typeof p.law === "string" && p.law !== "";
-		case "gate": return true;
-		case "closure": return true;
-		case "invariant": return typeof p.id === "string" && p.id !== "" && (p.fault === "world" || p.fault === "engine");
-		case "engine": return p.check === "integrity" || p.check === "commit" || p.check === "grant";
-		case "crash": return p.site === "rule" || p.site === "invariant";
-		default: return false;
-	}
-}
-
-/** 否决形状：Point + ⟨text⟩?；engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
-function isDenial(v: unknown): boolean {
-	if (v === null || typeof v !== "object") return false;
-	const d = v as { point?: unknown; text?: unknown; reason?: unknown };
-	if (d.reason !== undefined) return false;
-	if (!isPoint(d.point)) return false;
-	if (d.text !== undefined && typeof d.text !== "string") return false;
-	return audienceOf(d.point) !== "engine" || typeof d.text === "string";
-}
-
-/** 变更形状：投影与重放共用；顶点记录恰一侧为 ⊥（生/灭）。 */
-function isChange(v: unknown): boolean {
-	if (v === null || typeof v !== "object") return false;
-	const c = v as { cell?: unknown; entity?: unknown; prop?: unknown; from?: unknown; to?: unknown; type?: unknown; prev?: unknown; next?: unknown };
-	switch (c.cell) {
-		case "vertex": return "prev" in c && "next" in c && (c.prev === null) !== (c.next === null);
-		case "prop": return typeof c.entity === "string" && typeof c.prop === "string" && "prev" in c && "next" in c;
-		case "edge": return typeof c.from === "string" && typeof c.to === "string" && typeof c.type === "string" && "prev" in c && "next" in c;
-		default: return false;
-	}
-}
-
-/** 步形状：授予行 law 可缺（law 引入前的记录）并由 completeLaw 补全，有则须非空；否决的 rule 同样可缺。 */
-function isCommit(s: unknown): boolean {
-	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
-	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
-	if (c.origin !== "will" && c.origin !== "clock") return false;
-	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
-	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
-	if (c.ok === true) {
-		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
-		if (c.law !== undefined && (typeof c.law !== "string" || c.law === "")) return false;
-		if (c.reply !== undefined && typeof c.reply !== "string") return false;
-		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
-	}
-	if (c.rule !== undefined && (typeof c.rule !== "string" || c.rule === "")) return false;
-	return isDenial(c.denial);
 }
 
 /** 授予行的 law 缺省即守卫 id；law 引入前的记录缺此字段，装载时按缺省补全——可回算载荷同坐标断言之律。 */

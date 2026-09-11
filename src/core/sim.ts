@@ -330,6 +330,27 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 	return out;
 }
 
+/** 判定数据面：verdict 中会进记录的字段（作者可影响的部分）——违约由 engine(grant) 承接。 */
+function verdictProblems(v: Verdict, clock: boolean): string[] {
+	const out: string[] = [];
+	if (v.ticks !== undefined) {
+		if (clock) out.push("常驻规则不得延伸时间");
+		else if (!Number.isInteger(v.ticks) || v.ticks < 0) out.push(`ticks 须为非负整数刻数，得到 ${String(v.ticks)}`);
+	}
+	if (v.ok) {
+		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
+		if (!Array.isArray(v.deltas)) out.push("deltas 须为序列");
+		if (v.reply !== undefined && typeof v.reply !== "string") out.push("reply 须为字符串");
+		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string"))) out.push("statements 须为字符串序列");
+		return out;
+	}
+	const denial = v.denial as { point?: { law?: unknown }; text?: unknown } | undefined;
+	if (!denial || typeof denial !== "object") return [...out, "否决须携 denial"];
+	if (typeof denial.point?.law !== "string" || denial.point.law === "") out.push("否决的 law 须为非空字符串");
+	if (denial.text !== undefined && typeof denial.text !== "string") out.push("否决的 text 须为字符串");
+	return out;
+}
+
 /** 近况窗口内一条回合的呈现切片 */
 export interface RecentEntry {
 	time: number;
@@ -561,6 +582,61 @@ export interface Resolution {
 	elapsed: Commit[];
 }
 
+/** 记录形状：Point/Denial/Change/Commit 的运行时值域——提交路径（产出）与装载路径（接受）共用同一判据。 */
+function isPoint(v: unknown): v is Point {
+	if (v === null || typeof v !== "object") return false;
+	const p = v as { kind?: unknown; law?: unknown; id?: unknown; fault?: unknown; check?: unknown; site?: unknown };
+	switch (p.kind) {
+		case "rule": return typeof p.law === "string" && p.law !== "";
+		case "gate": return true;
+		case "closure": return true;
+		case "invariant": return typeof p.id === "string" && p.id !== "" && (p.fault === "world" || p.fault === "engine");
+		case "engine": return p.check === "integrity" || p.check === "commit" || p.check === "grant";
+		case "crash": return p.site === "rule" || p.site === "invariant";
+		default: return false;
+	}
+}
+
+/** 否决形状：Point + ⟨text⟩?；engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
+function isDenial(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	const d = v as { point?: unknown; text?: unknown; reason?: unknown };
+	if (d.reason !== undefined) return false;
+	if (!isPoint(d.point)) return false;
+	if (d.text !== undefined && typeof d.text !== "string") return false;
+	return audienceOf(d.point) !== "engine" || typeof d.text === "string";
+}
+
+/** 变更形状：投影与重放共用；顶点记录恰一侧为 ⊥（生/灭）。 */
+function isChange(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	const c = v as { cell?: unknown; entity?: unknown; prop?: unknown; from?: unknown; to?: unknown; type?: unknown; prev?: unknown; next?: unknown };
+	switch (c.cell) {
+		case "vertex": return "prev" in c && "next" in c && (c.prev === null) !== (c.next === null);
+		case "prop": return typeof c.entity === "string" && typeof c.prop === "string" && "prev" in c && "next" in c;
+		case "edge": return typeof c.from === "string" && typeof c.to === "string" && typeof c.type === "string" && "prev" in c && "next" in c;
+		default: return false;
+	}
+}
+
+/** 步形状：授予行 law 可缺（law 引入前的记录），有则须非空；否决的 rule 同样可缺。 */
+export function isCommit(s: unknown): boolean {
+	if (s === null || typeof s !== "object") return false;
+	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
+	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
+	if (c.origin !== "will" && c.origin !== "clock") return false;
+	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
+	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
+	if (c.ok === true) {
+		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
+		if (c.law !== undefined && (typeof c.law !== "string" || c.law === "")) return false;
+		if (c.reply !== undefined && typeof c.reply !== "string") return false;
+		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
+	}
+	if (c.rule !== undefined && (typeof c.rule !== "string" || c.rule === "")) return false;
+	return isDenial(c.denial);
+}
+
 /** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟。 */
 export interface ChronicleEntry {
 	seq: number;
@@ -771,15 +847,15 @@ export class Simulation {
 	readonly world: World;
 	/** 常驻规则：id → 规则链；每刻按声明序由泵调用。 */
 	private readonly ticks: Map<string, readonly Rule[]>;
-	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位。 */
-	private attemptAt = -1;
-	private readonly attemptSeq = new Map<string, number>();
+	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位；peek 纯读，mark 只在提交点。 */
+	private readonly attemptSeq = new Map<number, Map<string, number>>();
 
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
 		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
 		const invariantIds = new Set<string>();
 		for (const inv of def.invariants ?? []) {
+			if (typeof inv.id !== "string" || inv.id === "") throw new Error("不变式 id 须为非空字符串");
 			if (invariantIds.has(inv.id)) throw new Error(`不变式 id 重复：${inv.id}`);
 			invariantIds.add(inv.id);
 		}
@@ -787,6 +863,7 @@ export class Simulation {
 			if (!Number.isInteger(v.cost) || v.cost < 0) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
 			const ruleIds = new Set<string>();
 			for (const r of v.rules) {
+				if (typeof r.id !== "string" || r.id === "") throw new Error(`动词 ${name} 的规则 id 须为非空字符串`);
 				if (ruleIds.has(r.id)) throw new Error(`动词 ${name} 的规则 id 重复：${r.id}`);
 				ruleIds.add(r.id);
 			}
@@ -800,6 +877,7 @@ export class Simulation {
 			if (ticks.has(t.id)) throw new Error(`常驻规则 id 重复：${t.id}`);
 			const ruleIds = new Set<string>();
 			for (const r of t.rules) {
+				if (typeof r.id !== "string" || r.id === "") throw new Error(`常驻规则 ${t.id} 的规则 id 须为非空字符串`);
 				if (ruleIds.has(r.id)) throw new Error(`常驻规则 ${t.id} 的规则 id 重复：${r.id}`);
 				ruleIds.add(r.id);
 			}
@@ -945,10 +1023,8 @@ export class Simulation {
 				return { ok: false, rule: r.id, denial: { point: { kind: "crash", site: "rule" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
-			if (v.ticks !== undefined) {
-				if (clock) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 常驻规则不得延伸时间` } };
-				if (!Number.isInteger(v.ticks) || v.ticks < 0) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
-			}
+			const problems = verdictProblems(v, clock);
+			if (problems.length) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
 			if (v.ok) {
 				return { ok: true, deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
@@ -1023,6 +1099,7 @@ export class Simulation {
 			// 序位随账目一同提交：apply 失败（钩子/投影崩溃）时世界回滚，未入账的尝试不得移动地址
 			this.markAttempt(res.step.at, res.step.origin, res.step.action.verb);
 			for (const c of res.elapsed) this.markAttempt(c.at, c.origin, c.action.verb);
+			this.pruneAttempts();
 			return deepFreeze(res);
 		} catch (e) {
 			this.restore(s0);
@@ -1055,29 +1132,43 @@ export class Simulation {
 		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
 		const gate = this.boundary(s0).referable;
 		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, clock);
+		let step: Commit;
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
-			if (!cc.ok)
-				return { at, origin, action, price, ok: false, rule: r.rule, denial: cc.denial };
-			// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
-			const reply = clock ? undefined : r.reply;
-			const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-			return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+			if (!cc.ok) {
+				step = { at, origin, action, price, ok: false, rule: r.rule, denial: cc.denial };
+			} else {
+				// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
+				const reply = clock ? undefined : r.reply;
+				const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
+				step = { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+			}
+		} else {
+			step = { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 		}
-		return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
+		// 绊线：提交产出必落在装载域内（与装载路径同一判据）
+		if (!isCommit(step)) throw new Error(`内核缺陷：提交产出的记录被装载判据拒绝 ${JSON.stringify(step)}`);
+		return step;
 	}
 
-	/** 取序位不消耗；仅当步确定入账才 markAttempt——默与崩溃不移动任何地址。 */
+	/** 取序位是纯读，不移动任何状态；仅当步确定入账才 markAttempt——默与崩溃不消耗序位。 */
 	private peekAttempt(at: number, origin: Origin, verb: string): number {
-		if (at !== this.attemptAt) {
-			this.attemptAt = at;
-			this.attemptSeq.clear();
-		}
-		return this.attemptSeq.get(`${origin}\u0000${verb}`) ?? 0;
+		return this.attemptSeq.get(at)?.get(`${origin}\u0000${verb}`) ?? 0;
 	}
 
 	private markAttempt(at: number, origin: Origin, verb: string): void {
-		this.attemptSeq.set(`${origin}\u0000${verb}`, this.peekAttempt(at, origin, verb) + 1);
+		let seq = this.attemptSeq.get(at);
+		if (seq === undefined) {
+			seq = new Map();
+			this.attemptSeq.set(at, seq);
+		}
+		const key = `${origin}\u0000${verb}`;
+		seq.set(key, (seq.get(key) ?? 0) + 1);
+	}
+
+	/** 成功提交后剪枝：跨成功单元时间不减，at < world.time 的计数不可能再被查询；at = world.time 须留（同刻的 price=0 回合复用）。 */
+	private pruneAttempts(): void {
+		for (const at of this.attemptSeq.keys()) if (at < this.world.time) this.attemptSeq.delete(at);
 	}
 
 	private pump(price: number): Commit[] {
@@ -1112,6 +1203,7 @@ export class Simulation {
 	/** 检查点已含其后果的回合仍须按账本复原点数：世界的重放可以跳过，序位的演进不可以（否则续掷与连续会话分叉）。 */
 	seedAttempts(record: ChronicleEntry): void {
 		for (const step of record.steps) this.markAttempt(step.at, step.origin, step.action.verb);
+		this.pruneAttempts();
 	}
 
 	/** 钟算术全段：首步为 will；后一 will 步 at = 前一 will 步 at + 前一 price；其间 clock 步 price 恒 0、at 落在 (前一 will 步 at, 前一 will 步 at + 前一 price] 内非降。 */
@@ -1143,14 +1235,8 @@ export class Simulation {
 	/** 重放：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审。链断回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
-		const seqAt = this.attemptAt;
-		const seqMark = new Map(this.attemptSeq);
 		const fail = (reason: string): string => {
 			this.restore(s0);
-			// 未入账记录的序位随世界一并回滚：地址只由存活账本前缀决定
-			this.attemptAt = seqAt;
-			this.attemptSeq.clear();
-			for (const [key, n] of seqMark) this.attemptSeq.set(key, n);
 			return `seq${record.seq} ${reason}`;
 		};
 		try {
@@ -1161,7 +1247,6 @@ export class Simulation {
 			const span = this.clockSpanProblem(record);
 			if (span) return fail(span);
 			for (const step of record.steps) {
-				this.markAttempt(step.at, step.origin, step.action.verb);
 				if (!step.ok) continue;
 				for (const c of step.changes) {
 					const broken = this.verifyChange(c);
@@ -1173,6 +1258,9 @@ export class Simulation {
 			this.world.time = record.time;
 			const broken = integrityProblems(this.def, this.readState());
 			if (broken) return fail(broken);
+			// 序位只在整条记录通过后推进：失败路径没有非世界状态需要回滚
+			for (const step of record.steps) this.markAttempt(step.at, step.origin, step.action.verb);
+			this.pruneAttempts();
 			return null;
 		} catch (e) {
 			return fail(errorText(e));
