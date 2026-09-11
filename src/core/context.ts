@@ -1,7 +1,7 @@
 // 会话文件保存全量审计。
 // 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, denialReasonText, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, audienceOf, denialReasonText, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type Point, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
@@ -28,34 +28,28 @@ interface RawTurn {
 }
 
 /** 信封粗筛：损坏条目在此丢弃（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
-function isPoint(v: unknown): boolean {
+function isPoint(v: unknown): v is Point {
 	if (v === null || typeof v !== "object") return false;
-	const p = v as { kind?: unknown; rule?: unknown; law?: unknown; id?: unknown; check?: unknown; site?: unknown };
+	const p = v as { kind?: unknown; law?: unknown; id?: unknown; fault?: unknown; check?: unknown; site?: unknown };
 	switch (p.kind) {
-		case "rule": return typeof p.rule === "string" && p.rule !== "" && (p.law === undefined || typeof p.law === "string");
+		case "rule": return typeof p.law === "string" && p.law !== "";
 		case "gate": return p.law === "action.invisible";
 		case "closure": return true;
-		case "invariant": return typeof p.id === "string" && p.id !== "";
+		case "invariant": return typeof p.id === "string" && p.id !== "" && (p.fault === "world" || p.fault === "engine");
 		case "engine": return p.check === "integrity" || p.check === "commit" || p.check === "grant";
 		case "crash": return p.site === "rule" || p.site === "invariant";
 		default: return false;
 	}
 }
 
-/** 受众与文本互斥。 */
-function isReason(v: unknown): boolean {
-	if (v === null || typeof v !== "object") return false;
-	const r = v as { fault?: unknown; reply?: unknown; debug?: unknown };
-	if (r.fault === "world") return r.debug === undefined && (r.reply === undefined || typeof r.reply === "string");
-	if (r.fault === "engine") return r.reply === undefined && typeof r.debug === "string";
-	return false;
-}
-
-/** 否决形状：Point + Reason；旧形状（law/fault/kind/notes）在此弃置。 */
+/** 否决形状：Point + ⟨text⟩?；受众是点的全函数，engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
-	const d = v as { point?: unknown; reason?: unknown };
-	return isPoint(d.point) && isReason(d.reason);
+	const d = v as { point?: unknown; text?: unknown; reason?: unknown };
+	if (d.reason !== undefined) return false;
+	if (!isPoint(d.point)) return false;
+	if (d.text !== undefined && typeof d.text !== "string") return false;
+	return audienceOf(d.point) !== "engine" || typeof d.text === "string";
 }
 
 /** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。顶点记录恰一侧为 ⊥（生/灭），不另存 id。 */
