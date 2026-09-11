@@ -424,16 +424,60 @@ export interface RecentEntry {
 	moves: string[];
 }
 
+/** 近况的公共数据面：context 钩子与两种回合提示共用。 */
 export interface PromptKit {
 	/** 近况 */
 	recent: RecentEntry[];
-	/** 状态视图 */
-	view?: string;
-	utterance?: string;
+}
+
+/** 意志回合提示数据：状态视图 + 话语 + 近况。 */
+export interface TurnKit extends PromptKit {
+	/** 状态视图（digest） */
+	view: string;
+	/** 玩家话语（verbatim） */
+	utterance: string;
+}
+
+/** 渲染调用提示数据：状态视图 + 事件骨架 + 指令 + 近况。 */
+export interface NarrateKit extends PromptKit {
+	view: string;
 	/** 事件骨架行 */
-	events?: string[];
+	events: string[];
 	/** 渲染指令 */
-	instruction?: string;
+	instruction: string;
+}
+
+/** 近况缺省排版：回合坐标、话语与事件行；无事件即显式标记，沉默可读。 */
+function recentBlock(recent: readonly RecentEntry[]): string {
+	if (recent.length === 0) return "";
+	const lines = ["[Recent turns, oldest last]"];
+	for (const r of recent) {
+		lines.push(`- t${r.time} ${r.utterance}`);
+		if (r.moves.length === 0) lines.push("  no visible events");
+		else for (const move of r.moves) lines.push(`  ${move}`);
+	}
+	return lines.join("\n");
+}
+
+/** turn 缺省：只有数据通道；表达纪律与回合协议归 prompt.system 与工具描述。 */
+export function defaultTurnPrompt(kit: TurnKit): string {
+	const blocks: string[] = [];
+	const recent = recentBlock(kit.recent);
+	if (recent !== "") blocks.push(recent);
+	blocks.push(`[World state]\n${kit.view}`);
+	blocks.push(`Player says: ${kit.utterance}`);
+	return blocks.join("\n\n");
+}
+
+/** narrate 缺省：渲染调用无动作窗口，act 工具仍挂载而调用被吞，故标记必须显式。 */
+export function defaultNarratePrompt(kit: NarrateKit): string {
+	const blocks: string[] = ["[Rendering service] This call has no action window; do not call act; write the prose text directly."];
+	const recent = recentBlock(kit.recent);
+	if (recent !== "") blocks.push(recent);
+	blocks.push(`[World state]\n${kit.view}`);
+	if (kit.events.length > 0) blocks.push(`[Recent adjudication]\n${kit.events.join("\n")}`);
+	blocks.push(kit.instruction);
+	return blocks.join("\n\n");
 }
 
 export interface GameDef {
@@ -467,8 +511,10 @@ export interface GameDef {
 		system: string;
 		/** act 工具描述：base = 协议约束 + 派生动词目录（catalog）；可委托或覆盖（本地化、分区、删减）。 */
 		tool?: (base: string) => string;
-		turn?: (kit: PromptKit & { view: string; utterance: string }) => string;
-		narrate?: (kit: PromptKit & { view: string; events: string[]; instruction: string }) => string;
+		/** 意志回合提示：base = 缺省数据排版；可委托或整段覆盖。 */
+		turn?: (kit: TurnKit, base: (kit: TurnKit) => string) => string;
+		/** 渲染调用提示：base = 缺省数据排版；可委托或整段覆盖。 */
+		narrate?: (kit: NarrateKit, base: (kit: NarrateKit) => string) => string;
 		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];
 	};
 }

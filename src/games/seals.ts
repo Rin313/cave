@@ -1,4 +1,4 @@
-import type { Addr, Delta, Entity, FieldView, GameDef, PromptKit, Q, SlotDef, Text, ViewValue, World } from "../core/sim.ts";
+import type { Addr, Delta, Entity, FieldView, GameDef, NarrateKit, PromptKit, Q, SlotDef, Text, TurnKit, ViewValue, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant, param, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
@@ -434,14 +434,14 @@ const sealsRecentLines = (kit: PromptKit): string[] => {
 	return lines;
 };
 
-const sealsTurnPrompt = (kit: PromptKit & { view: string; utterance: string }): string => {
+const sealsTurnPrompt = (kit: TurnKit): string => {
 	const lines = sealsRecentLines(kit);
 	if (lines.length) lines.push("");
 	lines.push(stateHeader, kit.view, "", `Player says: ${kit.utterance}`, "", "Parse the intent and call the act tool to submit an action proposal; after act returns the world's adjudication results, write the turn as literary prose for the player based on them.");
 	return lines.join("\n");
 };
 
-const sealsNarratePrompt = (kit: PromptKit & { view: string; events: string[]; instruction: string }): string => {
+const sealsNarratePrompt = (kit: NarrateKit): string => {
 	const lines = sealsRecentLines(kit);
 	if (lines.length) lines.push("");
 	lines.push("[Rendering service] This call has no action window; do not call act; write the prose text directly.", "", stateHeader, kit.view, "", ...kit.events, "", kit.instruction);

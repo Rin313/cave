@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
-import { Simulation, catalog, deepFreeze, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type PromptKit, type RecentEntry, type Speech, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -189,9 +189,10 @@ export class Engine {
 	async act(action: { utterance: string }): Promise<ActOutcome> {
 		this.assertLive();
 		this.beginRun("mapping", action.utterance);
-		const kit: PromptKit & { view: string; utterance: string } = { view: this.sim.digest(), utterance: verbatim(action.utterance), recent: this.recent };
+		const kit: TurnKit = { view: this.sim.digest(), utterance: verbatim(action.utterance), recent: this.recent };
 		try {
-			await this.session.prompt(this.sim.def.prompt?.turn?.(kit) ?? kit.utterance);
+			const prompt = this.sim.def.prompt;
+			await this.session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
 		} catch (e) {
 			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
 			if (this.run.phase === "mapping") throw e;
@@ -234,8 +235,9 @@ export class Engine {
 	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
 		this.assertLive();
 		this.beginRun("narration");
-		const kit: PromptKit & { view: string; events: string[]; instruction: string } = { view: this.sim.digest(), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
-		await this.session.prompt(this.sim.def.prompt?.narrate?.(kit) ?? kit.instruction);
+		const kit: NarrateKit = { view: this.sim.digest(), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
+		const prompt = this.sim.def.prompt;
+		await this.session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.collectUsage() };
 	}
 
@@ -282,6 +284,13 @@ export class Engine {
 	dispose(): void {
 		this.session.dispose();
 	}
+}
+
+/** 提示词解析：钩子经所属对象调用（保住 this），缺省实现 base 可委托；返回值须为非空字符串。 */
+function promptText(name: string, render: () => string): string {
+	const text = render();
+	if (typeof text !== "string" || text.trim() === "") throw new Error(`${name} 须返回非空字符串`);
+	return text;
 }
 
 function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): InlineExtension {
