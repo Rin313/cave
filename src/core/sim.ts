@@ -501,7 +501,7 @@ export interface GameDef {
 	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
 	/** 可指称谓词：指称门的域。披露缺省（顶点格 perceives）作为第三参数传入；缺省即披露。 */
 	referable?: (world: World, player: string, base: (e: Entity) => boolean) => (e: Entity) => boolean;
-	/** 状态视图：收冻结真相、闭合基座与该边界的格视图（命名、披露域、脸表）；返回任意 JSON，缺省即基座；增补部分在闭包之外。 */
+	/** 状态视图：收冻结真相、闭合基座与该边界的格视图（命名、披露谓词与可见/可指称/已知域）；返回任意 JSON，缺省即基座；增补部分在闭包之外。 */
 	view?: (world: World, player: string, base: ViewBase, field: FieldView) => ViewValue;
 	invariants?: Invariant[];
 	/** 引擎文本解析：收场合与缺省实现 base，声明即接管总函数；返回值须为非空字符串。只被呈现消费。 */
@@ -639,21 +639,20 @@ export type Handle = {
 	name: string;
 };
 
-/** 一个提交边界的求值：披露谓词、可见/可指称/已知域、脸表与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
+/** 一个提交边界的求值：披露谓词、可见/可指称/已知域与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
 export interface FieldView {
 	within: (cell: Addr) => boolean;
 	visible: Set<string>;
 	referable: Set<string>;
 	known: Set<string>;
-	faces: Map<string, string>;
 	name: (cell: Addr) => string | null;
 }
 
-/** 闭合后的状态视图基座：卡、句柄、边（名字、披露与指称闭包同时成立）；作者视图钩子的缺省值与素材。 */
+/** 闭合后的状态视图基座：卡、句柄、边（名字、披露与指称闭包同时成立；边名即呈现 token，不携 τ）；作者视图钩子的缺省值与素材。 */
 export type ViewBase = {
 	time: number;
 	entities: Card[];
-	relations: { from: string; to: string; type: string; value: Value }[];
+	relations: { from: string; to: string; name: string; value: Value }[];
 	known?: Handle[];
 };
 
@@ -811,11 +810,12 @@ export function denialReasonText(denial: Denial): string {
 	return denial.text ?? "";
 }
 
-/** 脸 token：id 在某个提交边界上的呈现词。脸表由该边界的世界即时求值，行文不回读活世界。 */
+/** 脸 token：id 在某个提交边界上的呈现词。脸由该边界的命名在已知域上即时求值，行文不回读活世界。 */
 type Face = (id: string) => string;
 
-function faceOf(faces: ReadonlyMap<string, string>): Face {
-	return (id) => faces.get(id) ?? id;
+/** 域外不触命名（回落 id 只是指称句柄的底），故未知者的名字不经任何行文泄漏。 */
+function faceAt(field: FieldView, id: string): string {
+	return field.known.has(id) ? field.name({ cell: "vertex", id }) ?? id : id;
 }
 
 function renderValue(face: Face, v: Payload, isRef: boolean): { text: string; ids: string[] } {
@@ -936,7 +936,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			befores[i] = w;
 		}
 	}
-	/** 一步的渲染器：脸表、披露谓词与改名行都由该步的提交边界即时求值，行文不回读活世界。 */
+	/** 一步的渲染器：脸、披露谓词与改名行都由该步的提交边界即时求值，行文不回读活世界。 */
 	const renderer = (i: number): { face: Face; renames: string[]; changeLine: (c: Change) => string | null } => {
 		const before = befores[i]!;
 		const after = afters[i]!;
@@ -944,14 +944,16 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		after.time = steps[i]!.at;
 		const b = sim.fieldView(before);
 		const a = sim.fieldView(after);
-		const faces = new Map<string, string>([...b.faces, ...a.faces]);
-		const face = faceOf(faces);
-		const field = new Set(faces.keys());
+		// 跨边界脸查询：两侧已知域之并，域内取顶点 token（后态优先），域外不触命名
+		const face = (id: string): string => faceAt(a.known.has(id) ? a : b, id);
+		const field = new Set([...b.known, ...a.known]);
 		// 改名是投影：一步内顶点 token 变化且两端皆在已知域（才有名可换），不为源属性的无名所滤
 		const renames: string[] = [];
-		for (const [id, name] of a.faces) {
-			const prev = b.faces.get(id);
-			if (prev !== undefined && prev !== name) renames.push(`~ ${prev} → ${name}`);
+		for (const id of a.known) {
+			if (!b.known.has(id)) continue;
+			const prev = b.name({ cell: "vertex", id });
+			const next = a.name({ cell: "vertex", id });
+			if (prev !== null && next !== null && prev !== next) renames.push(`~ ${prev} → ${next}`);
 		}
 		const cellOf = (c: Change): Addr => (c.cell === "vertex" ? { cell: "vertex", id: c.next === null ? c.prev.id : c.next.id } : c);
 		// 每侧可显示 ⇔ 该边界对变更格有名且披露（缺席格与在场格同过一门）
@@ -1140,16 +1142,9 @@ export class Simulation {
 		};
 	}
 
-	/** 提交边界的求值：披露＋三个域＋脸表与格命名；脸表覆盖已知域，由世界即时求值。 */
+	/** 提交边界的求值：披露＋三个域＋格命名；脸由命名在已知域上即时求值，不物化。 */
 	fieldView(world: World = this.readState()): FieldView {
-		const base = this.boundary(world);
-		const name = this.naming(world);
-		const faces = new Map<string, string>();
-		for (const id of base.known) {
-			const token = name({ cell: "vertex", id });
-			faces.set(id, token ?? id);
-		}
-		return { ...base, faces, name };
+		return { ...this.boundary(world), name: this.naming(world) };
 	}
 
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
@@ -1467,15 +1462,15 @@ export class Simulation {
 
 	/** 闭合基座：可见者出卡，可指称而不可见者出句柄（known）；关系过名字、披露与闭包（H）。 */
 	private viewBase(w: World, field: FieldView): ViewBase {
-		const entities = w.entities.filter((e) => field.visible.has(e.id)).map((e) => this.cardOf(e, field, field.faces.get(e.id)!));
-		const known = w.entities.filter((e) => !field.visible.has(e.id) && field.referable.has(e.id)).map((e): Handle => ({ id: e.id, name: field.faces.get(e.id)! }));
+		const entities = w.entities.filter((e) => field.visible.has(e.id)).map((e) => this.cardOf(e, field, faceAt(field, e.id)));
+		const known = w.entities.filter((e) => !field.visible.has(e.id) && field.referable.has(e.id)).map((e): Handle => ({ id: e.id, name: faceAt(field, e.id) }));
 		const relations = w.relations
 			.filter((r) => {
 				const cell: EdgeAddr = { cell: "edge", from: r.from, to: r.to, type: r.type };
 				const rd = this.def.relTypes?.[r.type];
 				return field.name(cell) !== null && field.known.has(r.from) && field.known.has(r.to) && field.within(cell) && (rd?.type !== "ref" || valueRefsWithin(r.value, field.known));
 			})
-			.map((r) => ({ from: r.from, to: r.to, type: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
+			.map((r) => ({ from: r.from, to: r.to, name: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
 		const out: ViewBase = { time: w.time, relations, entities };
 		if (known.length) out.known = known;
 		return out;
@@ -1519,7 +1514,7 @@ export class Simulation {
 		const emit = (e: Entity): void => {
 			if (added.has(e.id)) return;
 			added.add(e.id);
-			out.push(after.visible.has(e.id) ? this.cardOf(e, after, after.faces.get(e.id)!) : { id: e.id, name: after.faces.get(e.id)! });
+			out.push(after.visible.has(e.id) ? this.cardOf(e, after, faceAt(after, e.id)) : { id: e.id, name: faceAt(after, e.id) });
 		};
 		for (const e of w.entities) if (after.visible.has(e.id) && !before.visible.has(e.id)) emit(e);
 		for (const e of w.entities) if (after.known.has(e.id) && !before.known.has(e.id)) emit(e);
