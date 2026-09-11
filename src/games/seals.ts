@@ -1,15 +1,15 @@
-import type { Addr, Delta, Entity, FieldView, GameDef, PropDef, PromptKit, Q, Text, ViewValue, World } from "../core/sim.ts";
+import type { Addr, Delta, Entity, FieldView, GameDef, PromptKit, Q, SlotDef, Text, ViewValue, World } from "../core/sim.ts";
 import { D, defineVerb, deny, entity, grant, param, refParamsOf, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
-const SEALS_PROPS: Record<string, PropDef> = {
+const SEALS_PROPS: Record<string, SlotDef> = {
 	name: { type: "string" },
 	kind: { type: "string", label: "类别" },
-	in: { type: "ref", label: "持者" },
+	in: { type: "ref", strong: true, label: "持者" },
 	space: { type: "boolean", label: "场景" },
 	seal: { type: "boolean", label: "火漆" },
-	sender: { type: "ref", label: "寄信人" },
-	recipient: { type: "ref", label: "收信人" },
+	sender: { type: "ref", strong: true, label: "寄信人" },
+	recipient: { type: "ref", strong: true, label: "收信人" },
 	content: { type: "string", label: "信文" },
 	introduced: { type: "boolean" },
 	vessel: { type: "boolean" },

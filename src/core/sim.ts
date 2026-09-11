@@ -83,30 +83,21 @@ export type Text = string;
 /** 字面类型：边值的值域；边值是字面载荷，端点已是引用。 */
 export type LitType = "string" | "number" | "boolean";
 
-/** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称（值位指称只注册在属性上）。 */
+/** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称。 */
 export type SlotType = LitType | "ref";
 
-/** 属性声明：type 值域，many 重数（缺省 one），label 呈现名（缺席或 null 即内部变量）。ref 生命周期：缺省强（悬空由 integrity 拒绝），false 即弱（随目标删除级联删格）。 */
-export interface PropDef {
-	type: SlotType;
+/** 属性与边载荷共用的槽声明面：值域 × 重数 × 呈现名。 */
+interface SlotCommon {
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: true;
-	/** 呈现名；缺席或 null 即无名，非空串即该名。 */
+	/** 呈现名；缺席或 null 即该表缺省（属性无名、边 τ），非空串即该名。 */
 	label?: string | null;
-	/** ref 载荷的生命周期：缺省强（须先行解引用，悬空由 integrity 拒绝）；false 即弱（随目标删除级联删格）。 */
-	strong?: boolean;
 }
 
-/** 边类型注册：值域契约 × 生命周期 × 呈现。未注册即开口 token（字面、无契约、恒以 τ 为名）。label：缺席即 token，null 即无名，非空串即改名。 */
-export interface RelDef {
-	type: SlotType;
-	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
-	many?: true;
-	/** 呈现名；缺席即 token（τ），null 即无名，非空串即改名。 */
-	label?: string | null;
-	/** ref 载荷的生命周期：缺省弱（随目标删除级联删边）；true 即强（须先行解引用，悬空由 integrity 拒绝）。 */
-	strong?: boolean;
-}
+/** 注册槽：字面值域无生命周期；ref 的 strong 必填——true 强（悬空由 integrity 拒绝），false 弱（随目标删除级联移除引用，值空即删格）。 */
+export type SlotDef =
+	| (SlotCommon & { type: LitType })
+	| (SlotCommon & { type: "ref"; strong: boolean });
 
 /** 裁决点。rule 的 law 只被呈现与探针消费；gate/closure 无载荷，呈现身份由 lawOf 产生。 */
 export type Point =
@@ -398,9 +389,9 @@ export interface GameDef {
 	verbs: Record<string, VerbDef>;
 	world: World;
 	/** 属性注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册键即字面（无契约、无缺省名），词法纪律归作者。 */
-	props?: Record<string, PropDef>;
+	props?: Record<string, SlotDef>;
 	/** 边类型注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
-	relTypes?: Record<string, RelDef>;
+	relTypes?: Record<string, SlotDef>;
 	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
 	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
@@ -468,6 +459,21 @@ const got = (v: Payload): string => {
 	return typeof v;
 };
 
+/** 注册槽的值契约：重数与值域；ref 追加在世。返回问题描述（不含位置前缀）。 */
+function slotValueProblem(d: SlotDef, v: Value, ids: ReadonlySet<string>): string | null {
+	const many = d.many === true;
+	if (Array.isArray(v) !== many) return `expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
+	for (const x of Array.isArray(v) ? v : [v]) {
+		if (d.type === "ref") {
+			if (typeof x !== "string") return `expects id reference, got ${got(x)}`;
+			if (!ids.has(x)) return `-> missing entity ${x}`;
+			continue;
+		}
+		if (typeof x !== d.type) return `expects ${d.type}, got ${got(x)}`;
+	}
+	return null;
+}
+
 /** 存储层 integrity：引擎自检，恒 engine 受众。 */
 function integrityProblems(def: GameDef, world: World): string | null {
 	if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
@@ -493,16 +499,8 @@ function integrityProblems(def: GameDef, world: World): string | null {
 			if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`;
 			const pd = def.props?.[p];
 			if (pd === undefined) continue;
-			const many = pd.many === true;
-			if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
-			for (const x of Array.isArray(v) ? v : [v]) {
-				if (pd.type === "ref") {
-					if (typeof x !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(x)}`;
-					if (!ids.has(x)) return `integrity: ${e.id}.${p} -> missing entity ${x}`;
-					continue;
-				}
-				if (typeof x !== pd.type) return `integrity: ${e.id}.${p} expects ${pd.type}, got ${got(x)}`;
-			}
+			const problem = slotValueProblem(pd, v, ids);
+			if (problem) return `integrity: ${e.id}.${p} ${problem}`;
 		}
 	}
 	const edgeIds = new Set<string>();
@@ -521,16 +519,8 @@ function integrityProblems(def: GameDef, world: World): string | null {
 		if (r.value === null || !isValue(r.value)) return `integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`;
 		const rd = def.relTypes?.[r.type];
 		if (rd) {
-			const many = rd.many === true;
-			if (Array.isArray(r.value) !== many) return `integrity: relation ${r.type} expects ${many ? "a sequence" : "a scalar"}, got ${got(r.value)}`;
-			for (const x of Array.isArray(r.value) ? r.value : [r.value]) {
-				if (rd.type === "ref") {
-					if (typeof x !== "string") return `integrity: relation ${r.type} expects id reference, got ${got(x)}`;
-					if (!ids.has(x)) return `integrity: relation ${r.type} -> missing entity ${x}`;
-					continue;
-				}
-				if (typeof x !== rd.type) return `integrity: relation ${r.type} expects ${rd.type}, got ${got(x)}`;
-			}
+			const problem = slotValueProblem(rd, r.value, ids);
+			if (problem) return `integrity: relation ${r.type} ${problem}`;
 		}
 	}
 	return null;
@@ -723,31 +713,39 @@ function renderValue(face: Face, v: Payload, isRef: boolean): { text: string; id
 	return { text: texts.join(", "), ids };
 }
 
-/** 注册表指称模式的值是引用；未注册键与字面值一律字面。 */
-function isRefProp(def: Pick<GameDef, "props">, prop: string): boolean {
-	return def.props?.[prop]?.type === "ref";
+/** 槽声明查表：属性按键、边按类型；未注册即 undefined。 */
+function slotDef(def: Pick<GameDef, "props" | "relTypes">, cell: SlotAddr): SlotDef | undefined {
+	return cell.cell === "prop" ? def.props?.[cell.prop] : def.relTypes?.[cell.type];
 }
 
-/** 属性 ref 生命周期：缺省强（悬空由 integrity 拒绝）；strong: false 即弱（随目标删除级联删格）。 */
-function weakPropRef(def: Pick<GameDef, "props">, prop: string): boolean {
-	const pd = def.props?.[prop];
-	return pd?.type === "ref" && pd.strong === false;
+/** 弱引用：ref 且 strong 为 false（strong 必填，注册处无缺省）。 */
+function isWeakSlot(d: SlotDef | undefined): boolean {
+	return d !== undefined && d.type === "ref" && d.strong === false;
 }
 
-/** 注册为 ref 的边类型：值为实体 id 载荷（生命周期看 strong）。 */
-function relRef(def: Pick<GameDef, "relTypes">, type: string): boolean {
-	return def.relTypes?.[type]?.type === "ref";
-}
-
-/** 边 ref 载荷生命周期：缺省弱（随目标删除级联删边）；strong: true 即强（悬空由 integrity 拒绝）。 */
-function weakEdgeRef(def: Pick<GameDef, "relTypes">, type: string): boolean {
-	const rd = def.relTypes?.[type];
-	return rd?.type === "ref" && rd.strong !== true;
+/** 注册项按契约检查：值域 × 重数 × 呈现名 × ref 生命周期（strong 必填）。 */
+function validateSlotDef(where: string, d: unknown): void {
+	const raw = (d ?? {}) as { type?: unknown; many?: unknown; label?: unknown; strong?: unknown };
+	if (raw.type !== "string" && raw.type !== "number" && raw.type !== "boolean" && raw.type !== "ref") throw new Error(`${where}的 type 须为 string/number/boolean/ref，得到 ${String(raw.type)}`);
+	if (raw.many !== undefined && raw.many !== true) throw new Error(`${where}的 many 只能为 true（缺省即 one），得到 ${String(raw.many)}`);
+	if (raw.label !== undefined && raw.label !== null && (typeof raw.label !== "string" || raw.label === "")) throw new Error(`${where}的 label 须为 null 或非空字符串，得到 ${JSON.stringify(raw.label)}`);
+	if (raw.type === "ref") {
+		if (typeof raw.strong !== "boolean") throw new Error(`${where}的 ref 须声明 strong（true 强 / false 弱），得到 ${String(raw.strong)}`);
+	} else if (raw.strong !== undefined) {
+		throw new Error(`${where}的 strong 只对 ref 有意义`);
+	}
 }
 
 /** 值是否含指称 id：弱载荷随目标删除级联的判据。 */
 function valueHasRef(v: Value, id: string): boolean {
 	return Array.isArray(v) ? v.includes(id) : v === id;
+}
+
+/** 弱引用级联：从值中移除亡者引用；值因此为空（或本来只有该引用）即 null（删格）。 */
+function withoutRef(v: Value, id: string): Value | null {
+	if (!Array.isArray(v)) return v === id ? null : v;
+	const rest = v.filter((x) => x !== id);
+	return rest.length > 0 ? rest : null;
 }
 
 /** 指称集须落在给定域内：目标不在即整值不披露——披露的指称必有句柄。 */
@@ -756,19 +754,19 @@ function valueRefsWithin(v: Value, vis: ReadonlySet<string>): boolean {
 	return true;
 }
 
-/** 属性值位的指称过已知域。 */
-function refsWithin(def: Pick<GameDef, "props">, prop: string, v: Value, vis: ReadonlySet<string>): boolean {
-	return !isRefProp(def, prop) || valueRefsWithin(v, vis);
+/** 值位的指称过已知域。 */
+function refsWithin(d: SlotDef | undefined, v: Value, vis: ReadonlySet<string>): boolean {
+	return d?.type !== "ref" || valueRefsWithin(v, vis);
 }
 
 function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }, name: string): string {
 	const val = (v: Payload, ok: boolean, isRef: boolean): string => (ok ? renderValue(face, v, isRef).text : "?");
 	if (c.cell === "vertex") return `${c.next === null ? "-" : "+"} ${face(c.next === null ? c.prev.id : c.next.id)}`;
 	if (c.cell === "edge") {
-		const ref = relRef(sim.def, c.type);
+		const ref = slotDef(sim.def, c)?.type === "ref";
 		return `${face(c.from)}.${name}.${face(c.to)}: ${val(c.prev, sides.prev, ref)} → ${val(c.next, sides.next, ref)}`;
 	}
-	const ref = isRefProp(sim.def, c.prop);
+	const ref = slotDef(sim.def, c)?.type === "ref";
 	return `${face(c.entity)}.${name}: ${val(c.prev, sides.prev, ref)} → ${val(c.next, sides.next, ref)}`;
 }
 
@@ -777,13 +775,13 @@ function referentsOf(sim: Simulation, c: Change, face: Face, sides: { prev: bool
 	if (c.cell === "vertex") return [c.next === null ? c.prev.id : c.next.id];
 	if (c.cell === "edge") {
 		const out = [c.from, c.to];
-		if (relRef(sim.def, c.type)) {
+		if (slotDef(sim.def, c)?.type === "ref") {
 			if (sides.prev) out.push(...renderValue(face, c.prev, true).ids);
 			if (sides.next) out.push(...renderValue(face, c.next, true).ids);
 		}
 		return out;
 	}
-	const ref = isRefProp(sim.def, c.prop);
+	const ref = slotDef(sim.def, c)?.type === "ref";
 	const out: string[] = [c.entity];
 	if (sides.prev) out.push(...renderValue(face, c.prev, ref).ids);
 	if (sides.next) out.push(...renderValue(face, c.next, ref).ids);
@@ -942,21 +940,9 @@ export class Simulation {
 			}
 			ticks.set(t.id, t.rules);
 		}
-		// props 部分注册；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
-		for (const [k, pd] of Object.entries(def.props ?? {})) {
-			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "ref") throw new Error(`属性「${k}」的类型须为 string/number/boolean/ref，得到 ${String(pd.type)}`);
-			if (pd.many !== undefined && pd.many !== true) throw new Error(`属性「${k}」的 many 只能为 true（缺省即 one），得到 ${String(pd.many)}`);
-			if (pd.strong !== undefined && typeof pd.strong !== "boolean") throw new Error(`属性「${k}」的 strong 须为布尔，得到 ${String(pd.strong)}`);
-			if (pd.strong !== undefined && pd.type !== "ref") throw new Error(`属性「${k}」的 strong 只对 ref 有意义`);
-			if (pd.label !== undefined && pd.label !== null && (typeof pd.label !== "string" || pd.label === "")) throw new Error(`属性「${k}」的 label 须为 null 或非空字符串，得到 ${JSON.stringify(pd.label)}`);
-		}
-		for (const [t, rd] of Object.entries(def.relTypes ?? {})) {
-			if (rd.type !== "string" && rd.type !== "number" && rd.type !== "boolean" && rd.type !== "ref") throw new Error(`边类型「${t}」的值类型须为 string/number/boolean/ref，得到 ${String(rd.type)}`);
-			if (rd.many !== undefined && rd.many !== true) throw new Error(`边类型「${t}」的 many 只能为 true（缺省即 one），得到 ${String(rd.many)}`);
-			if (rd.strong !== undefined && typeof rd.strong !== "boolean") throw new Error(`边类型「${t}」的 strong 须为布尔，得到 ${String(rd.strong)}`);
-			if (rd.strong !== undefined && rd.type !== "ref") throw new Error(`边类型「${t}」的 strong 只对 ref 载荷有意义`);
-			if (rd.label !== undefined && rd.label !== null && (typeof rd.label !== "string" || rd.label === "")) throw new Error(`边类型「${t}」的 label 须为 null 或非空字符串，得到 ${JSON.stringify(rd.label)}`);
-		}
+		// props 与 relTypes 同制：注册即契约；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
+		for (const [k, d] of Object.entries(def.props ?? {})) validateSlotDef(`属性「${k}」`, d);
+		for (const [t, d] of Object.entries(def.relTypes ?? {})) validateSlotDef(`边类型「${t}」`, d);
 		this.ticks = ticks;
 		// 结构校验恒挂；作者不变式走 admit（历史不重审），开局世界在此另判一次以尽早显形 def 错误
 		const broken = integrityProblems(this.def, this.readState());
@@ -1284,7 +1270,7 @@ export class Simulation {
 		return null;
 	}
 
-	/** 重放：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审。链断回滚并返回原因。 */
+	/** 重放：𝒞 反推 δ 逐条应用（不重裁决、不掷骰、不重算级联），逐变更 prev 校验，终态 integrity；authored 不变式不重审。链断回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
 		const fail = (reason: string): string => {
@@ -1303,7 +1289,7 @@ export class Simulation {
 				for (const c of step.changes) {
 					const broken = this.verifyChange(c);
 					if (broken) return fail(broken);
-					const out = this.commit([deltaOf(c)]);
+					const out = this.commit([deltaOf(c)], false);
 					if ("refusal" in out) return fail(`重放提交被拒：${out.refusal}`);
 				}
 			}
@@ -1319,7 +1305,7 @@ export class Simulation {
 		}
 	}
 
-	/** 逐变更 prev 校验：记录前值须与重放世界相符；被 despawn 连带删除的槽可已不在（后态已成立即通过）。 */
+	/** 逐变更 prev 校验：记录前值须与重放世界相符；后态已成立（如删除的槽已不在）即通过。 */
 	private verifyChange(c: Change): string | null {
 		switch (c.cell) {
 			case "vertex": {
@@ -1356,7 +1342,8 @@ export class Simulation {
 		const relations = w.relations
 			.filter((r) => {
 				const cell: EdgeAddr = { cell: "edge", from: r.from, to: r.to, type: r.type };
-				return field.name(cell) !== null && field.known.has(r.from) && field.known.has(r.to) && field.within(cell) && (!relRef(this.def, r.type) || valueRefsWithin(r.value, field.known));
+				const rd = this.def.relTypes?.[r.type];
+				return field.name(cell) !== null && field.known.has(r.from) && field.known.has(r.to) && field.within(cell) && (rd?.type !== "ref" || valueRefsWithin(r.value, field.known));
 			})
 			.map((r) => ({ from: r.from, to: r.to, type: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
 		const out: ViewBase = { time: w.time, relations, entities };
@@ -1385,7 +1372,7 @@ export class Simulation {
 			const token = b.name(cell);
 			if (token === null) continue;
 			if (!b.within(cell)) continue;
-			if (!refsWithin(this.def, k, v, b.known)) continue;
+			if (!refsWithin(this.def.props?.[k], v, b.known)) continue;
 			props.push({ name: token, value: v });
 		}
 		return { id: e.id, name, props };
@@ -1404,8 +1391,8 @@ export class Simulation {
 		return b.referable.has(id) && !b.visible.has(id) ? { id, name: b.faces.get(id)! } : null;
 	}
 
-	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */
-	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: string } {
+	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。cascade 只在前向提交启用（重放逐条应用记录，不重算级联）。 */
+	private commit(deltas: Delta[], cascade = true): { changes: Change[] } | { refusal: string } {
 		const changes: Change[] = [];
 		const upsertRel = (from: string, to: string, type: string, value: Value) => {
 			const hit = this.world.relations.find((r) => r.from === from && r.to === to && r.type === type);
@@ -1421,29 +1408,39 @@ export class Simulation {
 					if (i < 0) return refuse(`despawn "${d.id}": entity missing`);
 					const gone = this.world.entities[i]!;
 					this.world.entities.splice(i, 1);
-					// 逆序遍历 + unshift 保边表序；弱 ref 载荷随目标删除级联
-					const existing = this.world.relations;
-					const dissolved: Rel[] = [];
-					for (let j = existing.length - 1; j >= 0; j--) {
-						const r = existing[j]!;
-						if (r.from === d.id || r.to === d.id || (weakEdgeRef(this.def, r.type) && valueHasRef(r.value, d.id))) {
-							dissolved.unshift(r);
-							existing.splice(j, 1);
+					// 级联是提交期推导：端点边必死，弱引用载荷移除亡者；重放逐条应用记录，不重算
+					const edgeChanges: { from: string; to: string; type: string; prev: Value; next: Value | null }[] = [];
+					const propChanges: { entity: string; prop: string; prev: Value; next: Value | null }[] = [];
+					if (cascade) {
+						// 逆序遍历 + unshift 保边表序
+						const existing = this.world.relations;
+						for (let j = existing.length - 1; j >= 0; j--) {
+							const r = existing[j]!;
+							if (r.from === d.id || r.to === d.id) {
+								edgeChanges.unshift({ from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
+								existing.splice(j, 1);
+								continue;
+							}
+							if (!isWeakSlot(this.def.relTypes?.[r.type]) || !valueHasRef(r.value, d.id)) continue;
+							const next = withoutRef(r.value, d.id);
+							edgeChanges.unshift({ from: r.from, to: r.to, type: r.type, prev: r.value, next });
+							if (next === null) existing.splice(j, 1);
+							else r.value = next;
 						}
-					}
-					// 弱属性 ref 随目标删除级联删格：many 值中含亡者即整格删
-					const dissolvedProps: { entity: string; prop: string; value: Value }[] = [];
-					for (const ent of this.world.entities) {
-						for (const [k, v] of Object.entries(ent.props)) {
-							if (!weakPropRef(this.def, k) || !valueHasRef(v, d.id)) continue;
-							dissolvedProps.push({ entity: ent.id, prop: k, value: v });
-							delete ent.props[k];
+						for (const ent of this.world.entities) {
+							for (const [k, v] of Object.entries(ent.props)) {
+								if (!isWeakSlot(this.def.props?.[k]) || !valueHasRef(v, d.id)) continue;
+								const next = withoutRef(v, d.id);
+								propChanges.push({ entity: ent.id, prop: k, prev: v, next });
+								if (next === null) delete ent.props[k];
+								else ent.props[k] = next;
+							}
 						}
 					}
 					// 记录自含克隆，不与活账本共享引用
 					changes.push({ cell: "vertex", prev: clone(gone), next: null });
-					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
-					for (const p of dissolvedProps) changes.push({ cell: "prop", entity: p.entity, prop: p.prop, prev: p.value, next: null });
+					for (const e of edgeChanges) changes.push({ cell: "edge", from: e.from, to: e.to, type: e.type, prev: e.prev, next: e.next });
+					for (const p of propChanges) changes.push({ cell: "prop", entity: p.entity, prop: p.prop, prev: p.prev, next: p.next });
 				} else {
 					if (entity(this.world, d.next.id)) return refuse(`spawn "${d.next.id}": entity already exists`);
 					const ent: Entity = { id: d.next.id, props: d.next.props };
@@ -1459,7 +1456,7 @@ export class Simulation {
 				if (next !== null && !isValue(next)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): value is not a non-empty value`);
 				const prev = relVal(this.world, d.from, d.to, d.type);
 				if (sameValue(prev, next)) continue;
-				if (dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
+				if (next !== null && dangling(d.from, d.to)) return refuse(`relSet ${d.from}->${d.to} (${d.type}): endpoint missing`);
 				if (next === null) {
 					// 能走到此处则边必已存在（prev !== null）
 					const i = this.world.relations.findIndex((r) => r.from === d.from && r.to === d.to && r.type === d.type);
