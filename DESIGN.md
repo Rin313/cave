@@ -52,12 +52,13 @@ Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V�
 ```
 G : Δ* × ⟨rule⟩ → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
 Point ::= rule(⟨law⟩)                         -- 裁决点：作者法则否决；law 是理由 token，必填，只被呈现与探针消费
-        | gate(action.invisible)              -- 感知准入
-        | closure                             -- 全弃权闭合（原 action.unanswered）
+        | gate                                -- 感知准入；呈现身份 action.invisible 由 lawOf 产生，不入账
+        | closure                             -- 全弃权闭合；呈现身份 action.unanswered 由 lawOf 产生，不入账
         | invariant(⟨id⟩, ⟨fault⟩)            -- 作者不变式：id 即律，受众由作者选
         | engine(⟨check⟩)                     -- 引擎自检：integrity | commit | grant
         | crash(⟨site⟩)                       -- 崩溃：rule | invariant
 fault :: rule|gate|closure ↦ world；invariant ↦ 其 fault；engine|crash ↦ engine    -- 受众是点的全函数
+lawOf :: Point ↦ String                       -- 呈现身份（断言与探针消费）：rule ↦ ⟨law⟩；gate ↦ action.invisible；closure ↦ action.unanswered；invariant ↦ "invariant."+id；engine ↦ "engine."+check；crash ↦ site+".crash"
 Proposal ::= rule(⟨rule⟩, ⟨origin⟩, ⟨action⟩) | admit   -- 提案者（审查上下文）：授予法则、来源与尝试；或装载终点的整世界接纳
 Reason ::= world(reply?) | engine(debug)      -- 作者 invariant 结果的输入形态；落到记录即点携 fault、文本单存
 Denial ::= (Point, ⟨text⟩?)                   -- 否决共形；文本必填当且仅当受众为 engine，world 缺文本回落 noResponse
@@ -98,7 +99,7 @@ Deny  ::= (law, reply?)                           法则的否决，恒 world �
 
 卫语句链 `rules`（动词与常驻规则同构）：首个非 ⊥ 表态即判决；全弃权由引擎闭合为 `closure`（呈现身份 `action.unanswered`）。指称参数先过指称门（域即所见集），非指称参数按字面径由法则裁决，门与渲染不解析其内容。
 
-判定与审查是作者否决的两个时相：判定（`Rule`）在提交前读世界真相 `w⁻`，携动词参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺`、本次提交的前态 `before`、全部变更 `changes` 与本次尝试的 `origin`/`action`（`admit` 无尝试），不可授予。一切否决同形为 `Denial = (Point, ⟨text⟩?)`：判定否决为 `rule(⟨law⟩) + world(reply?)`，门的准入为 `gate(action.invisible) + world(reply?)`，全弃权为 `closure`，审查为 `invariant(⟨id⟩, ⟨fault⟩) + 作者选的受众文本`，引擎自检与崩溃为 `engine(⟨check⟩)`／`crash(⟨site⟩) + engine(debug)`。门、闭合、自检、崩溃与作者否决共享同一记录形状与同一回滚路径，但不是作者的具名否决点；两相可读的输入由 `Q` 与 `CheckCtx` 定义。
+判定与审查是作者否决的两个时相：判定（`Rule`）在提交前读世界真相 `w⁻`，携动词参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺`、本次提交的前态 `before`、全部变更 `changes` 与本次尝试的 `origin`/`action`（`admit` 无尝试），不可授予。一切否决同形为 `Denial = (Point, ⟨text⟩?)`：判定否决为 `rule(⟨law⟩) + world(reply?)`，门的准入为 `gate + world(reply?)`，全弃权为 `closure`，审查为 `invariant(⟨id⟩, ⟨fault⟩) + 作者选的受众文本`，引擎自检与崩溃为 `engine(⟨check⟩)`／`crash(⟨site⟩) + engine(debug)`。门、闭合、自检、崩溃与作者否决共享同一记录形状与同一回滚路径，但不是作者的具名否决点；两相可读的输入由 `Q` 与 `CheckCtx` 定义。
 
 ```
 roll(addr, key, sides) = 1 + ⌊h(addr, key) · sides⌋      h : 确定性哈希 → [0,1)
@@ -115,10 +116,10 @@ action ::= (verb, params)             -- 公共载荷；verb 即动词或常驻�
 price  =  origin = clock ? 0          -- 时钟步不计价；每步入账的 Δ钟 = price
         : ok ? (granted ?? cost) : cost
 果     ::= granted(⟨rule⟩, changes, reply?, statements?)   -- 授予：授予法则、变更与声（答复与陈述）
-         | denied(Denial, ⟨rule⟩?)                     -- 否决：裁决点与受众；曾被授予而拦回者记提案法则
+         | denied(Denial)                              -- 否决：裁决点与受众；授予轨迹不入账（归属走否决文本）
 ```
 
-入账判据：凡裁决时读出、不能由账本回算的，随步入账；凡由账本前缀可回算的（脸表、披露谓词、言默、近况、span），一律是投影，不入账。
+入账判据分两层：内容凡裁决时读出且不可由账本前缀回算者随步入账（钟步的拍坐标是内容：静默刻不留步，随机地址与刻内分组赖之）；坐标与边界值中可回算者（`seq`、will 步 `at`、钟步 `price=0`、`time`、`prev`）整存为断言，其律由对账验证——不符即链断，断言的价值在可证伪，删之则对账降为重建。由 `kind` 唯一决定的呈现身份不入账（`gate` 的 `action.invisible`、`closure` 的 `action.unanswered`，由 `lawOf` 产生）；只读派生视图（脸表、披露谓词、言默、近况、span）由账本前缀回算，一律是投影，不入账。
 
 序列按构造保序，at 为钟坐标（审计坐标：入账时须等于由价格回算的边界）。origin 由调用点决定（will：玩家经动词面；clock：泵逐刻；两个调用点不相交——意志动词与常驻规则），随步入账——记录自含分类与价格，投影不重跑裁决、不据动词表反推（label/messages 等呈现词汇仍取自 def）：一切步一律携 action（action.verb 即动词或常驻规则 id；clock 的 params 恒空，是空参提案，不是另一种形状）。`果` 是裁决点——授予记法则，否决记 `Point`（法则/门/闭合/审查/自检/崩溃）与受众；提交存在判据：变更 ∨ 答复 ∨ 陈述 ∨ 否决 ∨ 应答义务；will 提案恒因应答义务入账（授予无文本亦以 ✓ 行入账、否决缺文本以 noResponse 兜底），clock 提案无应答义务，空授予（无变更、无答复、无陈述）即默、不留空步。步入账即冻结（构造后不可变）。呈现按 origin 分流：will 产尝试行（✓/✗ 动词与答复），clock 归 ⏱（授予成块、否决为失败刻、全弃权即默）；时钟授予携刻 → `engine(grant)` 否决。
 

@@ -97,10 +97,10 @@ export interface RelDef {
 /** 世界腔否决（法则的具名否决）：玩家可见，reply 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
 export type Deny = { law: string; reply?: Text };
 
-/** 裁决点：一次尝试的最终发言者。rule 的 law 是作者理由 token（必填），只被呈现与探针消费。 */
+/** 裁决点：一次尝试的最终发言者。rule 的 law 是作者理由 token（必填），只被呈现与探针消费；gate 与 closure 无载荷，呈现身份由 lawOf 产生。 */
 export type Point =
 	| { kind: "rule"; law: string }
-	| { kind: "gate"; law: "action.invisible" }
+	| { kind: "gate" }
 	| { kind: "closure" }
 	| { kind: "invariant"; id: string; fault: "world" | "engine" }
 	| { kind: "engine"; check: "integrity" | "commit" | "grant" }
@@ -567,7 +567,7 @@ function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number):
 export function lawOf(point: Point): string {
 	switch (point.kind) {
 		case "rule": return point.law;
-		case "gate": return point.law;
+		case "gate": return "action.invisible";
 		case "closure": return "action.unanswered";
 		case "invariant": return `invariant.${point.id}`;
 		case "engine": return `engine.${point.check}`;
@@ -575,10 +575,10 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 步一律携公共载荷 action（clock 步的 verb 即常驻规则 id，params 恒空）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众，曾被授予而拦回者记提案法则。 */
+/** 步一律携公共载荷 action（clock 步的 verb 即常驻规则 id，params 恒空）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众——授予轨迹不入账。 */
 export type Commit =
 	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; reply?: Text; statements?: Text[] }
-	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial; proposedBy?: string };
+	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial };
 
 export interface Resolution {
 	step: Commit;
@@ -925,7 +925,7 @@ export class Simulation {
 			});
 		if (invalid.length) {
 			const invisible = this.def.messages.invisibleEntity;
-			return { ok: false, denial: { point: { kind: "gate", law: "action.invisible" }, ...(invisible !== undefined && { text: invisible }) } };
+			return { ok: false, denial: { point: { kind: "gate" }, ...(invisible !== undefined && { text: invisible }) } };
 		}
 		for (const r of rules) {
 			const q = this.query(world, action.params, addr);
@@ -1051,7 +1051,7 @@ export class Simulation {
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
 			if (!cc.ok)
-				return { at, origin, action, price, ok: false, denial: cc.denial, proposedBy: r.rule };
+				return { at, origin, action, price, ok: false, denial: cc.denial };
 			// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
 			const reply = clock ? undefined : r.reply;
 			const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;

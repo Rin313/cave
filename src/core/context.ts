@@ -33,7 +33,7 @@ function isPoint(v: unknown): v is Point {
 	const p = v as { kind?: unknown; law?: unknown; id?: unknown; fault?: unknown; check?: unknown; site?: unknown };
 	switch (p.kind) {
 		case "rule": return typeof p.law === "string" && p.law !== "";
-		case "gate": return p.law === "action.invisible";
+		case "gate": return true;
 		case "closure": return true;
 		case "invariant": return typeof p.id === "string" && p.id !== "" && (p.fault === "world" || p.fault === "engine");
 		case "engine": return p.check === "integrity" || p.check === "commit" || p.check === "grant";
@@ -66,7 +66,7 @@ function isChange(v: unknown): boolean {
 
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown; proposedBy?: unknown };
+	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
 	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
 	if (c.origin !== "will" && c.origin !== "clock") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
@@ -76,8 +76,7 @@ function isCommit(s: unknown): boolean {
 		if (c.reply !== undefined && typeof c.reply !== "string") return false;
 		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
 	}
-	if (!isDenial(c.denial)) return false;
-	return c.proposedBy === undefined || typeof c.proposedBy === "string";
+	return isDenial(c.denial);
 }
 
 interface RawCheckpoint {
