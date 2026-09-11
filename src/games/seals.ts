@@ -377,11 +377,11 @@ const base: Omit<GameDef, "prompt"> = {
 		],
 	},
 	props: SEALS_PROPS,
-	// 注册边（值域契约）：信任/猜疑/知晓静态隐藏，社会真相只经桶级披露与法则代笔流动
+	// 注册边（值域契约）：信任/猜疑/知晓静态无名，社会真相只经桶级披露与法则代笔流动
 	relTypes: {
-		"信任": { type: "number", present: "hidden" },
-		"猜疑": { type: "number", present: "hidden" },
-		"知晓": { type: "boolean", present: "hidden" },
+		"信任": { type: "number", label: null },
+		"猜疑": { type: "number", label: null },
+		"知晓": { type: "boolean", label: null },
 	},
 	// 卡随可见域（顶点格）：居所链；信文只对知晓者可感（判据 = 知晓边）；隐藏边由名字缺省遮蔽
 	perceives: (world, player) => {

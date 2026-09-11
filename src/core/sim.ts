@@ -71,21 +71,22 @@ export type LitType = "string" | "number" | "boolean";
 /** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称（值位指称只注册在属性上）。 */
 export type SlotType = LitType | "ref";
 
-/** 属性声明：type 值域，many 重数（缺省 one），label 呈现名（缺席即内部变量）。ref 是强引用：值即实体 id，须在世。 */
+/** 属性声明：type 值域，many 重数（缺省 one），label 呈现名（缺席或 null 即内部变量）。ref 是强引用：值即实体 id，须在世。 */
 export interface PropDef {
 	type: SlotType;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: true;
-	/** 呈现名；缺席即内部变量。 */
-	label?: string;
+	/** 呈现名；缺席或 null 即无名，非空串即该名。 */
+	label?: string | null;
 }
 
-/** 边类型注册：值域契约 × 生命周期 × 呈现。未注册即开口 token（字面、无契约、无静态隐藏）。present：缺席即 token，"hidden" 即无名，{label} 即改名。 */
+/** 边类型注册：值域契约 × 生命周期 × 呈现。未注册即开口 token（字面、无契约、恒以 τ 为名）。label：缺席即 token，null 即无名，非空串即改名。 */
 export interface RelDef {
 	type: SlotType;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: true;
-	present?: "hidden" | { label: string };
+	/** 呈现名；缺席即 token（τ），null 即无名，非空串即改名。 */
+	label?: string | null;
 	/** ref 载荷的生命周期：缺省弱（随目标删除级联删边）；true 即强（须先行解引用，悬空由 integrity 拒绝）。 */
 	strong?: true;
 }
@@ -377,11 +378,11 @@ export interface GameDef {
 	world: World;
 	/** 属性注册表：κ 的全定义域，必填。 */
 	props: Record<string, PropDef>;
-	/** 边类型注册表（可选）：注册即获值域契约与呈现（hidden/token/改名）；未注册即开口 token（字面、以 token 示人）。 */
+	/** 边类型注册表（可选）：注册即获值域契约与呈现名（label）；未注册即开口 token（字面、以 τ 为名）。 */
 	relTypes?: Record<string, RelDef>;
 	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
-	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性 label、边 present）作为第三参数传入；声明即接管，可委托 base。 */
+	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, player: string, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
@@ -895,18 +896,14 @@ export class Simulation {
 		for (const [k, pd] of Object.entries(def.props)) {
 			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "ref") throw new Error(`属性「${k}」的类型须为 string/number/boolean/ref，得到 ${String(pd.type)}`);
 			if (pd.many !== undefined && pd.many !== true) throw new Error(`属性「${k}」的 many 只能为 true（缺省即 one），得到 ${String(pd.many)}`);
-			if (pd.label !== undefined && pd.label === "") throw new Error(`属性「${k}」的 label 须非空：键不进模型面`);
+			if (pd.label !== undefined && pd.label !== null && (typeof pd.label !== "string" || pd.label === "")) throw new Error(`属性「${k}」的 label 须为 null 或非空字符串，得到 ${JSON.stringify(pd.label)}`);
 		}
 		for (const [t, rd] of Object.entries(def.relTypes ?? {})) {
 			if (rd.type !== "string" && rd.type !== "number" && rd.type !== "boolean" && rd.type !== "ref") throw new Error(`边类型「${t}」的值类型须为 string/number/boolean/ref，得到 ${String(rd.type)}`);
 			if (rd.many !== undefined && rd.many !== true) throw new Error(`边类型「${t}」的 many 只能为 true（缺省即 one），得到 ${String(rd.many)}`);
 			if (rd.strong !== undefined && rd.strong !== true) throw new Error(`边类型「${t}」的 strong 只能为 true（缺省弱引用），得到 ${String(rd.strong)}`);
 			if (rd.strong === true && rd.type !== "ref") throw new Error(`边类型「${t}」的 strong 只对 ref 载荷有意义`);
-			const present = rd.present;
-			if (present !== undefined && present !== "hidden") {
-				const label = present !== null && typeof present === "object" ? (present as { label?: unknown }).label : undefined;
-				if (typeof label !== "string" || label === "") throw new Error(`边类型「${t}」的 present 须为 "hidden" 或 { label: 非空字串 }，得到 ${JSON.stringify(present)}`);
-			}
+			if (rd.label !== undefined && rd.label !== null && (typeof rd.label !== "string" || rd.label === "")) throw new Error(`边类型「${t}」的 label 须为 null 或非空字符串，得到 ${JSON.stringify(rd.label)}`);
 		}
 		this.ticks = ticks;
 		// 结构校验恒挂；作者不变式走 admit（历史不重审），开局世界在此另判一次以尽早显形 def 错误
@@ -949,20 +946,15 @@ export class Simulation {
 		return { within, visible, referable, known: new Set([...visible, ...referable]) };
 	}
 
-	/** 注册表缺省命名：顶点 id、属性 label、边 present 派生；作为 base 交给作者钩子。 */
+	/** 注册表缺省命名：顶点 id、属性 label、边 label（缺席即 τ）；作为 base 交给作者钩子。 */
 	private defaultNaming(): (cell: Addr) => string | null {
 		return (cell) => {
 			switch (cell.cell) {
 				case "vertex": return cell.id;
-				case "prop": {
-					const label = this.def.props[cell.prop]?.label;
-					return label !== undefined && label !== "" ? label : null;
-				}
+				case "prop": return this.def.props[cell.prop]?.label ?? null;
 				case "edge": {
-					const present = this.def.relTypes?.[cell.type]?.present;
-					if (present === "hidden") return null;
-					if (present === undefined) return cell.type;
-					return present.label;
+					const label = this.def.relTypes?.[cell.type]?.label;
+					return label === undefined ? cell.type : label;
 				}
 			}
 		};
