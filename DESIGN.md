@@ -51,10 +51,15 @@ Edge   ::= (a, b, τ, v)      -- a, b 为实体 id，τ ∈ String⁺，v ∈ V�
 
 ```
 G : Δ* × ⟨rule⟩ → 𝒞 ⊎ Denial      原子：拒绝 ⇒ w 不变
-Decision ::= rule(⟨rule⟩) | gate(⟨law⟩)       -- 步的裁决出处；随步入账；gate 的 law ∈ {action.invisible, action.unanswered}
-Source   ::= rule(⟨rule⟩) | admit             -- 审查出处：授予它的法则，或整世界接纳（变体开局／检查点）
-Reason   ::= world(voice?) | engine(debug)    -- 审查的受众与文本；world 缺 voice 回落 noResponse，engine 只有 debug
-Denial   ::= (law, Reason)                    -- 折叠后的否决：判定、门、审查、引擎自检共用
+Point ::= rule(⟨rule⟩, ⟨law⟩?)                -- 裁决点：法则否决；law 是作者理由 token（缺省即 rule id），只被呈现与探针消费
+        | gate(action.invisible)              -- 感知准入
+        | closure                             -- 全弃权闭合（原 action.unanswered）
+        | invariant(⟨id⟩)                     -- 作者不变式：id 即律
+        | engine(⟨check⟩)                     -- 引擎自检：integrity | commit | grant
+        | crash(⟨site⟩)                       -- 崩溃代谢：rule | invariant
+Proposal ::= rule(⟨rule⟩) | admit             -- 提案者（审查上下文）：授予法则，或装载终点的整世界接纳
+Reason ::= world(voice?) | engine(debug)      -- 受众与文本；world 缺 voice 回落 noResponse，engine 只有 debug
+Denial ::= (Point, Reason)                    -- 折叠后的否决：判定、门、闭合、审查、自检、崩溃共用
 ```
 
 `𝒞` 是变更记录序列，后态的完整 diff：prev/next 自含；顶点记录为生 `(⊥, ê)` 或灭 `(ê, ⊥)`，不另存 id，属性/边记录前后态相异（⊥ 即缺席）
@@ -68,12 +73,12 @@ despawn 级联删边，逐条入账且紧随 despawn 记录（弱引用随主消
 提交审查先执行校验（逐条，后到的 δ 可引用先到的后果——指向而非读值：spawn 后可 set 其属性；δ 无读原语，先到的值不可读），后不变式：
 
 ```
-ι : (w, ctx) → Reason?      ctx = (player, source, before, changes)
+ι : (w, ctx) → Reason?      ctx = (player, proposal, before, changes)
 ```
 
-before 是本次提交前的世界读态（回滚锚，不可越过的坐标边界）；changes 是本次提交的全部变更（逐条提交：一次尝试及其授予的刻）。integrity 恒挂：id 唯一、钟为非负整数、锚在世、词汇闭合、身份非空、存储值 ∈ V、类型契约（值与非空序列按 `type` 声明；`ref` 属性追加引用在世——标量与序列内逐项；注册边类型同受）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 Reason 由作者显式选受众：world 的 voice 即玩家文案（缺省回落 noResponse），engine 的 debug 只有 probe；integrity 违反恒 engine。
+before 是本次提交前的世界读态（回滚锚，不可越过的坐标边界）；changes 是本次提交的全部变更（逐条提交：一次尝试及其授予的刻）。integrity 恒挂：id 唯一、钟为非负整数、锚在世、词汇闭合、身份非空、存储值 ∈ V、类型契约（值与非空序列按 `type` 声明；`ref` 属性追加引用在世——标量与序列内逐项；注册边类型同受）、边形状与身份契约、三元组唯一。游戏不变式追加领域约束：只读 w 的为守恒类，读 changes 的为出处类。任一违反 ⇒ 整提交回滚并拒绝；游戏不变式的 Reason 由作者显式选受众：world 的 voice 即玩家文案（缺省回落 noResponse），engine 的 debug 只有 probe。受众由裁决点机械决定：rule、gate、closure 恒 world，engine、crash 恒 engine，只有 invariant 由作者二选一。
 
-admit 的 ctx 是 before = w、changes = ∅——与零变更授予逐字段同形，故 source 是唯一判别；重放不跑 authored 不变式，故审查出处没有 replay。
+admit 是装载终点的零变更审查（当前世界 × 当下法则）：与零变更授予逐字段同形，故 proposal 是唯一判别；重放不跑 authored 不变式（历史由当时的法则裁判过），检查点接纳只验结构完好与 integrity，终态必过 admit——装载拒绝即当下世界违反当下法则。
 
 ### 裁决
 
@@ -84,14 +89,14 @@ ref(a) ⊆ P                指称参数键集（指称模式的参数）
 Q   = (world, player, params, roll)           world 为深冻结快照，params 冻结——attempt 入界即不可变，越权写即抛
 J   : Q → Grant ⊎ Deny ⊎ ⊥
 Grant ::= (Δ*, voice?, facts?, ticks ∈ ℕ?)    voice/facts 是作者世界语，不过投影
-Deny  ::= (law, voice?)                       法则的否决，恒 world 受众；作者的引擎违约走抛出 → rule.crash
+Deny  ::= (law, voice?)                       法则的否决，恒 world 受众；作者的引擎违约走抛出 → crash(rule)
 ```
 
 voice 是一次尝试的答复句（授予与否决皆可，至多一句）；facts 是授予在变更之外仍要说出的零至多句世界陈述；否决没有 facts——世界未变，没有后果可陈述。二者的差别是规范渲染中的位置，不是世界语义。
 
-卫语句链 `rules`：首个非 ⊥ 表态即判决；全弃权由引擎闭合为 `action.unanswered`。指称参数先过感知门（域即所见集），非指称参数按字面径由法则裁决，门与渲染不解析其内容。
+卫语句链 `rules`：首个非 ⊥ 表态即判决；全弃权由引擎闭合为 `closure`（呈现身份 `action.unanswered`）。指称参数先过感知门（域即所见集），非指称参数按字面径由法则裁决，门与渲染不解析其内容。
 
-**判定与审查是同一物的两个相**。两者都是作者的具名否决点，差别只在时相与读入：判定（`Rule`）在提交前读世界真相 `w⁻`，携动词参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺` 与本次提交的前态 `before`、全部变更 `changes`，不携参数、不可授予。引擎把两者的出口折叠为同一 `Denial = (law, Reason)`：判定的 `Deny(law, voice)` 折为 `world(voice)`（法则的否决就是世界的否决），门的 `gate(law)` 折为 `world(voice?)`，审查的 `Reason?` 由作者显式选 world 或 engine，违法同走 `invariant.⟨id⟩` 命名空间与同一回滚路径。角色语境共享同一组词汇：世界读态、player、source、changes——判定读提交前世界与 params/roll，审查读提交后世界与 before/changes，两相不交换语汇。
+**判定与审查是作者否决的两个时相**：判定（`Rule`）在提交前读世界真相 `w⁻`，携动词参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺` 与本次提交的前态 `before`、全部变更 `changes`，不携参数、不可授予。引擎把一切否决折叠为同一 `Denial = (Point, Reason)`：判定否决折为 `rule(⟨rule⟩, ⟨law⟩) + world(voice)`（法则引律），门的准入折为 `gate(action.invisible) + world(voice?)`，全弃权折为 `closure + world`，审查折为 `invariant(⟨id⟩) + 作者选的 Reason`（不变式即律），引擎自检与崩溃折为 `engine(⟨check⟩)`／`crash(⟨site⟩) + engine(debug)`。门、闭合、自检、崩溃与作者共享同一记录形状与同一回滚路径，但不是作者的具名否决点。角色语境共享同一组词汇：世界读态、player、proposal、changes——判定读提交前世界与 params/roll，审查读提交后世界与 before/changes，两相不交换语汇。
 
 ```
 roll(addr, key, sides) = 1 + ⌊h(addr, key) · sides⌋      h : 确定性哈希 → [0,1)
@@ -102,17 +107,18 @@ roll(addr, key, sides) = 1 + ⌊h(addr, key) · sides⌋      h : 确定性哈�
 ### 步
 
 ```
-Commit ::= (at, source, origin, action, price, ok, changes, 声)
+Commit ::= (at, origin, action, price, 果)
 origin ∈ { will, clock, code }        -- 触发类别，只分流行为
 action ::= (verb, params)             -- 公共载荷；clock 的 params 恒空
 price  =  origin = clock ? 0          -- 泵是价的铸造者
         : ok ? (granted ?? cost) : cost
-声     ::= 授予带 voice?/facts? | 否决带 denial
+果     ::= granted(⟨rule⟩, changes, voice?, facts?)   -- 授予：授予法则、变更与声
+         | denied(Denial, ⟨rule⟩?)                     -- 否决：裁决点与受众；曾被授予而拦回者记提案法则
 ```
 
 入账判据：凡裁决时读出、不能由账本回算的，随步入账；凡由账本前缀可回算的（脸表、披露谓词、言默、近况、span），一律是投影，不入账。
 
-序列按构造保序，at 为钟坐标。origin 由调用点决定（will：玩家经广告面；clock：泵逐刻；code：引擎直连 apply），随步入账——记录自含分类与价格，投影不重跑裁决、不据动词表反推（label/messages 等呈现词汇仍取自 def）：一切步一律携 action（action.verb 即动词；clock 的 params 恒空，是空参提案，不是另一种形状）。`source` 是裁决出处——法则表态 `rule(⟨rule⟩)`、门的自判 `gate(⟨law⟩)`（invisible/unanswered）；提交存在判据：变更 ∨ 事实 ∨ 否决 ∨ 应答义务，尝试提交恒因应答义务而在，时钟的空授予（无变更、无事实）即默、不留空步。步入账即冻结（构造后不可变）。呈现按 origin 分流：will 产尝试行（✓/✗ 动词与理由），code 不入事件流（不产尝试行，后果由状态视图与新见段承接），clock 归 ⏱（授予成块、否决为失败刻、全弃权即默）；时钟授予携刻 → `invariant.grant` 否决。
+序列按构造保序，at 为钟坐标。origin 由调用点决定（will：玩家经广告面；clock：泵逐刻；code：引擎直连 apply），随步入账——记录自含分类与价格，投影不重跑裁决、不据动词表反推（label/messages 等呈现词汇仍取自 def）：一切步一律携 action（action.verb 即动词；clock 的 params 恒空，是空参提案，不是另一种形状）。`果` 是裁决点——授予记法则，否决记 `Point`（法则/门/闭合/审查/自检/崩溃）与受众；提交存在判据：变更 ∨ 事实 ∨ 否决 ∨ 应答义务，尝试提交恒因应答义务而在，时钟的空授予（无变更、无事实）即默、不留空步。步入账即冻结（构造后不可变）。呈现按 origin 分流：will 产尝试行（✓/✗ 动词与理由），code 不入事件流（不产尝试行，后果由状态视图与新见段承接），clock 归 ⏱（授予成块、否决为失败刻、全弃权即默）；时钟授予携刻 → `engine(grant)` 否决。
 
 ### 感知
 
@@ -142,9 +148,7 @@ name(e) ::= 身份键缺席 ? ∅ : perceives(w, ⟨e,身份键⟩) ? 身份值(
 
 一切状态是 `w = (t, E, R)`，一切机械后果可说。
 
-∀ 变异恰一入口 `G(Δ*, ⟨rule⟩)`；`G` 全函数——确定性代码的崩溃在门内代谢为否决（法则崩溃 → `rule.crash`，链终止：意志照价、时钟成失败刻，同拍余者照跑、时刻照走；审计崩溃 → `invariant.crash`）。
-
-**提交全序**　`G` 以裁决读态 `w⁻` 为回滚锚与出处锚。（门的原子性；重放公式使 `𝒞` 可复原任意时刻的世界——档案是信息主侧：在线裁决的因果主侧是 w⁻。世界状态是档案的派生检查点）
+∀ 变异恰一入口 `G(Δ*, ⟨rule⟩)`。
 
 **内容与坐标**　`E, R` 是内容，门的原子域；`t` 是坐标——不产 `𝒞`，写者唯一（落钟循环），谓词照常读钟。推导：钟的每次写入都必须归因于某次授予的落钟（刻账目），任何其他写入者都绕过账目；回滚的坐标边界由账目裁定——已入账的刻不可回滚；未入账的刻必须一并回滚，保留无账目的流逝违反凡刻必属某步。
 
@@ -189,8 +193,8 @@ price(s) = origin(s) ≠ clock ? (ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb))
 
 ## 面向作者的契约
 
-- **动词表**：`params` 声明（type×可选×重数×描述）派生宿主面、内核校验与规则参数的编译期类型；`type ∈ {lit(string), lit(number), lit(boolean), ref}`，`ref` 的值是实体 id（过感知门＝所见集），`lit(·)` 是字面；`many` 令参数为非空序列，与世界值同形——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。`private` 动词不进广告面（广告面 = 裁决面 ∖ private），由代码直接 apply——同一裁决边界与审查；其步不产尝试行，后果由状态视图与新见段承接。`clock` 动词每刻由泵以空参提案过同一扇门：无价、全弃权即默、授予禁携刻；其 deny 发声为失败刻。origin 由调用点决定：will（玩家经广告面）、clock（泵）、code（引擎直连）；private 只管广告面，与 origin 无关——公开动词亦可由 code 触发（世界因，不产尝试行），价对 code 通道照常计 cost。origin 随步入账，投影不再回查 def。
-- **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`fault: world`（卫语句链、门、unanswered 闭合、声明为 world 的游戏不变式）有世界腔 voice（缺省 noResponse）；`fault: engine`（integrity、授予形状违约、commit 拒绝、`*.crash`、声明为 engine 的游戏不变式）只有 debug（玩家侧恒 noResponse），probe 报 bug。覆盖面没有机械判据。
+- **动词表**：`params` 声明（type×可选×重数×描述）派生宿主面、内核校验与规则参数的编译期类型；`type ∈ {lit(string), lit(number), lit(boolean), ref}`，`ref` 的值是实体 id（过感知门＝所见集），`lit(·)` 是字面；`many` 令参数为非空序列，与世界值同形——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。`private` 动词不进广告面（广告面 = 裁决面 ∖ private），由代码直接 apply——同一裁决边界与审查；其步因 origin=code 不产尝试行，后果由状态视图与新见段承接。`clock` 动词每刻由泵以空参提案过同一扇门：无价、全弃权即默、授予禁携刻；其 deny 发声为失败刻。origin 由调用点决定：will（玩家经广告面）、clock（泵）、code（引擎直连）；private 只管广告面，与 origin 无关——公开动词亦可由 code 触发（世界因，不产尝试行），价对 code 通道照常计 cost。origin 随步入账，投影不再回查 def。
+- **拒绝**：结构化 Denial，理由以世界腔内联在规则文本，缺省回落 noResponse；拒绝不携带涉及实体——指称落点在 action 参数（结构化）与法则理由（世界腔）。`fault: world`（rule、gate、closure、声明为 world 的 invariant）有世界腔 voice（缺省 noResponse）；`fault: engine`（engine 自检、crash、声明为 engine 的 invariant）只有 debug（玩家侧恒 noResponse），probe 报 bug。受众由 Point 机械决定，唯一由作者选择的是 invariant 的 Reason。
 
 ## 非目标
 
@@ -201,5 +205,5 @@ price(s) = origin(s) ≠ clock ? (ok(s) ? (ticks(J) ?? cost(verb)) : cost(verb))
 - `node_modules/@earendil-works/pi-coding-agent/docs/`，进程内集成
 - **IPC 形态**：主进程 → 渲染层推送事件流（`narration_delta` / `narration_reset`），渲染层 → 主进程请求（invoke）
 - **回合编排（单 pass）**：每回合一次 `session.prompt()`——模型先调 `act`，其后输出散文。相位 mapping（文本丢弃）→ narration（留作回合叙述，不入账）；重试作废在途生成（`narration_reset`），镜像 pi 语义。
-- **上下文裁剪**：每次调用经 `context` 扩展裁剪为最后一条 user 消息起的后缀（工具结果存为独立 toolResult 角色、不并入 user 消息，回合内该锚恒为回合提示，叙述续行因此保住裁决前缀；context 事件的消息是深拷贝，就地改写不污会话文件）；会话文件累积全量消息作审计；持久化事实是回合记录，近况是其纯函数投影，只在窗口更新点（装载 / 回合边界）整体重算——回合协议使该点与映射消费点观察等价，进程重启由记录重建。装载纪要按消费判据（逐条试投影存活）定完好：损坏使近况截断至其后完好子后缀并告警显形，会话文件不动——纪要只喂投影与审计，门不读纪要；截断而非逐条剔除。档案是单一追加日志（会话文件），条目两种：回合（证据，每回合恰一，定稿写点）与检查点（缓存，声称已含前 n 条回合）——日志的任意前缀都是一致档案。装载即对账：取最后检查点为主侧锚（缺失或损坏则自变体开局全量重放），其后记录走 𝒞 重放——不重裁决、不掷骰（命运已入账；检查点覆盖的回合不重放世界，但骰子序位仍按账本补点：世界可跳、点数不可跳），逐变更 prev 校验加 integrity，authored 不变式不重审（历史由当时的法则裁判过）；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断并告警显形，检查点领先于证据即拒绝装载。检查点每回合随定稿追加，写失败仅告警（缓存可迟到，滞后由下一回合定稿治愈）。
+- **上下文裁剪**：每次调用经 `context` 扩展裁剪为最后一条 user 消息起的后缀（工具结果存为独立 toolResult 角色、不并入 user 消息，回合内该锚恒为回合提示，叙述续行因此保住裁决前缀；context 事件的消息是深拷贝，就地改写不污会话文件）；会话文件累积全量消息作审计；持久化事实是回合记录，近况是其纯函数投影，只在窗口更新点（装载 / 回合边界）整体重算——回合协议使该点与映射消费点观察等价，进程重启由记录重建。装载纪要按消费判据（逐条试投影存活）定完好：损坏使近况截断至其后完好子后缀并告警显形，会话文件不动——纪要只喂投影与审计，门不读纪要；截断而非逐条剔除。档案是单一追加日志（会话文件），条目两种：回合（证据，每回合恰一，定稿写点）与检查点（缓存，声称已含前 n 条回合）——日志的任意前缀都是一致档案。装载即对账：取最后检查点为主侧锚（缺失或损坏则自变体开局全量重放），其后记录走 𝒞 重放——不重裁决、不掷骰（命运已入账；检查点覆盖的回合不重放世界，但骰子序位仍按账本补点：世界可跳、点数不可跳），逐变更 prev 校验加 integrity，authored 不变式不重审（历史由当时的法则裁判过）；检查点接纳只验结构完好与 integrity，装载终点对终态跑一次 admit（当下世界 × 当下法则），拒绝即装载失败。链断（序位断裂、prev 不符、完整性失败）则世界与近况同界截断并告警显形，检查点领先于证据即拒绝装载。检查点每回合随定稿追加，写失败仅告警（缓存可迟到，滞后由下一回合定稿治愈）。
 - **缓存稳定性**：[tools+system] 放置于开头，系统提示与工具数组字节级稳定，不做 setActiveTools 相位切换；回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变）。

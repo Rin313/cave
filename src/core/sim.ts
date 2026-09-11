@@ -95,14 +95,31 @@ export interface RelDef {
 	present?: "hidden" | { label: string };
 }
 
-/** 世界腔否决：玩家可见，voice 缺席即回落 noResponse；法则的否决恒此形。law 是理由身份：作者 token 或引擎保留 id，前缀不承担分类。 */
+/** 世界腔否决（法则的裁决面）：玩家可见，voice 缺席即回落 noResponse；引擎违约走抛出 → crash(rule)。 */
 export type Deny = { law: string; fault: "world"; voice?: Fact };
 
-/** 折叠后的否决（判定、门、审查、引擎自检共用）：受众与文本互斥，engine 只有 debug。 */
-export type Denial = Deny | { law: string; fault: "engine"; debug: string };
+/** 裁决点：一次尝试的最终发言者。law 只出现在 rule 上，是作者理由 token（缺省即 rule id），只被呈现与探针消费。 */
+export type Point =
+	| { kind: "rule"; rule: string; law?: string }
+	| { kind: "gate"; law: "action.invisible" }
+	| { kind: "closure" }
+	| { kind: "invariant"; id: string }
+	| { kind: "engine"; check: "integrity" | "commit" | "grant" }
+	| { kind: "crash"; site: "rule" | "invariant" };
 
-/** 引擎自检的否决：只有 debug。 */
-export type EngineDenial = Extract<Denial, { fault: "engine" }>;
+/** 受众与文本互斥：world 缺 voice 回落 noResponse，engine 只有 debug。 */
+export type Reason =
+	| { fault: "world"; voice?: Fact }
+	| { fault: "engine"; debug: string };
+
+/** 引擎侧原因：只有 debug。 */
+export type EngineReason = Extract<Reason, { fault: "engine" }>;
+
+/** 折叠后的否决：判定、门、闭合、审查、自检、崩溃共用同一记录形状。 */
+export interface Denial {
+	point: Point;
+	reason: Reason;
+}
 
 /** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
 export class ProtocolViolation extends Error {
@@ -180,7 +197,8 @@ function deltaOf(c: Change): Delta {
  */
 export function rewind(world: World, steps: readonly Commit[]): void {
 	for (let s = steps.length - 1; s >= 0; s--) {
-		const changes = steps[s]!.changes;
+		const step = steps[s]!;
+		const changes = step.ok ? step.changes : [];
 		for (let i = changes.length - 1; i >= 0; i--) {
 			const c = changes[i]!;
 			if (c.cell === "vertex") {
@@ -379,18 +397,10 @@ export interface GameDef {
 export interface CheckCtx {
 	def: GameDef;
 	player: string;
-	source: Source;
+	proposal: Proposal;
 	before: World;
 	changes: readonly Change[];
 }
-
-/** 检查相的唯一出口：受众显式二选一。world 缺 voice 回落 noResponse；engine 只有 debug（玩家侧 noResponse，probe 报 bug）。 */
-export type Reason =
-	| { fault: "world"; voice?: Fact }
-	| { fault: "engine"; debug: string };
-
-/** 引擎侧原因：只有 debug。 */
-export type EngineReason = Extract<Reason, { fault: "engine" }>;
 
 /** 检查相的作者否决点：null 通过，理由即整提交回滚并拒绝。收冻结读态，写入即抛。 */
 export interface Invariant {
@@ -551,17 +561,8 @@ function tupleKey(parts: readonly string[]): string {
 /** 触发通道，由调用点决定并随步入账：意志（玩家经广告面提案）、时钟（泵逐刻自鸣）、代码（引擎直连 apply）。 */
 export type Origin = "will" | "clock" | "code";
 
-/** 门的自判：只否决，永不授予。 */
-export type GateLaw = "action.invisible" | "action.unanswered";
-
-/** 授予的法则：一次裁决的发言者，也是审查的出处之一。 */
-export type RuleRef = { kind: "rule"; rule: string };
-
-/** 裁决出处：步自含的发言者（授予的法则或关闭它的门）。 */
-export type Decision = RuleRef | { kind: "gate"; law: GateLaw };
-
-/** 审查出处：授予它的法则，或一次整世界接纳（变体开局／检查点）。 */
-export type Source = RuleRef | { kind: "admit" };
+/** 提案者：审查上下文用；admit 是以零变更审查整世界（装载终点）。 */
+export type Proposal = { kind: "rule"; rule: string } | { kind: "admit" };
 
 /** 入账表态的机器身份：账本位置 (at, origin, verb, 序位)。对入账表态单射、且由账本前缀复原——随机是账本位置的纯函数。 */
 function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number): string {
@@ -569,17 +570,33 @@ function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number):
 }
 
 /** 可读渲染；不参与机器判定。 */
-function renderSource(s: Decision): string {
-	switch (s.kind) {
-		case "rule": return `rule:${s.rule}`;
-		case "gate": return `gate:${s.law}`;
+function renderPoint(p: Point): string {
+	switch (p.kind) {
+		case "rule": return `rule:${p.rule}`;
+		case "gate": return `gate:${p.law}`;
+		case "closure": return "closure";
+		case "invariant": return `invariant:${p.id}`;
+		case "engine": return `engine:${p.check}`;
+		case "crash": return `crash:${p.site}`;
 	}
 }
 
-/** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。声：授予带 voice/facts，否决带 denial。source 是裁决出处。 */
+/** 裁决点的呈现身份（场景断言与探针用）；分类看 kind，不看字符串。 */
+export function lawOf(point: Point): string {
+	switch (point.kind) {
+		case "rule": return point.law ?? point.rule;
+		case "gate": return point.law;
+		case "closure": return "action.unanswered";
+		case "invariant": return `invariant.${point.id}`;
+		case "engine": return `invariant.${point.check}`;
+		case "crash": return `${point.site}.crash`;
+	}
+}
+
+/** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众，曾被授予而拦回者记提案法则。 */
 export type Commit =
-	| { at: number; source: Decision; origin: Origin; action: Action; price: number; ok: true; changes: Change[]; voice?: Fact; facts?: Fact[] }
-	| { at: number; source: Decision; origin: Origin; action: Action; price: number; ok: false; changes: []; denial: Denial };
+	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; voice?: Fact; facts?: Fact[] }
+	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial; proposedBy?: string };
 
 export interface Resolution {
 	step: Commit;
@@ -598,8 +615,14 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
+/** 玩家侧文本：world 给 voice（缺省 noResponse），engine 恒 noResponse。 */
 export function renderDenial(def: GameDef, denial: Denial): string {
-	return denial.fault === "world" ? (denial.voice ?? def.messages.noResponse) : def.messages.noResponse;
+	return denial.reason.fault === "world" ? (denial.reason.voice ?? def.messages.noResponse) : def.messages.noResponse;
+}
+
+/** 原始文本（含引擎 debug）：装载拒绝等非呈现面用。 */
+export function denialReasonText(def: GameDef, denial: Denial): string {
+	return denial.reason.fault === "world" ? (denial.reason.voice ?? def.messages.noResponse) : denial.reason.debug;
 }
 
 /** 脸 token：id 在某个提交边界上的呈现词。脸表由该边界的世界即时求值，行文不回读活世界。 */
@@ -740,7 +763,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			// 代码直连步不入事件流：不产尝试行，后果由状态视图与新见段承接
 			if (s.origin === "code") continue;
 			const { face, changeLine } = renderer(i);
-			const changes = narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null);
+			const changes = s.ok ? narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null) : [];
 			const voice = s.ok ? s.voice : renderDenial(sim.def, s.denial);
 			const facts = s.ok ? (s.facts ?? []) : [];
 			const tail = [
@@ -769,10 +792,10 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 门内裁决的表态；source 是裁决出处，随提交入账。 */
+/** 门内裁决的表态；授予记法则，否决自带裁决点。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; source: RuleRef; voice?: Fact; facts?: Fact[]; ticks?: number }
-	| { ok: false; source: Decision; denial: Denial };
+	| { ok: true; deltas: Delta[]; rule: string; voice?: Fact; facts?: Fact[]; ticks?: number }
+	| { ok: false; denial: Denial };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -844,10 +867,13 @@ export class Simulation {
 			}
 		}
 		this.identityKey = identityKey;
-		// 初始世界过审查：def 结构错误与损坏存档在此显形
-		const before = this.readState();
-		const broken = this.checkInvariants({ kind: "admit" }, before, []);
-		if (broken) throw new Error(`初始世界违反不变式 ${broken.id}：${broken.denial.fault === "world" ? (broken.denial.voice ?? broken.denial.law) : broken.denial.debug}`);
+		// 结构校验恒挂；作者不变式走 admit（装载终点判当下世界，历史不重审），开局世界在此另判一次以尽早显形 def 错误
+		const broken = integrityProblems(this.def, this.readState());
+		if (broken) throw new Error(`初始世界破坏完整性：${broken.debug}`);
+		if (world === undefined) {
+			const denied = this.admit();
+			if (denied) throw new Error(`初始世界违反 ${lawOf(denied.point)}：${denialReasonText(this.def, denied)}`);
+		}
 	}
 
 	get player(): string {
@@ -909,30 +935,30 @@ export class Simulation {
 			});
 		if (invalid.length) {
 			const invisible = this.def.messages.invisibleEntity;
-			return { ok: false, source: { kind: "gate", law: "action.invisible" }, denial: { law: "action.invisible", fault: "world", ...(invisible !== undefined && { voice: invisible }) } };
+			return { ok: false, denial: { point: { kind: "gate", law: "action.invisible" }, reason: { fault: "world", ...(invisible !== undefined && { voice: invisible }) } } };
 		}
 		for (const r of verb.rules) {
-			const source: RuleRef = { kind: "rule", rule: r.id };
+			const point: Point = { kind: "rule", rule: r.id };
 			const q = this.query(world, action.params, addr);
 			let v: Verdict | null;
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, source, denial: { law: "rule.crash", fault: "engine", debug: `${renderSource(source)}: ${e instanceof Error ? e.message : String(e)}` } };
+				return { ok: false, denial: { point: { kind: "crash", site: "rule" }, reason: { fault: "engine", debug: `${renderPoint(point)}: ${e instanceof Error ? e.message : String(e)}` } } };
 			}
 			if (!v) continue;
 			if (v.ok) {
 				if (origin === "clock" && v.ticks !== undefined) {
-					return { ok: false, source, denial: { law: "invariant.grant", fault: "engine", debug: `${renderSource(source)}: 时钟提案不得延伸时间` } };
+					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, reason: { fault: "engine", debug: `${renderPoint(point)}: 时钟提案不得延伸时间` } } };
 				}
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
-					return { ok: false, source, denial: { law: "invariant.grant", fault: "engine", debug: `${renderSource(source)}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
+					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, reason: { fault: "engine", debug: `${renderPoint(point)}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } } };
 				}
-				return { ok: true, deltas: v.deltas, source, ...(v.voice !== undefined && { voice: v.voice }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
+				return { ok: true, deltas: v.deltas, rule: r.id, ...(v.voice !== undefined && { voice: v.voice }), ...(v.facts !== undefined && { facts: v.facts }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, source, denial: v.denial };
+			return { ok: false, denial: { point: { kind: "rule", rule: r.id, law: v.denial.law }, reason: { fault: "world", ...(v.denial.voice !== undefined && { voice: v.denial.voice }) } } };
 		}
-		return { ok: false, source: { kind: "gate", law: "action.unanswered" }, denial: { law: "action.unanswered", fault: "world" } };
+		return { ok: false, denial: { point: { kind: "closure" }, reason: { fault: "world" } } };
 	}
 
 	/** 骰子地址是决策事件的账本位置；同地址同 key 恒同值，与法则重构无关。 */
@@ -951,35 +977,40 @@ export class Simulation {
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
-	private commitChecked(s0: World, deltas: Delta[], source: RuleRef): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
+	private commitChecked(s0: World, deltas: Delta[], rule: string): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
-				return { ok: false, denial: out.refusal };
+				return { ok: false, denial: { point: { kind: "engine", check: "commit" }, reason: out.refusal } };
 			}
-			const inv = this.checkInvariants(source, s0, out.changes);
+			const inv = this.checkInvariants({ kind: "rule", rule }, s0, out.changes);
 			if (inv) {
 				this.restore(s0);
-				return { ok: false, denial: inv.denial };
+				return { ok: false, denial: inv };
 			}
 			return { ok: true, changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
-			return { ok: false, denial: { law: "invariant.crash", fault: "engine", debug } };
+			return { ok: false, denial: { point: { kind: "crash", site: "invariant" }, reason: { fault: "engine", debug } } };
 		}
 	}
 
+	/** 装载终点的零变更审查：当前世界 × 当下法则。 */
+	admit(): Denial | null {
+		return this.checkInvariants({ kind: "admit" }, this.readState(), []);
+	}
+
 	/** 审查：先 integrity 后游戏不变式；world 是提交后读态，before 是提交前读态（回滚锚），changes 是本次提交的全部变更。 */
-	private checkInvariants(source: Source, before: World, changes: Change[]): { id: string; denial: Denial } | null {
+	private checkInvariants(proposal: Proposal, before: World, changes: Change[]): Denial | null {
 		const world = this.readState();
-		const ctx: CheckCtx = { def: this.def, player: this.player, source, before, changes: deepFreeze(changes) };
+		const ctx: CheckCtx = { def: this.def, player: this.player, proposal, before, changes: deepFreeze(changes) };
 		const broken = integrityProblems(this.def, world);
-		if (broken) return { id: "integrity", denial: { law: "invariant.integrity", ...broken } };
+		if (broken) return { point: { kind: "engine", check: "integrity" }, reason: broken };
 		for (const inv of this.def.invariants ?? []) {
 			const reason = inv.check(world, ctx);
-			if (reason) return { id: inv.id, denial: { law: `invariant.${inv.id}`, ...reason } };
+			if (reason) return { point: { kind: "invariant", id: inv.id }, reason };
 		}
 		return null;
 	}
@@ -1013,12 +1044,12 @@ export class Simulation {
 		const gate = this.sightView(s0);
 		const r = this.adjudicateRaw(action, verb, gate, s0, addr, origin);
 		if (r.ok) {
-			const cc = this.commitChecked(s0, r.deltas, r.source);
+			const cc = this.commitChecked(s0, r.deltas, r.rule);
 			if (!cc.ok)
-				return { at, source: r.source, origin, action, price: clock ? 0 : verb.cost, ok: false, changes: [], denial: cc.denial };
-			return { at, source: r.source, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, changes: cc.changes, ...(r.voice !== undefined && { voice: r.voice }), ...(r.facts !== undefined && { facts: r.facts }) };
+				return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: cc.denial, proposedBy: r.rule };
+			return { at, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, rule: r.rule, changes: cc.changes, ...(r.voice !== undefined && { voice: r.voice }), ...(r.facts !== undefined && { facts: r.facts }) };
 		}
-		return { at, source: r.source, origin, action, price: clock ? 0 : verb.cost, ok: false, changes: [], denial: r.denial };
+		return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: r.denial };
 	}
 
 	/** 取序位不消耗；仅当步确定入账才 markAttempt——默与崩溃不移动任何地址。 */
@@ -1041,7 +1072,7 @@ export class Simulation {
 			for (const [name, v] of Object.entries(this.def.verbs)) {
 				if (!v.clock) continue;
 				const c = this.attempt(this.readState(), { verb: name, params: {} }, "clock");
-				if (!c.ok ? c.denial.law !== "action.unanswered" : c.changes.length > 0 || c.voice !== undefined || !!c.facts?.length) out.push(c);
+				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || c.voice !== undefined || !!c.facts?.length) out.push(c);
 			}
 		}
 		return out;
@@ -1089,6 +1120,7 @@ export class Simulation {
 			if (!Number.isInteger(record.time) || record.time !== start + grants) return fail(`末钟 ${String(record.time)} ≠ 起点 ${start} + 刻账 ${grants}`);
 			for (const step of record.steps) {
 				this.markAttempt(step.at, step.origin, step.action.verb);
+				if (!step.ok) continue;
 				for (const c of step.changes) {
 					const broken = this.verifyChange(c);
 					if (broken) return fail(broken);
@@ -1155,14 +1187,14 @@ export class Simulation {
 	}
 
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */
-	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: EngineDenial } {
+	private commit(deltas: Delta[]): { changes: Change[] } | { refusal: EngineReason } {
 		const changes: Change[] = [];
 		const upsertRel = (from: string, to: string, type: string, value: Value) => {
 			const hit = this.world.relations.find((r) => r.from === from && r.to === to && r.type === type);
 			if (hit) hit.value = value;
 			else this.world.relations.push({ from, to, type, value });
 		};
-		const refuse = (debug: string): { refusal: EngineDenial } => ({ refusal: { law: "invariant.commit", fault: "engine", debug: `commit: ${debug}` } });
+		const refuse = (debug: string): { refusal: EngineReason } => ({ refusal: { fault: "engine", debug: `commit: ${debug}` } });
 		const dangling = (from: string, to: string): boolean => !entity(this.world, from) || !entity(this.world, to);
 		for (const d of deltas) {
 			if (d.cell === "vertex") {

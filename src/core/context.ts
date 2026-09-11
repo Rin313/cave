@@ -1,7 +1,7 @@
 // 会话文件保存全量审计。
 // 档案是单一追加日志：回合条目（证据，每回合恰一）+ 检查点条目（缓存）——任意前缀皆一致档案，世界状态是记录的派生值。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, denialReasonText, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 import { errorText } from "./util.ts";
 
 export type CtxMessages = ContextEvent["messages"];
@@ -28,23 +28,34 @@ interface RawTurn {
 }
 
 /** 信封粗筛：损坏条目在此离场（无 seq、缺来源判别子或旧步形状的条目同弃、显形）；最终完好判据是装载对账与试投影。 */
-function isSource(v: unknown): boolean {
+function isPoint(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
-	switch ((v as { kind?: unknown }).kind) {
-		case "rule": return typeof (v as { rule?: unknown }).rule === "string";
-		case "gate": return typeof (v as { law?: unknown }).law === "string";
+	const p = v as { kind?: unknown; rule?: unknown; law?: unknown; id?: unknown; check?: unknown; site?: unknown };
+	switch (p.kind) {
+		case "rule": return typeof p.rule === "string" && p.rule !== "" && (p.law === undefined || typeof p.law === "string");
+		case "gate": return p.law === "action.invisible";
+		case "closure": return true;
+		case "invariant": return typeof p.id === "string" && p.id !== "";
+		case "engine": return p.check === "integrity" || p.check === "commit" || p.check === "grant";
+		case "crash": return p.site === "rule" || p.site === "invariant";
 		default: return false;
 	}
 }
 
-/** 否决形状：受众与文本互斥；旧形状（kind/notes）在此离场。 */
+/** 受众与文本互斥。 */
+function isReason(v: unknown): boolean {
+	if (v === null || typeof v !== "object") return false;
+	const r = v as { fault?: unknown; voice?: unknown; debug?: unknown };
+	if (r.fault === "world") return r.debug === undefined && (r.voice === undefined || typeof r.voice === "string");
+	if (r.fault === "engine") return r.voice === undefined && typeof r.debug === "string";
+	return false;
+}
+
+/** 否决形状：Point + Reason；旧形状（law/fault/kind/notes）在此离场。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
-	const d = v as { law?: unknown; fault?: unknown; voice?: unknown; debug?: unknown; notes?: unknown; kind?: unknown };
-	if (typeof d.law !== "string" || d.notes !== undefined || d.kind !== undefined) return false;
-	if (d.fault === "world") return d.debug === undefined && (d.voice === undefined || typeof d.voice === "string");
-	if (d.fault === "engine") return d.voice === undefined && typeof d.debug === "string";
-	return false;
+	const d = v as { point?: unknown; reason?: unknown };
+	return isPoint(d.point) && isReason(d.reason);
 }
 
 /** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。顶点记录恰一侧为 ⊥（生/灭），不另存 id。 */
@@ -61,18 +72,18 @@ function isChange(v: unknown): boolean {
 
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; source?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; changes?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; notes?: unknown };
-	if (typeof c.at !== "number" || !isSource(c.source) || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
+	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; proposedBy?: unknown };
+	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
 	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
-	if (!Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
-	if (c.notes !== undefined) return false;
 	if (c.ok === true) {
+		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
 		if (c.voice !== undefined && typeof c.voice !== "string") return false;
 		return c.facts === undefined || (Array.isArray(c.facts) && c.facts.every((f) => typeof f === "string"));
 	}
-	return isDenial(c.denial);
+	if (!isDenial(c.denial)) return false;
+	return c.proposedBy === undefined || typeof c.proposedBy === "string";
 }
 
 interface RawCheckpoint {
@@ -117,7 +128,7 @@ export interface Resumed {
 	warnings: string[];
 }
 
-/** 装载即对账：检查点是主侧锚（缓存），其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；链断（序位断裂、prev 不符、审查失败）则世界与近况同界截断。检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要（试投影辖全窗口，序位检查只辖覆盖段——重放段的连续性由对账强制），截断而非剔除 */
+/** 装载即对账：锚（开局/检查点）只验结构与 integrity，其后记录走 𝒞 重放——不重裁决、不掷骰，逐变更 prev 校验；终态跑一次 admit（当下世界 × 当下法则），拒绝即装载失败。链断（序位断裂、prev 不符、完整性失败）则世界与近况同界截断；检查点领先于证据即拒绝装载（丢失可检）。近况窗口裁剪后按消费判据修复纪要（试投影辖全窗口，序位检查只辖覆盖段——重放段的连续性由对账强制），截断而非剔除 */
 export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const warnings: string[] = [];
 	const log = loadLog(entries, warnings);
@@ -166,6 +177,9 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 		lastSeq = r.seq;
 		expected = r.seq + 1;
 	}
+	// 装载终点：终态对当下法则的零变更审查——历史不重审，当前世界必过 admit
+	const finallyDenied = sim.admit();
+	if (finallyDenied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(finallyDenied.point)}（${denialReasonText(def, finallyDenied)}）`);
 	// 近况窗口：内存档案只保留窗口内记录，全量由会话文件承载
 	const excess = records.length - def.recentWindow;
 	if (excess > 0) records.splice(0, excess);
