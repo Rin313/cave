@@ -36,12 +36,17 @@ export type EdgeAddr = { cell: "edge"; from: string; to: string; type: string };
 export type SlotAddr = PropAddr | EdgeAddr;
 export type Addr = VertexAddr | SlotAddr;
 
-/** δ：绝对写，后态自含。顶点格后态是实体或 none（生/灭），槽格后态是值或 none（写/删）。 */
-export type Delta = (VertexAddr & { next: Entity | null }) | (SlotAddr & { next: Payload });
+/** δ：绝对写，后态自含。顶点格的身份即实体 id，故 spawn 的格取自 next、despawn 的格取自 id；槽格后态是值或 none（写/删）。 */
+export type Delta =
+	| { cell: "vertex"; next: Entity }
+	| { cell: "vertex"; id: string; next: null }
+	| (SlotAddr & { next: Payload });
 
-/** 𝒞：同一格的前态与后态——δ 是缺前态的写，记录是补全前态的 δ。 */
-type Recorded<D> = D extends { next: infer N } ? D & { prev: N } : never;
-export type Change = Recorded<Delta>;
+/** 𝒞：记录是补全前态的 δ。顶点记录恰一侧为 ⊥（生/灭，不另存 id）；槽记录前后态相异。 */
+export type Change =
+	| { cell: "vertex"; prev: null; next: Entity }
+	| { cell: "vertex"; prev: Entity; next: null }
+	| (SlotAddr & { prev: Payload; next: Payload });
 
 export interface Action {
 	verb: string;
@@ -135,7 +140,7 @@ export function deny(law: string, voice?: Fact): Verdict {
 export const D = {
 	set: (entity: string, prop: string, value: Payload): Delta => ({ cell: "prop", entity, prop, next: value }),
 	relSet: (from: string, to: string, type: string, value: Payload): Delta => ({ cell: "edge", from, to, type, next: value }),
-	spawn: (entity: Entity): Delta => ({ cell: "vertex", id: entity.id, next: entity }),
+	spawn: (entity: Entity): Delta => ({ cell: "vertex", next: entity }),
 	despawn: (entity: string): Delta => ({ cell: "vertex", id: entity, next: null }),
 };
 
@@ -151,7 +156,7 @@ function addrKey(a: Addr): string {
 /** 𝒞 反推 δ：绝对写、后态自含——重放不需读前值。 */
 function deltaOf(c: Change): Delta {
 	switch (c.cell) {
-		case "vertex": return { cell: "vertex", id: c.id, next: c.next };
+		case "vertex": return c.prev === null ? { cell: "vertex", next: c.next } : { cell: "vertex", id: c.prev.id, next: null };
 		case "prop": return { cell: "prop", entity: c.entity, prop: c.prop, next: c.next };
 		case "edge": return { cell: "edge", from: c.from, to: c.to, type: c.type, next: c.next };
 	}
@@ -167,13 +172,14 @@ export function rewind(world: World, steps: readonly Commit[]): void {
 		for (let i = changes.length - 1; i >= 0; i--) {
 			const c = changes[i]!;
 			if (c.cell === "vertex") {
-				const at = world.entities.findIndex((e) => e.id === c.id);
-				if (c.prev === null) {
-					if (at >= 0) world.entities.splice(at, 1);
-				} else if (at >= 0) {
-					world.entities[at] = clone(c.prev);
+				// 生的逆是删 next，灭的逆是恢复 prev；身份由实体自身携带
+				if (c.next === null) {
+					const at = world.entities.findIndex((e) => e.id === c.prev.id);
+					if (at >= 0) world.entities[at] = clone(c.prev);
+					else world.entities.push(clone(c.prev));
 				} else {
-					world.entities.push(clone(c.prev));
+					const at = world.entities.findIndex((e) => e.id === c.next.id);
+					if (at >= 0) world.entities.splice(at, 1);
 				}
 				continue;
 			}
@@ -538,7 +544,7 @@ export type Ingest = { kind: "init" } | { kind: "replay"; seq: number };
 /** 审查可见的出处。 */
 export type Source = Decision | Ingest;
 
-/** 决策事件的机器身份：账本位置 (at, origin, verb, 序位)。对尝试单射、且由账本复原——随机是账本位置的纯函数。 */
+/** 入账表态的机器身份：账本位置 (at, origin, verb, 序位)。对入账表态单射、且由账本前缀复原——随机是账本位置的纯函数。 */
 function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number): string {
 	return tupleKey(["attempt", String(at), origin, verb, String(ordinal)]);
 }
@@ -621,7 +627,7 @@ function refsWithin(def: Pick<GameDef, "props">, prop: string, v: Value, vis: Re
 
 function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }): string {
 	const val = (v: Payload, ok: boolean, isRef: boolean): string => (ok ? renderValue(face, v, isRef).text : "?");
-	if (c.cell === "vertex") return `${c.next === null ? "-" : "+"} ${face(c.id)}`;
+	if (c.cell === "vertex") return `${c.next === null ? "-" : "+"} ${face(c.next === null ? c.prev.id : c.next.id)}`;
 	if (c.cell === "edge") {
 		// 空侧（创生/消散）随行广播、豁免截面；? 只占位有值未读
 		const readable = (v: Payload, side: boolean): boolean => v === null || side;
@@ -639,7 +645,7 @@ function narratableChanges(def: GameDef, changes: Change[]): Change[] {
 
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
 function referentsOf(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }): string[] {
-	if (c.cell === "vertex") return [c.id];
+	if (c.cell === "vertex") return [c.next === null ? c.prev.id : c.next.id];
 	if (c.cell === "edge") return [c.from, c.to];
 	const ref = isRefProp(sim.def, c.prop);
 	const out: string[] = [c.entity];
@@ -758,7 +764,7 @@ export class Simulation {
 	readonly identityKey: string | undefined;
 	/** 实际起点读态的冻结副本 */
 	private genesisCache?: World;
-	/** 骰子地址的序位来源：同 (at, origin, verb) 的第 n 次表态——账本位置的一部分，重放可复原（静默时钟步不入账，故序位按 origin 分账）。 */
+	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位。 */
 	private attemptAt = -1;
 	private readonly attemptSeq = new Map<string, number>();
 
@@ -1003,7 +1009,11 @@ export class Simulation {
 		deepFreeze(action);
 		const s0 = this.readState();
 		try {
-			return deepFreeze(this.applyInner(action, s0, origin));
+			const res = this.applyInner(action, s0, origin);
+			// 序位随账目一同提交：apply 失败（钩子/投影崩溃）时世界回滚，未入账的尝试不得移动地址
+			this.markAttempt(res.step.at, res.step.origin, res.step.action.verb);
+			for (const c of res.elapsed) this.markAttempt(c.at, c.origin, c.action.verb);
+			return deepFreeze(res);
 		} catch (e) {
 			this.restore(s0);
 			throw e;
@@ -1018,7 +1028,7 @@ export class Simulation {
 	private attempt(s0: World, action: Action, origin: Origin): Commit {
 		const at = s0.time;
 		const verb = this.staticForm(action);
-		const addr = attemptAddr(at, origin, action.verb, this.noteAttempt(at, origin, action.verb));
+		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
 		const clock = origin === "clock";
 		const gate = this.namingIn(s0);
 		const r = this.adjudicateRaw(action, verb, gate, s0, addr, origin);
@@ -1031,15 +1041,17 @@ export class Simulation {
 		return { at, source: r.source, origin, action, price: clock ? 0 : verb.cost, ok: false, changes: [], denial: r.denial };
 	}
 
-	private noteAttempt(at: number, origin: Origin, verb: string): number {
+	/** 取序位不消耗；仅当步确定入账才 markAttempt——默与崩溃不移动任何地址。 */
+	private peekAttempt(at: number, origin: Origin, verb: string): number {
 		if (at !== this.attemptAt) {
 			this.attemptAt = at;
 			this.attemptSeq.clear();
 		}
-		const key = `${origin}\u0000${verb}`;
-		const n = this.attemptSeq.get(key) ?? 0;
-		this.attemptSeq.set(key, n + 1);
-		return n;
+		return this.attemptSeq.get(`${origin}\u0000${verb}`) ?? 0;
+	}
+
+	private markAttempt(at: number, origin: Origin, verb: string): void {
+		this.attemptSeq.set(`${origin}\u0000${verb}`, this.peekAttempt(at, origin, verb) + 1);
 	}
 
 	private pump(price: number): Commit[] {
@@ -1074,14 +1086,20 @@ export class Simulation {
 
 	/** 检查点已含其后果的回合仍须按账本复原点数：世界的重放可以跳过，序位的演进不可以（否则续掷与连续会话分叉）。 */
 	seedAttempts(record: ChronicleEntry): void {
-		for (const step of record.steps) this.noteAttempt(step.at, step.origin, step.action.verb);
+		for (const step of record.steps) this.markAttempt(step.at, step.origin, step.action.verb);
 	}
 
 	/** 重放一条回合记录：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审——历史由当时的法则裁判过。链断回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
+		const seqAt = this.attemptAt;
+		const seqMark = new Map(this.attemptSeq);
 		const fail = (reason: string): string => {
 			this.restore(s0);
+			// 未入账记录的序位随世界一并回滚：地址只由存活账本前缀决定
+			this.attemptAt = seqAt;
+			this.attemptSeq.clear();
+			for (const [key, n] of seqMark) this.attemptSeq.set(key, n);
 			return `seq${record.seq} ${reason}`;
 		};
 		try {
@@ -1090,7 +1108,7 @@ export class Simulation {
 			const grants = record.steps.reduce((n, s) => n + s.price, 0);
 			if (!Number.isInteger(record.time) || record.time !== start + grants) return fail(`末钟 ${String(record.time)} ≠ 起点 ${start} + 刻账 ${grants}`);
 			for (const step of record.steps) {
-				this.noteAttempt(step.at, step.origin, step.action.verb);
+				this.markAttempt(step.at, step.origin, step.action.verb);
 				for (const c of step.changes) {
 					const broken = this.verifyChange(c);
 					if (broken) return fail(broken);
@@ -1112,11 +1130,11 @@ export class Simulation {
 		switch (c.cell) {
 			case "vertex": {
 				if (c.next === null) {
-					const gone = entity(this.world, c.id);
-					if (!gone) return `despawn "${c.id}" 不在世`;
-					return c.prev !== null && sameEntity(gone, c.prev) ? null : `despawn "${c.id}" 离场态不符`;
+					const gone = entity(this.world, c.prev.id);
+					if (!gone) return `despawn "${c.prev.id}" 不在世`;
+					return sameEntity(gone, c.prev) ? null : `despawn "${c.prev.id}" 离场态不符`;
 				}
-				return entity(this.world, c.id) ? `spawn "${c.id}" 已在世` : null;
+				return entity(this.world, c.next.id) ? `spawn "${c.next.id}" 已在世` : null;
 			}
 			case "prop": {
 				const e = entity(this.world, c.entity);
@@ -1182,13 +1200,13 @@ export class Simulation {
 						}
 					}
 					// 记录自含克隆，不与活账本共享引用
-					changes.push({ cell: "vertex", id: d.id, prev: JSON.parse(JSON.stringify(gone)) as Entity, next: null });
+					changes.push({ cell: "vertex", prev: JSON.parse(JSON.stringify(gone)) as Entity, next: null });
 					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				} else {
-					if (entity(this.world, d.id)) return refuse(`spawn "${d.id}": entity already exists`);
+					if (entity(this.world, d.next.id)) return refuse(`spawn "${d.next.id}": entity already exists`);
 					const ent: Entity = { id: d.next.id, props: d.next.props };
-					if (!Object.values(ent.props).every(isValue)) return refuse(`spawn "${d.id}": props contain a non-value (non-null non-empty scalar or scalar array; absence is a missing key)`);
-					changes.push({ cell: "vertex", id: d.id, prev: null, next: JSON.parse(JSON.stringify(ent)) as Entity });
+					if (!Object.values(ent.props).every(isValue)) return refuse(`spawn "${d.next.id}": props contain a non-value (non-null non-empty scalar or scalar array; absence is a missing key)`);
+					changes.push({ cell: "vertex", prev: null, next: JSON.parse(JSON.stringify(ent)) as Entity });
 					this.world.entities.push(JSON.parse(JSON.stringify(ent)) as Entity);
 				}
 				continue;

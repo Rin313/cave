@@ -48,12 +48,12 @@ function isDenial(v: unknown): boolean {
 	return d.notes === undefined && d.kind === undefined;
 }
 
-/** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。 */
+/** 变更形状：投影与重放共用（信封粗筛，最终判据是装载对账与试投影）。顶点记录恰一侧为 ⊥（生/灭），不另存 id。 */
 function isChange(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
-	const c = v as { cell?: unknown; id?: unknown; entity?: unknown; prop?: unknown; from?: unknown; to?: unknown; type?: unknown; prev?: unknown; next?: unknown };
+	const c = v as { cell?: unknown; entity?: unknown; prop?: unknown; from?: unknown; to?: unknown; type?: unknown; prev?: unknown; next?: unknown };
 	switch (c.cell) {
-		case "vertex": return typeof c.id === "string" && "prev" in c && "next" in c;
+		case "vertex": return "prev" in c && "next" in c && (c.prev === null) !== (c.next === null);
 		case "prop": return typeof c.entity === "string" && typeof c.prop === "string" && "prev" in c && "next" in c;
 		case "edge": return typeof c.from === "string" && typeof c.to === "string" && typeof c.type === "string" && "prev" in c && "next" in c;
 		default: return false;
