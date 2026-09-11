@@ -86,13 +86,15 @@ export type LitType = "string" | "number" | "boolean";
 /** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称（值位指称只注册在属性上）。 */
 export type SlotType = LitType | "ref";
 
-/** 属性声明：type 值域，many 重数（缺省 one），label 呈现名（缺席或 null 即内部变量）。ref 是强引用：值即实体 id，须在世。 */
+/** 属性声明：type 值域，many 重数（缺省 one），label 呈现名（缺席或 null 即内部变量）。ref 生命周期：缺省强（悬空由 integrity 拒绝），false 即弱（随目标删除级联删格）。 */
 export interface PropDef {
 	type: SlotType;
 	/** 重数：缺省 one（标量），true 为非空序列 many(Seq)。 */
 	many?: true;
 	/** 呈现名；缺席或 null 即无名，非空串即该名。 */
 	label?: string | null;
+	/** ref 载荷的生命周期：缺省强（须先行解引用，悬空由 integrity 拒绝）；false 即弱（随目标删除级联删格）。 */
+	strong?: boolean;
 }
 
 /** 边类型注册：值域契约 × 生命周期 × 呈现。未注册即开口 token（字面、无契约、恒以 τ 为名）。label：缺席即 token，null 即无名，非空串即改名。 */
@@ -103,7 +105,7 @@ export interface RelDef {
 	/** 呈现名；缺席即 token（τ），null 即无名，非空串即改名。 */
 	label?: string | null;
 	/** ref 载荷的生命周期：缺省弱（随目标删除级联删边）；true 即强（须先行解引用，悬空由 integrity 拒绝）。 */
-	strong?: true;
+	strong?: boolean;
 }
 
 /** 裁决点。rule 的 law 只被呈现与探针消费；gate/closure 无载荷，呈现身份由 lawOf 产生。 */
@@ -391,9 +393,9 @@ export interface GameDef {
 	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
-	/** 属性注册表：κ 的全定义域，必填。 */
-	props: Record<string, PropDef>;
-	/** 边类型注册表（可选）：注册即获值域契约与呈现名（label）；未注册即开口 token（字面、以 τ 为名）。 */
+	/** 属性注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册键即字面（无契约、无缺省名），词法纪律归作者。 */
+	props?: Record<string, PropDef>;
+	/** 边类型注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
 	relTypes?: Record<string, RelDef>;
 	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
@@ -477,21 +479,16 @@ function integrityProblems(def: GameDef, world: World): string | null {
 	if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
 	if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
 	if (!ids.has(def.playerId)) return `integrity: playerId -> missing entity ${def.playerId}`;
-	const registry = Object.entries(def.props);
-	const vocabulary = new Set(registry.map(([k]) => k));
 	for (const e of world.entities) {
 		if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
 		for (const k of Object.keys(e)) {
 			if (k !== "id" && k !== "props") return `integrity: ${e.id}.${k} is not part of the entity shape`;
 		}
 		if (e.props === null || typeof e.props !== "object" || Array.isArray(e.props)) return `integrity: ${e.id}.props must be a record`;
-		for (const k of Object.keys(e.props)) {
-			if (!vocabulary.has(k)) return `integrity: ${e.id}.${k} is not declared in the prop registry`;
-		}
-		for (const [p, pd] of registry) {
-			const v = e.props[p];
-			if (v === undefined) continue;
+		for (const [p, v] of Object.entries(e.props)) {
 			if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`;
+			const pd = def.props?.[p];
+			if (pd === undefined) continue;
 			const many = pd.many === true;
 			if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
 			for (const x of Array.isArray(v) ? v : [v]) {
@@ -722,14 +719,26 @@ function renderValue(face: Face, v: Payload, isRef: boolean): { text: string; id
 	return { text: texts.join(", "), ids };
 }
 
-/** 注册表指称模式的值是引用；关系值与字面值一律字面。 */
+/** 注册表指称模式的值是引用；未注册键与字面值一律字面。 */
 function isRefProp(def: Pick<GameDef, "props">, prop: string): boolean {
-	return def.props[prop]?.type === "ref";
+	return def.props?.[prop]?.type === "ref";
+}
+
+/** 属性 ref 生命周期：缺省强（悬空由 integrity 拒绝）；strong: false 即弱（随目标删除级联删格）。 */
+function weakPropRef(def: Pick<GameDef, "props">, prop: string): boolean {
+	const pd = def.props?.[prop];
+	return pd?.type === "ref" && pd.strong === false;
 }
 
 /** 注册为 ref 的边类型：值为实体 id 载荷（生命周期看 strong）。 */
 function relRef(def: Pick<GameDef, "relTypes">, type: string): boolean {
 	return def.relTypes?.[type]?.type === "ref";
+}
+
+/** 边 ref 载荷生命周期：缺省弱（随目标删除级联删边）；strong: true 即强（悬空由 integrity 拒绝）。 */
+function weakEdgeRef(def: Pick<GameDef, "relTypes">, type: string): boolean {
+	const rd = def.relTypes?.[type];
+	return rd?.type === "ref" && rd.strong !== true;
 }
 
 /** 值是否含指称 id：弱载荷随目标删除级联的判据。 */
@@ -923,17 +932,19 @@ export class Simulation {
 			}
 			ticks.set(t.id, t.rules);
 		}
-		// props 必填；名字由呈现层按 (名, 值) 序列消费，不要求唯一
-		for (const [k, pd] of Object.entries(def.props)) {
+		// props 部分注册；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
+		for (const [k, pd] of Object.entries(def.props ?? {})) {
 			if (pd.type !== "string" && pd.type !== "number" && pd.type !== "boolean" && pd.type !== "ref") throw new Error(`属性「${k}」的类型须为 string/number/boolean/ref，得到 ${String(pd.type)}`);
 			if (pd.many !== undefined && pd.many !== true) throw new Error(`属性「${k}」的 many 只能为 true（缺省即 one），得到 ${String(pd.many)}`);
+			if (pd.strong !== undefined && typeof pd.strong !== "boolean") throw new Error(`属性「${k}」的 strong 须为布尔，得到 ${String(pd.strong)}`);
+			if (pd.strong !== undefined && pd.type !== "ref") throw new Error(`属性「${k}」的 strong 只对 ref 有意义`);
 			if (pd.label !== undefined && pd.label !== null && (typeof pd.label !== "string" || pd.label === "")) throw new Error(`属性「${k}」的 label 须为 null 或非空字符串，得到 ${JSON.stringify(pd.label)}`);
 		}
 		for (const [t, rd] of Object.entries(def.relTypes ?? {})) {
 			if (rd.type !== "string" && rd.type !== "number" && rd.type !== "boolean" && rd.type !== "ref") throw new Error(`边类型「${t}」的值类型须为 string/number/boolean/ref，得到 ${String(rd.type)}`);
 			if (rd.many !== undefined && rd.many !== true) throw new Error(`边类型「${t}」的 many 只能为 true（缺省即 one），得到 ${String(rd.many)}`);
-			if (rd.strong !== undefined && rd.strong !== true) throw new Error(`边类型「${t}」的 strong 只能为 true（缺省弱引用），得到 ${String(rd.strong)}`);
-			if (rd.strong === true && rd.type !== "ref") throw new Error(`边类型「${t}」的 strong 只对 ref 载荷有意义`);
+			if (rd.strong !== undefined && typeof rd.strong !== "boolean") throw new Error(`边类型「${t}」的 strong 须为布尔，得到 ${String(rd.strong)}`);
+			if (rd.strong !== undefined && rd.type !== "ref") throw new Error(`边类型「${t}」的 strong 只对 ref 载荷有意义`);
 			if (rd.label !== undefined && rd.label !== null && (typeof rd.label !== "string" || rd.label === "")) throw new Error(`边类型「${t}」的 label 须为 null 或非空字符串，得到 ${JSON.stringify(rd.label)}`);
 		}
 		this.ticks = ticks;
@@ -982,7 +993,7 @@ export class Simulation {
 		return (cell) => {
 			switch (cell.cell) {
 				case "vertex": return cell.id;
-				case "prop": return this.def.props[cell.prop]?.label ?? null;
+				case "prop": return this.def.props?.[cell.prop]?.label ?? null;
 				case "edge": {
 					const label = this.def.relTypes?.[cell.type]?.label;
 					return label === undefined ? cell.type : label;
@@ -1298,7 +1309,7 @@ export class Simulation {
 		}
 	}
 
-	/** 逐变更 prev 校验：记录前值须与重放世界相符；被 despawn 连带删除的边可已不在（后态已成立即通过）。 */
+	/** 逐变更 prev 校验：记录前值须与重放世界相符；被 despawn 连带删除的槽可已不在（后态已成立即通过）。 */
 	private verifyChange(c: Change): string | null {
 		switch (c.cell) {
 			case "vertex": {
@@ -1312,7 +1323,9 @@ export class Simulation {
 			case "prop": {
 				const e = entity(this.world, c.entity);
 				if (!e) return `set "${c.entity}.${c.prop}" 主语不在世`;
-				return sameValue(e.props[c.prop] ?? null, c.prev) ? null : `set "${c.entity}.${c.prop}" 前值不符`;
+				const cur = e.props[c.prop] ?? null;
+				if (c.next === null && cur === null) return null;
+				return sameValue(cur, c.prev) ? null : `set "${c.entity}.${c.prop}" 前值不符`;
 			}
 			case "edge": {
 				const cur = relVal(this.world, c.from, c.to, c.type);
@@ -1403,16 +1416,24 @@ export class Simulation {
 					const dissolved: Rel[] = [];
 					for (let j = existing.length - 1; j >= 0; j--) {
 						const r = existing[j]!;
-						const rd = this.def.relTypes?.[r.type];
-						const weakPayload = rd?.type === "ref" && rd.strong !== true && valueHasRef(r.value, d.id);
-						if (r.from === d.id || r.to === d.id || weakPayload) {
+						if (r.from === d.id || r.to === d.id || (weakEdgeRef(this.def, r.type) && valueHasRef(r.value, d.id))) {
 							dissolved.unshift(r);
 							existing.splice(j, 1);
+						}
+					}
+					// 弱属性 ref 随目标删除级联删格：many 值中含亡者即整格删
+					const dissolvedProps: { entity: string; prop: string; value: Value }[] = [];
+					for (const ent of this.world.entities) {
+						for (const [k, v] of Object.entries(ent.props)) {
+							if (!weakPropRef(this.def, k) || !valueHasRef(v, d.id)) continue;
+							dissolvedProps.push({ entity: ent.id, prop: k, value: v });
+							delete ent.props[k];
 						}
 					}
 					// 记录自含克隆，不与活账本共享引用
 					changes.push({ cell: "vertex", prev: clone(gone), next: null });
 					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
+					for (const p of dissolvedProps) changes.push({ cell: "prop", entity: p.entity, prop: p.prop, prev: p.value, next: null });
 				} else {
 					if (entity(this.world, d.next.id)) return refuse(`spawn "${d.next.id}": entity already exists`);
 					const ent: Entity = { id: d.next.id, props: d.next.props };
