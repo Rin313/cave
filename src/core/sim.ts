@@ -865,6 +865,14 @@ export class Simulation {
 		return { visible: b.visible, referable: b.referable, known: b.known };
 	}
 
+	/** steps 之前的世界：自终态逆推变更（与投影同法）；rewind 不触钟，故钟取首步边界。步空即当前世界。 */
+	beforeWorld(steps: readonly Commit[]): World {
+		const w = this.snapshot();
+		rewind(w, steps);
+		if (steps[0] !== undefined) w.time = steps[0].at;
+		return w;
+	}
+
 	/** 披露谓词：缺省全见；声明即接管全部格。 */
 	private perceives(world: World): (cell: Addr) => boolean {
 		return this.def.perceives?.(world, this.player) ?? (() => true);

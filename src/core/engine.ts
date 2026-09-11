@@ -51,8 +51,6 @@ export type EngineEvent =
 /** mapping 相位文本丢弃，narration 相位文本留作回合叙述（不入账），结算时从消息账本重读。 */
 interface RunState {
 	phase: "mapping" | "narration";
-	visibleBefore: Set<string>;
-	knownBefore: Set<string>;
 	utterance?: string | undefined;
 	messageStart: number;
 	entryStart: number;
@@ -132,7 +130,7 @@ export class Engine {
 
 		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", visibleBefore: new Set(), knownBefore: new Set(), messageStart: 0, entryStart: 0, steps: [], warnings: [] };
+		const run: RunState = { phase: "mapping", messageStart: 0, entryStart: 0, steps: [], warnings: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
@@ -182,14 +180,6 @@ export class Engine {
 	private beginRun(phase: "mapping" | "narration", utterance?: string): void {
 		const r = this.run;
 		r.phase = phase;
-		if (phase === "mapping") {
-			const sv = this.sim.sightView();
-			r.visibleBefore = sv.visible;
-			r.knownBefore = sv.known;
-		} else {
-			r.visibleBefore = new Set();
-			r.knownBefore = new Set();
-		}
 		r.utterance = utterance;
 		r.messageStart = this.session.messages.length;
 		r.entryStart = this.session.sessionManager.getEntries().length;
@@ -300,6 +290,17 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 			});
 		},
 	};
+}
+
+/** 新见段 = 新进可见域 ∪ 新进可指称域（出卡优先，否则出句柄）；回合前所见域由步逆推重建，与投影同一判据。 */
+function revealedSince(sim: Simulation, steps: readonly Commit[]): string[] {
+	const after = sim.sightView();
+	// 钩子收冻结读态：与回合起点快照下的权限一致
+	const before = sim.sightView(deepFreeze(sim.beforeWorld(steps)));
+	return [...new Set([
+		...[...after.visible].filter((id) => !before.visible.has(id)),
+		...[...after.known].filter((id) => !before.known.has(id)),
+	])];
 }
 
 function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]): string[] {
@@ -432,12 +433,8 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			}
 			let text: string;
 			try {
-				// 投影失灵时不重入所见域：新见段缺席。新见段 = 新进可见域 ∪ 新进可指称域（出卡优先，否则出句柄）
-				const sv = crashed ? null : sim.sightView();
-				const revealed = sv === null ? [] : [...new Set([
-					...[...sv.visible].filter((id) => !run.visibleBefore.has(id)),
-					...[...sv.known].filter((id) => !run.knownBefore.has(id)),
-				])];
+				// 投影失灵时不重入所见域：新见段缺席
+				const revealed = crashed ? [] : revealedSince(sim, steps);
 				const lines = formatTurnEvents(sim, steps, revealed);
 				if (crashed) lines.push(def.messages.noResponse);
 				text = lines.join("\n");
