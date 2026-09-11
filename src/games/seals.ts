@@ -80,7 +80,7 @@ const base: Omit<GameDef, "prompt"> = {
 	id: "seals",
 	title: "统一探针",
 	playerId: "player",
-	identity: "name",
+	face: () => des,
 	recentWindow: 6,
 	messages: {
 		noResponse: "无人应答。",
@@ -268,13 +268,10 @@ const base: Omit<GameDef, "prompt"> = {
 				},
 			}],
 		}),
-		"post.deliver": defineVerb({
-			label: "邮递",
-			description: "宅邸的邮路：每四刻，书案上的信照常送抵收信人。",
-			params: {},
-			cost: 0,
-			private: true,
-			clock: true,
+	},
+	ticks: [
+		{
+			id: "post.deliver",
 			rules: [{
 				id: "deliver",
 				judge: (q) => {
@@ -304,14 +301,9 @@ const base: Omit<GameDef, "prompt"> = {
 					return deltas.length ? grant(deltas, { statements }) : null;
 				},
 			}],
-		}),
-		"post.arrive": defineVerb({
-			label: "夜笺",
-			description: "宅邸的暗渠：交割后的下一刻，夜笺自会到案。",
-			params: {},
-			cost: 0,
-			private: true,
-			clock: true,
+		},
+		{
+			id: "post.arrive",
 			rules: [{
 				id: "arrive",
 				judge: (q) => {
@@ -324,14 +316,9 @@ const base: Omit<GameDef, "prompt"> = {
 					);
 				},
 			}],
-		}),
-		"salon.gossip": defineVerb({
-			label: "流言",
-			description: "宅邸的耳目：过从甚密者必有低语，偶尔被你瞥见。",
-			params: {},
-			cost: 0,
-			private: true,
-			clock: true,
+		},
+		{
+			id: "salon.gossip",
 			rules: [{
 				id: "gossip",
 				judge: (q) => {
@@ -346,14 +333,9 @@ const base: Omit<GameDef, "prompt"> = {
 					return grant([], { reply: `你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。` });
 				},
 			}],
-		}),
-		"guest.drift": defineVerb({
-			label: "徘徊",
-			description: "灰衣人在正厅与书房之间踱步。",
-			params: {},
-			cost: 0,
-			private: true,
-			clock: true,
+		},
+		{
+			id: "guest.drift",
 			rules: [{
 				id: "drift",
 				judge: (q) => {
@@ -371,8 +353,8 @@ const base: Omit<GameDef, "prompt"> = {
 					return null;
 				},
 			}],
-		}),
-	},
+		},
+	],
 	world: {
 		time: 0,
 		entities: [
@@ -420,7 +402,7 @@ const base: Omit<GameDef, "prompt"> = {
 const stateHeader = "[State view] (the slice of the world visible to you; what is not in it cannot be referred to):";
 
 const sealsSystemPrompt = (def: Pick<GameDef, "verbs">): string => {
-	const verbs = Object.entries(def.verbs).filter(([, v]) => !v.private)
+	const verbs = Object.entries(def.verbs)
 		.map(([name, v]) => {
 			const refs = refParamsOf(v);
 			return `- ${name} "${v.label}": ${v.description}${refs.length ? ` (reference params: ${refs.join("/")} — must be ids of visible entities)` : ""}`;

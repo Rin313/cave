@@ -74,7 +74,6 @@ export type SlotType = LitType | "ref";
 /**
  * 属性声明：值域 × 重数 × 呈现。label 即呈现名，缺席即内部变量（键不进模型面）。
  * ref 是强引用：值即实体 id，须在世、渲染为脸。
- * 身份键在 GameDef.identity（结构上全域至多一），其属性恒为无 label 的非 many string：脸槽不是卡槽。
  */
 export interface PropDef {
 	type: SlotType;
@@ -139,7 +138,10 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** world 为深冻结裁决读态，越权写即抛；一切后果经返回值表达。P 为参数的编译期形状（defineVerb 从 params 声明派生）。 */
+/**
+ * world 为深冻结裁决读态，越权写即抛；一切后果经返回值表达。P 为参数的编译期形状（defineVerb 从 params 声明派生）。
+ * 两个调用点不相交（意志动词唯一调用者是 will，常驻规则唯一调用者是泵），故判定输入不含 origin：调用点由声明决定，不是规则读得到的变量。
+ */
 export interface Q<P = Record<string, Value>> {
 	readonly world: World;
 	readonly player: string;
@@ -287,8 +289,6 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	description: string;
 	params: P;
 	cost: number;
-	private?: boolean;
-	clock?: boolean;
 	rules: { id: string; judge: (q: Q<ParamsOf<P>>) => Verdict | null }[];
 }): VerbDef {
 	return {
@@ -296,20 +296,22 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 		description: spec.description,
 		params: spec.params,
 		cost: spec.cost,
-		...(spec.private !== undefined && { private: spec.private }),
-		...(spec.clock !== undefined && { clock: spec.clock }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q as Q<ParamsOf<P>>) })),
 	};
 }
 
+/** 意志动词：唯一调用点是 will（玩家经动词面）。 */
 export interface VerbDef {
 	label: string;
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 不进动词面；private ⇒ clock（不广告的常驻声音，由泵逐刻调用）。 */
-	private?: boolean;
-	clock?: boolean;
+	rules: Rule[];
+}
+
+/** 常驻规则：唯一调用点是泵（每刻一次，空参）。不进动词面、无参数、无价、无呈现名；id 只进账本与骰子地址。 */
+export interface TickDef {
+	id: string;
 	rules: Rule[];
 }
 
@@ -376,8 +378,13 @@ export interface GameDef {
 	props: Record<string, PropDef>;
 	/** 边类型注册表（可选）：注册即获值域契约与呈现（hidden/token/改名）；未注册即开口 token（字面、以 token 示人）。 */
 	relTypes?: Record<string, RelDef>;
-	/** 身份键：props 里的一个 string 属性，结构上全域至多一；其值提升为实体名，渲染取 `~` 形。 */
-	identity?: string;
+	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
+	ticks?: TickDef[];
+	/**
+	 * 脸：所见域上的命名，缺省 id。只被呈现消费，不产生指称（指称恒为 id）；所见域内须返回非空串，否则回落 id。
+	 * 改名不是格：一步内 token 变化即派生出 `~ 旧 → 新`。
+	 */
+	face?: (world: World, player: string) => (e: Entity) => string;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
 	/**
@@ -475,7 +482,6 @@ function integrityProblems(def: GameDef, world: World): string | null {
 			if (!isValue(v)) return `integrity: ${e.id}.${p} is not a value (non-null scalar or non-empty scalar array; absence is a missing key)`;
 			const many = pd.many === true;
 			if (Array.isArray(v) !== many) return `integrity: ${e.id}.${p} expects ${many ? "a sequence" : "a scalar"}, got ${got(v)}`;
-			if (p === def.identity && v === "") return `integrity: ${e.id}.${p} must be non-empty string (empty designation is absence; omit the key)`;
 			for (const x of Array.isArray(v) ? v : [v]) {
 				if (pd.type === "ref") {
 					if (typeof x !== "string") return `integrity: ${e.id}.${p} expects id reference, got ${got(x)}`;
@@ -516,29 +522,11 @@ function hasLabel(def: GameDef, prop: string): boolean {
 	return def.props[prop]?.label !== undefined;
 }
 
-/** 有呈现名的属性：有 label，或身份（脸槽，行文取 ~ 形）。 */
-function presentableProp(def: GameDef, prop: string): boolean {
-	return hasLabel(def, prop) || prop === def.identity;
-}
-
-/** 身份值：非空 string；缺席即无名。 */
-export function designation(def: GameDef, e: Entity): string | undefined {
-	const key = def.identity;
-	if (key === undefined) return undefined;
-	const v = e.props[key];
-	return typeof v === "string" && v !== "" ? v : undefined;
-}
-
-export function viewCard(def: GameDef, e: Entity, vis: ReadonlySet<string>, perceiveProp?: (e: Entity, prop: string) => boolean): { id: string; name?: string; props: Record<string, Value> } {
-	const name = def.identity === undefined || (perceiveProp !== undefined && !perceiveProp(e, def.identity)) ? undefined : designation(def, e);
-	const props: Record<string, Value> = {};
-	for (const [k, v] of Object.entries(e.props)) {
-		if (!hasLabel(def, k)) continue;
-		if (perceiveProp && !perceiveProp(e, k)) continue;
-		if (!refsWithin(def, k, v, vis)) continue;
-		props[propLabelOf(def, k)] = v;
-	}
-	return { id: e.id, ...(name !== undefined && { name }), props };
+/** 实体卡：id 是指称身份（ref 参数用它），name 是脸 token（只阅读）。 */
+export interface Card {
+	id: string;
+	name: string;
+	props: Record<string, Value>;
 }
 
 /** 属性的呈现名；加载期保证一切可渲染属性携非空 label。 */
@@ -550,7 +538,7 @@ function propLabelOf(def: GameDef, prop: string): string {
 
 /** 一个提交边界上的呈现前提：脸表＋格披露谓词。由世界即时求值，不入账。 */
 export interface FieldView {
-	faces: Map<string, string | null>;
+	faces: Map<string, string>;
 	discloses: (cell: Addr) => boolean;
 }
 
@@ -570,7 +558,7 @@ export type Proposal =
 	| { kind: "rule"; rule: string; origin: Origin; action: Action }
 	| { kind: "admit" };
 
-/** 入账表态的机器身份：账本位置 (at, origin, verb, 序位)。对入账表态单射、且由账本前缀复原——随机是账本位置的纯函数。 */
+/** 入账表态的机器身份：账本位置 (at, origin, id, 序位)——id 即动词或常驻规则。对入账表态单射、且由账本前缀复原：随机是账本位置的纯函数。 */
 function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number): string {
 	return tupleKey(["attempt", String(at), origin, verb, String(ordinal)]);
 }
@@ -587,7 +575,7 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 步一律携公共载荷 action（clock 的 params 恒空，是空参提案）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众，曾被授予而拦回者记提案法则。 */
+/** 步一律携公共载荷 action（clock 步的 verb 即常驻规则 id，params 恒空）。价 = origin=clock ? 0 : ok ? (granted ?? cost) : cost。授予记授予法则；否决记裁决点与受众，曾被授予而拦回者记提案法则。 */
 export type Commit =
 	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; reply?: Text; statements?: Text[] }
 	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial; proposedBy?: string };
@@ -622,7 +610,7 @@ export function denialReasonText(def: GameDef, denial: Denial): string {
 /** 脸 token：id 在某个提交边界上的呈现词。脸表由该边界的世界即时求值，行文不回读活世界。 */
 type Face = (id: string) => string;
 
-function faceOf(faces: ReadonlyMap<string, string | null>): Face {
+function faceOf(faces: ReadonlyMap<string, string>): Face {
 	return (id) => faces.get(id) ?? id;
 }
 
@@ -669,7 +657,6 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 	const val = (v: Payload, ok: boolean, isRef: boolean): string => (ok ? renderValue(face, v, isRef).text : "?");
 	if (c.cell === "vertex") return `${c.next === null ? "-" : "+"} ${face(c.next === null ? c.prev.id : c.next.id)}`;
 	if (c.cell === "edge") return `${face(c.from)}.${relName(sim.def, c.type)}.${face(c.to)}: ${val(c.prev, sides.prev, false)} → ${val(c.next, sides.next, false)}`;
-	if (sim.identityKey !== undefined && c.prop === sim.identityKey) return `~ ${val(c.prev, sides.prev, false)} → ${val(c.next, sides.next, false)}`;
 	const name = face(c.entity);
 	const label = propLabelOf(sim.def, c.prop);
 	return `${name}.${label}: ${val(c.prev, sides.prev, isRefProp(sim.def, c.prop))} → ${val(c.next, sides.next, isRefProp(sim.def, c.prop))}`;
@@ -677,7 +664,7 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 
 /** 可呈现的变更行：无呈现名的属性与静态隐藏边零泄漏。 */
 function narratableChanges(def: GameDef, changes: Change[]): Change[] {
-	return changes.filter((c) => !(c.cell === "prop" && !presentableProp(def, c.prop)) && !(c.cell === "edge" && hiddenRel(def, c.type)));
+	return changes.filter((c) => !(c.cell === "prop" && !hasLabel(def, c.prop)) && !(c.cell === "edge" && hiddenRel(def, c.type)));
 }
 
 /** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
@@ -708,17 +695,23 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			befores[i] = w;
 		}
 	}
-	/** 一步的渲染器：脸表与披露谓词由该步的提交边界即时求值，行文不回读活世界。 */
-	const renderer = (i: number): { face: Face; changeLine: (c: Change) => string | null } => {
+	/** 一步的渲染器：脸表、披露谓词与改名行都由该步的提交边界即时求值，行文不回读活世界。 */
+	const renderer = (i: number): { face: Face; renames: string[]; changeLine: (c: Change) => string | null } => {
 		const before = befores[i]!;
 		const after = afters[i]!;
 		before.time = steps[i]!.at;
 		after.time = steps[i]!.at;
 		const b = sim.fieldView(before);
 		const a = sim.fieldView(after);
-		const faces = new Map<string, string | null>([...b.faces, ...a.faces]);
+		const faces = new Map<string, string>([...b.faces, ...a.faces]);
 		const face = faceOf(faces);
 		const field = new Set(faces.keys());
+		// 改名是投影：一步内 token 变化且两端皆在所见域（才有名可换），不为源属性的无 label 所滤
+		const renames: string[] = [];
+		for (const [id, name] of a.faces) {
+			const prev = b.faces.get(id);
+			if (prev !== undefined && prev !== name) renames.push(`~ ${prev} → ${name}`);
+		}
 		// 每一侧都由该边界对变更格的披露谓词判：缺席格与在场格同过一门
 		const sidesOf = (c: Change): { prev: boolean; next: boolean } => {
 			const cell: Addr = c.cell === "vertex" ? { cell: "vertex", id: c.next === null ? c.prev.id : c.next.id } : c;
@@ -730,7 +723,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			if (!referentsOf(sim, c, face, sides).every((r) => field.has(r))) return null;
 			return fmtChange(sim, c, face, sides);
 		};
-		return { face, changeLine };
+		return { face, renames, changeLine };
 	};
 	const msgs = sim.def.messages;
 	const lines: string[] = [];
@@ -751,11 +744,11 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	};
 	for (let i = 0; i < n; i++) {
 		const s = steps[i]!;
+		const { face, renames, changeLine } = renderer(i);
+		const changes = s.ok ? [...renames, ...narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null)] : [];
 		if (s.origin !== "clock") {
 			flush();
 			granted = s.price;
-			const { face, changeLine } = renderer(i);
-			const changes = s.ok ? narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null) : [];
 			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial);
 			const statements = s.ok ? (s.statements ?? []) : [];
 			const tail = [
@@ -764,10 +757,9 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, face)}${reply !== undefined ? `：${reply}` : ""}${tail}`);
 		} else {
-			const { changeLine } = renderer(i);
 			const held = said.get(s.at) ?? { changes: [], reply: [], statements: [], denials: [] };
 			if (s.ok) {
-				held.changes.push(...narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null));
+				held.changes.push(...changes);
 				if (s.reply !== undefined) held.reply.push(s.reply);
 				if (s.statements?.length) held.statements.push(...s.statements);
 			} else {
@@ -792,8 +784,8 @@ type RawResult =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 身份键 = def.identity；缺席时实体以 id 示人。 */
-	readonly identityKey: string | undefined;
+	/** 常驻规则：id → 规则链；每刻按声明序由泵调用。 */
+	private readonly ticks: Map<string, readonly Rule[]>;
 	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位。 */
 	private attemptAt = -1;
 	private readonly attemptSeq = new Map<string, number>();
@@ -816,11 +808,17 @@ export class Simulation {
 			for (const [p, s] of Object.entries(v.params)) {
 				if (s.type !== "string" && s.type !== "number" && s.type !== "boolean" && s.type !== "ref") throw new Error(`动词 ${name} 的参数「${p}」的类型须为 string/number/boolean/ref，得到 ${String(s.type)}`);
 			}
-			if (v.clock) {
-				const required = Object.values(v.params).filter((s) => !s.optional);
-				if (required.length) throw new Error(`时钟动词 ${name} 不得有必填参数：泵以空参提案过门，时钟不是能改错重提的调用者`);
+		}
+		const ticks = new Map<string, readonly Rule[]>();
+		for (const t of def.ticks ?? []) {
+			if (typeof t.id !== "string" || t.id === "") throw new Error("常驻规则 id 须为非空字符串");
+			if (ticks.has(t.id)) throw new Error(`常驻规则 id 重复：${t.id}`);
+			const ruleIds = new Set<string>();
+			for (const r of t.rules) {
+				if (ruleIds.has(r.id)) throw new Error(`常驻规则 ${t.id} 的规则 id 重复：${r.id}`);
+				ruleIds.add(r.id);
 			}
-			if (v.private && !v.clock) throw new Error(`动词 ${name} 声明为 private 但非 clock：private 只用于不进动词面的常驻声音，private ∧ ¬clock 不可达`);
+			ticks.set(t.id, t.rules);
 		}
 		// props 必填；呈现名（label）只在位置内要求唯一
 		const propNames = new Map<string, string>();
@@ -833,12 +831,6 @@ export class Simulation {
 				if (prev !== undefined) throw new Error(`属性呈现名重复：「${pd.label}」为「${prev}」与「${k}」共有`);
 				propNames.set(pd.label, k);
 			}
-		}
-		const identityKey = def.identity;
-		if (identityKey !== undefined) {
-			const pd = def.props[identityKey];
-			if (!pd) throw new Error(`identity「${identityKey}」未在 props 注册`);
-			if (pd.type !== "string" || pd.many === true || pd.label !== undefined) throw new Error(`identity「${identityKey}」须为无 label 的非 many string 属性（脸槽不是卡槽）`);
 		}
 		// 边类型呈现名：注册集内有效名（hidden 即无名）两两相异；开口 token 不在注册表，无法在 def 期穷举
 		const relNames = new Map<string, string>();
@@ -859,7 +851,7 @@ export class Simulation {
 				claim(label);
 			}
 		}
-		this.identityKey = identityKey;
+		this.ticks = ticks;
 		// 结构校验恒挂；作者不变式走 admit（装载终点判当下世界，历史不重审），开局世界在此另判一次以尽早显形 def 错误
 		const broken = integrityProblems(this.def, this.readState());
 		if (broken) throw new Error(`初始世界破坏完整性：${broken}`);
@@ -873,9 +865,10 @@ export class Simulation {
 		return this.def.playerId;
 	}
 
-	/** 所见域（呈现能显什么，也是意志能点名什么）：卡的存在域。 */
+	/** 所见域（呈现能显什么，也是意志能点名什么）：卡的存在域。门只读它，不触脸——裁决不得经呈现钩子。 */
 	sights(world: World = this.readState()): SightView {
-		return this.sightView(world);
+		const within = this.perceives(world);
+		return new Set(world.entities.filter((e) => within({ cell: "vertex", id: e.id })).map((e) => e.id));
 	}
 
 	/** 所见谓词：缺省全见；声明即接管全部格。 */
@@ -883,28 +876,25 @@ export class Simulation {
 		return this.def.perceives?.(world, this.player) ?? (() => true);
 	}
 
-	/** 所见域与格谓词的同一次求值：卡集合即谓词于顶点格的成员。 */
-	sightView(world: World): SightView {
+	/** 所见域＋脸表的同一次求值：卡集合即谓词于顶点格的成员；脸在所见域上全（非空串，否则回落 id）。 */
+	private boundaryView(world: World): { within: (cell: Addr) => boolean; seen: SightView; faces: Map<string, string> } {
 		const within = this.perceives(world);
-		return new Set(world.entities.filter((e) => within({ cell: "vertex", id: e.id })).map((e) => e.id));
-	}
-
-	/** 边界脸表：所见域内实体 × 身份披露。由世界即时求值，不持久化。 */
-	private faceList(world: World, within: (cell: Addr) => boolean): Map<string, string | null> {
-		const key = this.identityKey;
-		const out = new Map<string, string | null>();
+		const token = this.def.face?.(world, this.player) ?? ((e: Entity) => e.id);
+		const seen: SightView = new Set();
+		const faces = new Map<string, string>();
 		for (const e of world.entities) {
 			if (!within({ cell: "vertex", id: e.id })) continue;
-			const readable = key !== undefined && within({ cell: "prop", entity: e.id, prop: key });
-			out.set(e.id, readable ? (designation(this.def, e) ?? null) : null);
+			seen.add(e.id);
+			const name = token(e);
+			faces.set(e.id, typeof name === "string" && name !== "" ? name : e.id);
 		}
-		return out;
+		return { within, seen, faces };
 	}
 
 	/** 一个提交边界上的呈现前提：脸表＋格披露谓词（缺省全见）；投影时由世界即时求值。 */
 	fieldView(world: World): FieldView {
-		const within = this.perceives(world);
-		return { faces: this.faceList(world, within), discloses: within };
+		const { within, faces } = this.boundaryView(world);
+		return { faces, discloses: within };
 	}
 
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
@@ -920,8 +910,15 @@ export class Simulation {
 		return verb;
 	}
 
-	private adjudicateRaw(action: Action, verb: VerbDef, gate: Set<string>, world: World, addr: string, origin: Origin): RawResult {
-		const invalid = refParamsOf(verb)
+	/** 常驻规则的规则链；泵只按声明表调用，未注册即内核缺陷。 */
+	private tickRules(id: string): readonly Rule[] {
+		const rules = this.ticks.get(id);
+		if (!rules) throw new Error(`常驻规则 ${id} 未注册`);
+		return rules;
+	}
+
+	private adjudicateRaw(action: Action, rules: readonly Rule[], refParams: readonly string[], gate: Set<string>, world: World, addr: string, clock: boolean): RawResult {
+		const invalid = refParams
 			.flatMap((p) => {
 				const v = action.params[p];
 				return (Array.isArray(v) ? v : [v]).filter((id): id is string => typeof id === "string" && !gate.has(id));
@@ -930,7 +927,7 @@ export class Simulation {
 			const invisible = this.def.messages.invisibleEntity;
 			return { ok: false, denial: { point: { kind: "gate", law: "action.invisible" }, ...(invisible !== undefined && { text: invisible }) } };
 		}
-		for (const r of verb.rules) {
+		for (const r of rules) {
 			const q = this.query(world, action.params, addr);
 			let v: Verdict | null;
 			try {
@@ -940,8 +937,8 @@ export class Simulation {
 			}
 			if (!v) continue;
 			if (v.ok) {
-				if (origin === "clock" && v.ticks !== undefined) {
-					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 时钟提案不得延伸时间` } };
+				if (clock && v.ticks !== undefined) {
+					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 常驻规则不得延伸时间` } };
 				}
 				if (v.ticks !== undefined && (!Number.isInteger(v.ticks) || v.ticks < 0)) {
 					return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
@@ -1034,21 +1031,33 @@ export class Simulation {
 	private attempt(s0: World, action: Action, origin: Origin): Commit {
 		deepFreeze(action);
 		const at = s0.time;
-		const verb = this.staticForm(action);
-		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
 		const clock = origin === "clock";
-		const gate = this.sightView(s0);
-		const r = this.adjudicateRaw(action, verb, gate, s0, addr, origin);
+		let rules: readonly Rule[];
+		let refParams: readonly string[];
+		let price: number;
+		if (clock) {
+			rules = this.tickRules(action.verb);
+			refParams = [];
+			price = 0;
+		} else {
+			const verb = this.staticForm(action);
+			rules = verb.rules;
+			refParams = refParamsOf(verb);
+			price = verb.cost;
+		}
+		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
+		const gate = this.sights(s0);
+		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, clock);
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
 			if (!cc.ok)
-				return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: cc.denial, proposedBy: r.rule };
+				return { at, origin, action, price, ok: false, denial: cc.denial, proposedBy: r.rule };
 			// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
 			const reply = clock ? undefined : r.reply;
 			const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-			return { at, origin, action, price: clock ? 0 : (r.ticks ?? verb.cost), ok: true, rule: r.rule, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+			return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 		}
-		return { at, origin, action, price: clock ? 0 : verb.cost, ok: false, denial: r.denial };
+		return { at, origin, action, price, ok: false, denial: r.denial };
 	}
 
 	/** 取序位不消耗；仅当步确定入账才 markAttempt——默与崩溃不移动任何地址。 */
@@ -1068,9 +1077,8 @@ export class Simulation {
 		const out: Commit[] = [];
 		for (let i = 0; i < price; i++) {
 			this.world.time += 1;
-			for (const [name, v] of Object.entries(this.def.verbs)) {
-				if (!v.clock) continue;
-				const c = this.attempt(this.readState(), { verb: name, params: {} }, "clock");
+			for (const id of this.ticks.keys()) {
+				const c = this.attempt(this.readState(), { verb: id, params: {} }, "clock");
 				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || c.reply !== undefined || !!c.statements?.length) out.push(c);
 			}
 		}
@@ -1195,9 +1203,8 @@ export class Simulation {
 	/** 状态视图：卡的集合即所见域（门与卡白名单同源）。 */
 	digest(): string {
 		const w = this.readState();
-		const seen = this.sightView(w);
-		const within = this.perceives(w);
-		const entities = w.entities.filter((e) => seen.has(e.id)).map((e) => this.cardOf(e, seen, w));
+		const { within, seen, faces } = this.boundaryView(w);
+		const entities = w.entities.filter((e) => seen.has(e.id)).map((e) => this.cardOf(e, seen, within, faces.get(e.id)!));
 		const relations = w.relations
 			.filter((r) => !hiddenRel(this.def, r.type) && seen.has(r.from) && seen.has(r.to) && within({ cell: "edge", from: r.from, to: r.to, type: r.type }))
 			.map((r) => ({ from: r.from, to: r.to, type: relName(this.def, r.type), value: r.value }));
@@ -1207,10 +1214,23 @@ export class Simulation {
 		return JSON.stringify(out);
 	}
 
-	/** 卡：身份与属性按所见谓词遮蔽，值位指称须在所见域（谓词于给定读态求值）。 */
-	cardOf(e: Entity, seen: SightView, world: World): { id: string; name?: string; props: Record<string, Value> } {
-		const within = this.perceives(world);
-		return viewCard(this.def, e, seen, (x, prop) => within({ cell: "prop", entity: x.id, prop }));
+	/** 卡：脸 token 与属性按所见谓词遮蔽，值位指称须在所见域。 */
+	private cardOf(e: Entity, seen: SightView, within: (cell: Addr) => boolean, name: string): Card {
+		const props: Record<string, Value> = {};
+		for (const [k, v] of Object.entries(e.props)) {
+			if (!hasLabel(this.def, k)) continue;
+			if (!within({ cell: "prop", entity: e.id, prop: k })) continue;
+			if (!refsWithin(this.def, k, v, seen)) continue;
+			props[propLabelOf(this.def, k)] = v;
+		}
+		return { id: e.id, name, props };
+	}
+
+	/** 所见域内实体的卡；不在所见域即 null（不产生非所见卡）。 */
+	card(world: World, id: string): Card | null {
+		const { within, seen, faces } = this.boundaryView(world);
+		const e = entity(world, id);
+		return e !== undefined && seen.has(id) ? this.cardOf(e, seen, within, faces.get(id)!) : null;
 	}
 
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。 */

@@ -96,6 +96,13 @@
 				{ "name": "五刻：夜笺到案，寄信人（灰衣人）尚在书房——寄信人出域，整槽遮蔽", "tick": 5, "expect": { "ok": true, "state": { "$world.time": 5, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"寄信人\":\"guest\""] } },
 				{ "name": "一刻：灰衣人漂移入厅——寄信人随卡显形", "tick": 1, "expect": { "ok": true, "viewIncludes": ["\"寄信人\":\"guest\""] } }
 			]
+		},
+		{
+			"name": "常驻规则不是动词：泵的 id 不进动词面，裸提案即协议违约",
+			"steps": [
+				{ "name": "以常驻规则 id 提案：未知动词，且世界零扰动", "action": { "verb": "post.deliver", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "letter_salt.in": "desk" } } },
+				{ "name": "意志动词照常：上一违约不留痕", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "state": { "$world.time": 0, "letter_salt.in": "courier" } } }
+			]
 		}
 	]
 }

@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
 import { deepFreeze, errorText } from "./util.ts";
-import { Simulation, entity, spineLines, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
+import { Simulation, spineLines, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -298,10 +298,9 @@ function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]):
 	const lines = spineLines(sim, steps, sim.snapshot());
 	if (revealed.length) {
 		const w = deepFreeze(sim.snapshot());
-		const seen = sim.sightView(w);
 		for (const id of revealed) {
-			const e = entity(w, id);
-			if (e) lines.push(JSON.stringify(sim.cardOf(e, seen, w)));
+			const card = sim.card(w, id);
+			if (card) lines.push(JSON.stringify(card));
 		}
 	}
 	return lines;
@@ -354,13 +353,13 @@ type JsonSchema = {
 };
 
 /** 接口模式由 params 声明构造发射：构造式派生，无对既有 schema 图的变换。 */
-function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
+function hostParametersSchema(verbs: [string, VerbDef][]): JsonSchema {
 	const scalarSchema = (spec: ParamSpec): JsonSchema => ({ type: spec.type === "ref" ? "string" : spec.type, ...(spec.description !== undefined && { description: spec.description }) });
 	const paramSchema = (spec: ParamSpec): JsonSchema => spec.many === true
 		? { type: "array", items: scalarSchema(spec), minItems: 1, ...(spec.description !== undefined && { description: spec.description }) }
 		: scalarSchema(spec);
 	return {
-		anyOf: publicVerbs.map(([name, v]) => {
+		anyOf: verbs.map(([name, v]) => {
 			const entries = Object.entries(v.params);
 			const required = entries.filter(([, s]) => !s.optional).map(([p]) => p);
 			return {
@@ -382,15 +381,15 @@ function hostParametersSchema(publicVerbs: [string, VerbDef][]): JsonSchema {
 }
 
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Archive, sessionManager: SessionManager) {
-	const publicVerbs = Object.entries(def.verbs).filter(([, v]) => !v.private);
+	const verbs = Object.entries(def.verbs);
 	return defineTool({
 		name: "act",
 		label: "act",
-		description: `Propose actions to the world (${publicVerbs.map(([n]) => n).join("/")}); the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; referential params take ids of visible entities; an empty actions array is a refusal.`,
+		description: `Propose actions to the world (${verbs.map(([n]) => n).join("/")}); the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; referential params take ids of visible entities; an empty actions array is a refusal.`,
 		parameters: {
 			type: "object",
 			properties: {
-				actions: { type: "array", items: hostParametersSchema(publicVerbs) },
+				actions: { type: "array", items: hostParametersSchema(verbs) },
 			},
 		},
 		execute: async (_toolCallId, params: { actions?: unknown[] }) => {

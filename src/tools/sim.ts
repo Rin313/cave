@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProtocolViolation, Simulation, audienceOf, lawOf, refParamsOf, renderDenial, spineLines } from "../core/sim.ts";
-import type { Action, Change, Commit, Denial, GameDef, Q, Value, VerbDef, Verdict } from "../core/sim.ts";
+import type { Action, Change, Commit, Denial, GameDef, Q, Rule, Value, VerbDef, Verdict } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -265,25 +265,28 @@ interface RuleTrace {
 	rule: string;
 	/** undefined＝弃权；true/false＝表态。 */
 	ok?: boolean | undefined;
+	/** 常驻规则的踪迹与动词同名不同物，分账。 */
+	clock: boolean;
+}
+
+function traceKey(clock: boolean, verb: string, rule: string): string {
+	return `${clock ? "clock" : "will"}\u0000${verb}\u0000${rule}`;
 }
 
 /** 包装规则记录踪迹：不改原 def，不复制裁决逻辑。 */
 function instrumentDef(def: GameDef, trace: RuleTrace[]): GameDef {
+	const wrap = (name: string, clock: boolean) => (rules: Rule[]): Rule[] => rules.map((r) => ({
+		id: r.id,
+		judge: (q: Q): Verdict | null => {
+			const verdict = r.judge(q);
+			trace.push({ verb: name, rule: r.id, ok: verdict?.ok, clock });
+			return verdict;
+		},
+	}));
 	const verbs: Record<string, VerbDef> = {};
-	for (const [name, v] of Object.entries(def.verbs)) {
-		verbs[name] = {
-			...v,
-			rules: v.rules.map((r) => ({
-				id: r.id,
-				judge: (q: Q): Verdict | null => {
-					const verdict = r.judge(q);
-					trace.push({ verb: name, rule: r.id, ok: verdict?.ok });
-					return verdict;
-				},
-			})),
-		};
-	}
-	return { ...def, verbs };
+	for (const [name, v] of Object.entries(def.verbs)) verbs[name] = { ...v, rules: wrap(name, false)(v.rules) };
+	const ticks = def.ticks?.map((t) => ({ ...t, rules: wrap(t.id, true)(t.rules) }));
+	return { ...def, verbs, ...(ticks !== undefined && { ticks }) };
 }
 
 function opLabel(action: Action): string {
@@ -291,7 +294,7 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-/** 授予的变更形状指纹：格＋键（prop 名/rel 型），机械真相不滤 private。 */
+/** 授予的变更形状指纹：格＋键（prop 名/rel 型）。 */
 function deltaShape(changes: Change[]): string {
 	if (!changes.length) return "∅";
 	return changes.map((c) => (c.cell === "prop" ? `prop:${c.prop}` : c.cell === "edge" ? `rel:${c.type}` : c.next === null ? "despawn" : "spawn")).sort().join("+");
@@ -305,6 +308,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 	total: number;
 	truncated: boolean;
 	liveness: Map<string, { grant: number; deny: number; abstain: number; unreached: number }>;
+	tickLiveness: Map<string, { grant: number; deny: number; abstain: number }>;
 } {
 	const sim = new Simulation(def);
 	const scope = [...sim.sights()];
@@ -352,7 +356,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			else rows.push({ verb: action.verb, op, law: "apply.crash", reason: "apply 抛错（原子回滚后重抛——投影钩子或内核缺陷）", bug: e instanceof Error ? e.message : String(e) });
 		}
 		for (const t of trace) {
-			const key = `${t.verb}|${t.rule}`;
+			const key = traceKey(t.clock, t.verb, t.rule);
 			const s = stats.get(key) ?? { grant: 0, deny: 0, abstain: 0 };
 			if (t.ok === true) s.grant++;
 			else if (t.ok === false) s.deny++;
@@ -398,24 +402,33 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 		const n = combos.get(verbName) ?? 0;
 		if (n === 0) continue;
 		for (const r of verb.rules) {
-			const s = stats.get(`${verbName}|${r.id}`) ?? { grant: 0, deny: 0, abstain: 0 };
+			const s = stats.get(traceKey(false, verbName, r.id)) ?? { grant: 0, deny: 0, abstain: 0 };
 			liveness.set(`${verbName}.${r.id}`, { ...s, unreached: Math.max(0, n - s.grant - s.deny - s.abstain) });
 		}
 	}
-	return { rows, grants, grantRows: [...grantRows.values()], total, truncated, liveness };
+	// 常驻规则不被提案驱动，未达列不适用；域＝各探针动作推钟的刻
+	const tickLiveness = new Map<string, { grant: number; deny: number; abstain: number }>();
+	for (const t of def.ticks ?? []) {
+		for (const r of t.rules) tickLiveness.set(`⏱${t.id}.${r.id}`, stats.get(traceKey(true, t.id, r.id)) ?? { grant: 0, deny: 0, abstain: 0 });
+	}
+	return { rows, grants, grantRows: [...grantRows.values()], total, truncated, liveness, tickLiveness };
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	const def = getGame(gameId);
-	const { rows, grants, grantRows, total, truncated, liveness } = probeDef(def, maxCombos);
+	const { rows, grants, grantRows, total, truncated, liveness, tickLiveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${def.id}）：所指域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×所指域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
 	for (const [law, c] of liveness) {
 		const stated = c.grant + c.deny;
 		console.log(`  ${law.padEnd(18)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain} —×${c.unreached}${stated === 0 ? "  ⚠ 零表态" : ""}`);
 	}
+	if (tickLiveness.size) {
+		console.log("常驻规则活性（泵每刻调用；域＝各探针动作推钟的刻，未达列不适用）——零表态的常驻规则只有此处可见：");
+		for (const [law, c] of tickLiveness) console.log(`  ${law.padEnd(24)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain}${c.grant + c.deny === 0 ? "  ⚠ 零表态" : ""}`);
+	}
 	console.log("");
-	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按授予法则×变更形状分组（∅＝零变更授予）、载代表 op——机械后果不滤 private。");
+	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按授予法则×变更形状分组（∅＝零变更授予）、载代表 op。");
 	const byVerb = new Map<string, MapRow[]>();
 	for (const r of rows) {
 		const list = byVerb.get(r.verb);
@@ -446,7 +459,7 @@ async function main(): Promise<void> {
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可见实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）＋逐 op 落行（✗ 载法则与理由；✓ 按授予法则×变更形状分组，∅＝零变更，载代表 op）＋核心级否决单列 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可见实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）＋常驻规则活性（以各探针动作推钟的刻为域）＋逐 op 落行（✗ 载法则与理由；✓ 按授予法则×变更形状分组，∅＝零变更，载代表 op）＋核心级否决单列 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}
