@@ -437,14 +437,14 @@ const sealsRecentLines = (kit: PromptKit): string[] => {
 const sealsTurnPrompt = (kit: TurnKit): string => {
 	const lines = sealsRecentLines(kit);
 	if (lines.length) lines.push("");
-	lines.push(stateHeader, kit.view, "", `Player says: ${kit.utterance}`, "", "Parse the intent and call the act tool to submit an action proposal; after act returns the world's adjudication results, write the turn as literary prose for the player based on them.");
+	lines.push(stateHeader, kit.digest, "", `Player says: ${kit.utterance}`, "", "Parse the intent and call the act tool to submit an action proposal; after act returns the world's adjudication results, write the turn as literary prose for the player based on them.");
 	return lines.join("\n");
 };
 
 const sealsNarratePrompt = (kit: NarrateKit): string => {
 	const lines = sealsRecentLines(kit);
 	if (lines.length) lines.push("");
-	lines.push("[Rendering service] This call has no action window; do not call act; write the prose text directly.", "", stateHeader, kit.view, "", ...kit.events, "", kit.instruction);
+	lines.push("[Rendering service] This call has no action window; do not call act; write the prose text directly.", "", stateHeader, kit.digest, "", ...kit.events, "", kit.instruction);
 	return lines.join("\n");
 };
 

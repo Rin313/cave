@@ -26,6 +26,11 @@ export type Payload = Value | null;
 
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
+/** 状态视图的规范序列化：digest() 与 prompt kit 共用同一出口。 */
+export function digestOf(view: ViewValue): string {
+	return JSON.stringify(view);
+}
+
 export interface Entity {
 	id: string;
 	props: Record<string, Value>;
@@ -430,17 +435,21 @@ export interface PromptKit {
 	recent: RecentEntry[];
 }
 
+/** 状态视图的两种消费形态：本体与规范序列化由同一次求值产生，本体按只读约定消费。 */
+export interface ViewKit {
+	view: ViewValue;
+	/** view 的规范序列化（digestOf(view)）：字节直用与默认排版的出口。 */
+	digest: string;
+}
+
 /** 意志回合提示数据：状态视图 + 话语 + 近况。 */
-export interface TurnKit extends PromptKit {
-	/** 状态视图（digest） */
-	view: string;
+export interface TurnKit extends PromptKit, ViewKit {
 	/** 玩家话语（verbatim） */
 	utterance: string;
 }
 
 /** 渲染调用提示数据：状态视图 + 事件骨架 + 指令 + 近况。 */
-export interface NarrateKit extends PromptKit {
-	view: string;
+export interface NarrateKit extends PromptKit, ViewKit {
 	/** 事件骨架行 */
 	events: string[];
 	/** 渲染指令 */
@@ -464,7 +473,7 @@ export function defaultTurnPrompt(kit: TurnKit): string {
 	const blocks: string[] = [];
 	const recent = recentBlock(kit.recent);
 	if (recent !== "") blocks.push(recent);
-	blocks.push(`[World state]\n${kit.view}`);
+	blocks.push(`[World state]\n${kit.digest}`);
 	blocks.push(`Player says: ${kit.utterance}`);
 	return blocks.join("\n\n");
 }
@@ -474,7 +483,7 @@ export function defaultNarratePrompt(kit: NarrateKit): string {
 	const blocks: string[] = ["[Rendering service] This call has no action window; do not call act; write the prose text directly."];
 	const recent = recentBlock(kit.recent);
 	if (recent !== "") blocks.push(recent);
-	blocks.push(`[World state]\n${kit.view}`);
+	blocks.push(`[World state]\n${kit.digest}`);
 	if (kit.events.length > 0) blocks.push(`[Recent adjudication]\n${kit.events.join("\n")}`);
 	blocks.push(kit.instruction);
 	return blocks.join("\n\n");
@@ -1480,9 +1489,9 @@ export class Simulation {
 		return this.def.view?.(w, this.player, base, field) ?? base;
 	}
 
-	/** 状态视图的规范序列化：探针、日志与 prompt 的便捷出口。 */
+	/** 状态视图的规范序列化（digestOf(view())）：探针与日志的便捷出口。 */
 	digest(): string {
-		return JSON.stringify(this.view());
+		return digestOf(this.view());
 	}
 
 	/** 卡：属性过格名＋披露＋指称闭包（H），名字与值同一呈现轴。 */

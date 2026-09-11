@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -189,7 +189,8 @@ export class Engine {
 	async act(action: { utterance: string }): Promise<ActOutcome> {
 		this.assertLive();
 		this.beginRun("mapping", action.utterance);
-		const kit: TurnKit = { view: this.sim.digest(), utterance: verbatim(action.utterance), recent: this.recent };
+		const view = this.sim.view();
+		const kit: TurnKit = { view, digest: digestOf(view), utterance: verbatim(action.utterance), recent: this.recent };
 		try {
 			const prompt = this.sim.def.prompt;
 			await this.session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
@@ -235,7 +236,8 @@ export class Engine {
 	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
 		this.assertLive();
 		this.beginRun("narration");
-		const kit: NarrateKit = { view: this.sim.digest(), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
+		const view = this.sim.view();
+		const kit: NarrateKit = { view, digest: digestOf(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 		const prompt = this.sim.def.prompt;
 		await this.session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
 		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.collectUsage() };
