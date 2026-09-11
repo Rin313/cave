@@ -195,15 +195,6 @@ export const D = {
 	despawn: (entity: string): Delta => ({ cell: "vertex", id: entity, next: null }),
 };
 
-/** 格的机器身份：键、截面与记录共用同一编码。 */
-function addrKey(a: Addr): string {
-	switch (a.cell) {
-		case "vertex": return JSON.stringify(["vertex", a.id]);
-		case "prop": return JSON.stringify(["prop", a.entity, a.prop]);
-		case "edge": return JSON.stringify(["edge", a.from, a.to, a.type]);
-	}
-}
-
 /** 𝒞 反推 δ：绝对写、后态自含。 */
 function deltaOf(c: Change): Delta {
 	switch (c.cell) {
@@ -576,7 +567,7 @@ function integrityProblems(def: GameDef, world: World): string | null {
 		if (typeof r.to !== "string" || r.to === "") return "integrity: relation.to must be non-empty string";
 		if (typeof r.type !== "string" || r.type === "") return "integrity: relation.type must be non-empty string";
 		if (!ids.has(r.from) || !ids.has(r.to)) return `integrity: relation ${r.type} -> missing endpoint`;
-		const eid = addrKey({ cell: "edge", from: r.from, to: r.to, type: r.type });
+		const eid = tupleKey(["edge", r.from, r.to, r.type]);
 		if (edgeIds.has(eid)) return `integrity: duplicate relation ${r.from}->${r.to} (${r.type})`;
 		edgeIds.add(eid);
 		if (r.value === null || !isValue(r.value)) return `integrity: relation ${r.type} -> value is not a value (non-null, non-empty; stored edges never hold null)`;
@@ -1471,17 +1462,22 @@ export class Simulation {
 		return { id: e.id, name, props };
 	}
 
-	/** 可见域内实体的卡；不可见即 null（不产生非可见卡）。 */
-	card(world: World, id: string): Card | null {
-		const b = this.fieldView(world);
-		const e = entity(world, id);
-		return e !== undefined && b.visible.has(id) ? this.cardOf(e, b, b.faces.get(id)!) : null;
-	}
-
-	/** 可指称而不可见者的句柄；可见者已由卡承载。 */
-	handle(world: World, id: string): Handle | null {
-		const b = this.fieldView(world);
-		return b.referable.has(id) && !b.visible.has(id) ? { id, name: b.faces.get(id)! } : null;
+	/** 回合内增量：新进可见域出卡、新进可指称域出句柄（出卡优先）；before 由 steps 逆推，边界一次求值。 */
+	reveals(steps: readonly Commit[]): (Card | Handle)[] {
+		const w = this.readState();
+		const after = this.fieldView(w);
+		// 钩子收冻结读态：与回合起点快照下的权限一致
+		const before = this.fieldView(deepFreeze(this.beforeWorld(steps)));
+		const out: (Card | Handle)[] = [];
+		const added = new Set<string>();
+		const emit = (e: Entity): void => {
+			if (added.has(e.id)) return;
+			added.add(e.id);
+			out.push(after.visible.has(e.id) ? this.cardOf(e, after, after.faces.get(e.id)!) : { id: e.id, name: after.faces.get(e.id)! });
+		};
+		for (const e of w.entities) if (after.visible.has(e.id) && !before.visible.has(e.id)) emit(e);
+		for (const e of w.entities) if (after.known.has(e.id) && !before.known.has(e.id)) emit(e);
+		return out;
 	}
 
 	/** 逐条校验而非预检；幂等跳过的唯一判据是目标状态已成立。cascade 只在前向提交启用（重放逐条应用记录，不重算级联）。 */

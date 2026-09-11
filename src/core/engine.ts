@@ -10,7 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
-import { Simulation, catalog, deepFreeze, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type PromptKit, type RecentEntry, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type PromptKit, type RecentEntry, type Speech, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
@@ -297,34 +297,6 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 	};
 }
 
-/** 新见段 = 新进可见域 ∪ 新进可指称域（出卡优先，否则出句柄）；回合前所见域由步逆推重建，与投影同一判据。 */
-function revealedSince(sim: Simulation, steps: readonly Commit[]): string[] {
-	const after = sim.fieldView();
-	// 钩子收冻结读态：与回合起点快照下的权限一致
-	const before = sim.fieldView(deepFreeze(sim.beforeWorld(steps)));
-	return [...new Set([
-		...[...after.visible].filter((id) => !before.visible.has(id)),
-		...[...after.known].filter((id) => !before.known.has(id)),
-	])];
-}
-
-function formatTurnEvents(sim: Simulation, steps: Commit[], revealed: string[]): string[] {
-	const lines = spineLines(sim, steps, sim.snapshot());
-	if (revealed.length) {
-		const w = deepFreeze(sim.snapshot());
-		for (const id of revealed) {
-			const card = sim.card(w, id);
-			if (card) {
-				lines.push(JSON.stringify(card));
-				continue;
-			}
-			const handle = sim.handle(w, id);
-			if (handle) lines.push(JSON.stringify(handle));
-		}
-	}
-	return lines;
-}
-
 function skeletonSummary(sim: Simulation, steps: Commit[]): { text: string; warning?: string } {
 	try {
 		const lines = spineLines(sim, steps, sim.snapshot());
@@ -451,21 +423,35 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 				archive.dead = `定稿落盘失败：${errorText(e)}`;
 				run.warnings.push(archive.dead);
 			}
-			let text: string;
+			// 事件行与新增呈现分相投影：任一相失灵只降级该相，账目已在定稿
+			let lines: string[];
+			let projected = false;
 			try {
-				// 投影失灵时不重入所见域：新见段缺席
-				const revealed = crashed ? [] : revealedSince(sim, steps);
-				const lines = formatTurnEvents(sim, steps, revealed);
-				if (crashed) lines.push(speak(def, { kind: "interrupted", phase: "adjudicate" }));
-				text = lines.join("\n");
-				if (text === "") text = speak(def, { kind: "noProposal" });
+				lines = spineLines(sim, steps, sim.snapshot());
+				projected = true;
 			} catch (e) {
-				// 呈现缺陷不得丢弃已定稿的账目：回落确定性摘要
-				run.warnings.push(`结果投影抛错：${errorText(e)}`);
-				const fallback = skeletonSummary(sim, steps);
-				if (fallback.warning) run.warnings.push(fallback.warning);
-				text = fallback.text;
+				run.warnings.push(`事件投影抛错：${errorText(e)}`);
+				lines = [interruptedText(def)];
 			}
+			if (!crashed && projected) {
+				try {
+					for (const item of sim.reveals(steps)) lines.push(JSON.stringify(item));
+				} catch (e) {
+					run.warnings.push(`新见段投影抛错：${errorText(e)}`);
+				}
+			}
+			// say 失灵直取 noResponse：呈现缺陷不得丢弃已定稿的账目
+			const say = (speech: Speech): string => {
+				try {
+					return speak(def, speech);
+				} catch (e) {
+					run.warnings.push(`引擎文本抛错：${errorText(e)}`);
+					return def.messages.noResponse;
+				}
+			};
+			if (crashed) lines.push(say({ kind: "interrupted", phase: "adjudicate" }));
+			let text = lines.join("\n");
+			if (text === "") text = say({ kind: "noProposal" });
 			return {
 				content: [{ type: "text", text }],
 				details: {},

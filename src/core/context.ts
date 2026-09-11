@@ -1,6 +1,6 @@
 // 会话文件保存全量审计：档案是单一追加日志——回合条目（证据，每回合恰一）+ 检查点条目（缓存）。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, clone, deepFreeze, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
+import { Simulation, deepFreeze, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
@@ -127,22 +127,30 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	if (finallyDenied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(finallyDenied.point)}（${denialReasonText(finallyDenied)}）`);
 	// 纪要完好按消费判据：近况选择可消费任意记录，故试投影辖全量；序位检查只辖覆盖段（重放段的连续性由对账强制）；坏点使记录截断至其后完好子后缀；纪要只喂投影与审计，门不读纪要
 	let cut = -1;
-	const after = afterWorlds(sim, records);
-	records.forEach((r, i) => {
-		const prev = records[i - 1];
-		const gap = prev !== undefined && prev.seq <= boundary && r.seq !== prev.seq + 1 ? `序位断裂 ${prev.seq}→${r.seq}` : null;
-		let reason = gap;
-		if (!reason) {
-			try {
-				spineLines(sim, r.steps, after[i]!);
-			} catch (e) {
-				reason = `投影失败：${errorText(e)}`;
+	const notes: (string | null)[] = new Array(records.length).fill(null);
+	{
+		// 自账本末世界逐条逆推；spineLines 不自改入参，故就地回退
+		const w = sim.snapshot();
+		for (let i = records.length - 1; i >= 0; i--) {
+			const r = records[i]!;
+			const prev = records[i - 1];
+			const gap = prev !== undefined && prev.seq <= boundary && r.seq !== prev.seq + 1 ? `序位断裂 ${prev.seq}→${r.seq}` : null;
+			let reason = gap;
+			if (!reason) {
+				try {
+					spineLines(sim, r.steps, w);
+				} catch (e) {
+					reason = `投影失败：${errorText(e)}`;
+				}
 			}
+			if (reason) {
+				cut = Math.max(cut, gap ? i - 1 : i);
+				notes[i] = `纪要 seq${r.seq}「${r.utterance.slice(0, 24)}」${reason}`;
+			}
+			if (i > 0) rewind(w, r.steps);
 		}
-		if (!reason) return;
-		cut = Math.max(cut, gap ? i - 1 : i);
-		warnings.push(`纪要 seq${r.seq}「${r.utterance.slice(0, 24)}」${reason}`);
-	});
+	}
+	for (const note of notes) if (note !== null) warnings.push(note);
 	if (cut >= 0) {
 		warnings.push(`近况截断：弃前 ${cut + 1}/${records.length} 条`);
 		records.splice(0, cut + 1);
@@ -183,40 +191,28 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings
 	return picked;
 }
 
-/** 投影所选记录：自账本末世界逆推全账本至最早入选者，只取入选记录的提交边界；言默与 act 结果同判据。 */
+/** 投影所选记录：自账本末世界逐条逆推至最早入选者（spineLines 不自改入参，故就地回退），只取入选记录的提交边界；言默与 act 结果同判据。 */
 function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], selected: readonly ChronicleEntry[]): RecentEntry[] {
-	const wanted = new Set(selected.map((r) => r.seq));
-	const after = new Map<number, World>();
-	let need = wanted.size;
-	let w = sim.snapshot();
+	if (selected.length === 0) return [];
+	const slot = new Map(selected.map((r, i) => [r.seq, i]));
+	const moves: string[][] = new Array(selected.length);
+	let need = selected.length;
+	const w = sim.snapshot();
 	for (let i = records.length - 1; i >= 0 && need > 0; i--) {
 		const r = records[i]!;
-		if (wanted.has(r.seq)) {
-			after.set(r.seq, w);
+		const at = slot.get(r.seq);
+		if (at !== undefined) {
+			moves[at] = spineLines(sim, r.steps, w);
 			need--;
-			if (need === 0) break;
 		}
-		w = clone(w);
-		rewind(w, r.steps);
+		if (need > 0) rewind(w, r.steps);
 	}
-	return selected.map((r) => ({ time: r.time, utterance: verbatim(r.utterance), moves: spineLines(sim, r.steps, after.get(r.seq)!) }));
+	return selected.map((r, i) => ({ time: r.time, utterance: verbatim(r.utterance), moves: moves[i]! }));
 }
 
 /** 近况：选择（作者）× 投影（引擎）；AI 的跨回合记忆只经此一条路。 */
 export function recentEntries(sim: Simulation, records: readonly ChronicleEntry[], warnings: string[]): RecentEntry[] {
 	return projectRecent(sim, records, selectRecent(sim.def, records, warnings));
-}
-
-/** 各记录之后的世界：记录连续且末记录即当前世界，从账本末世界逐条逆推。 */
-function afterWorlds(sim: Simulation, records: readonly ChronicleEntry[]): World[] {
-	let w = sim.snapshot();
-	const out: World[] = new Array(records.length);
-	for (let i = records.length - 1; i >= 0; i--) {
-		out[i] = w;
-		w = clone(w);
-		rewind(w, records[i]!.steps);
-	}
-	return out;
 }
 
 export function verbatim(s: string): string {
