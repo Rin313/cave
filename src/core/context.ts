@@ -1,7 +1,6 @@
 // 会话文件保存全量审计：档案是单一追加日志——回合条目（证据，每回合恰一）+ 检查点条目（缓存）。
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, denialReasonText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
-import { errorText } from "./util.ts";
+import { Simulation, clone, denialReasonText, errorText, isCommit, lawOf, rewind, spineLines, type ChronicleEntry, type GameDef, type Commit, type RecentEntry, type World } from "./sim.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
@@ -166,7 +165,7 @@ function afterWorlds(sim: Simulation, records: readonly ChronicleEntry[]): World
 	const out: World[] = new Array(records.length);
 	for (let i = records.length - 1; i >= 0; i--) {
 		out[i] = w;
-		w = JSON.parse(JSON.stringify(w)) as World;
+		w = clone(w);
 		rewind(w, records[i]!.steps);
 	}
 	return out;

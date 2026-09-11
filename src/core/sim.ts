@@ -1,5 +1,20 @@
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { clone, deepFreeze, errorText, roll as rollDice } from "./util.ts";
+
+export function deepFreeze<T>(value: T): T {
+	if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+		Object.freeze(value);
+		for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v as T);
+	}
+	return value;
+}
+
+export function errorText(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
+}
+
+export function clone<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value)) as T;
+}
 
 export type Scalar = string | number | boolean;
 
@@ -564,6 +579,22 @@ export type Proposal =
 	| { kind: "rule"; rule: string; origin: Origin; action: Action }
 	| { kind: "admit" };
 
+function hashStr(s: string): number {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0) / 4294967296;
+}
+
+/** 同地址恒同值；地址是决策事件的账本位置，不由玩家输入决定；sides 违约即抛，由 *.crash 承接。 */
+export function roll(addr: string, key: string, sides: number): number {
+	if (!Number.isInteger(sides) || sides < 1) throw new Error(`roll: sides 须为 ≥1 的整数，得到 ${String(sides)}`);
+	const h = hashStr(JSON.stringify([addr, key]));
+	return 1 + Math.floor(h * sides);
+}
+
 /** 入账表态的机器身份：账本位置 (at, origin, id, 序位)——id 即动词或常驻规则。对入账表态单射、且由账本前缀复原：随机是账本位置的纯函数。 */
 function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number): string {
 	return tupleKey(["attempt", String(at), origin, verb, String(ordinal)]);
@@ -861,7 +892,7 @@ export class Simulation {
 
 	constructor(def: GameDef, world?: World) {
 		this.def = def;
-		this.world = JSON.parse(JSON.stringify(world ?? def.world)) as World;
+		this.world = clone(world ?? def.world);
 		const invariantIds = new Set<string>();
 		for (const inv of def.invariants ?? []) {
 			if (typeof inv.id !== "string" || inv.id === "") throw new Error("不变式 id 须为非空字符串");
@@ -1039,13 +1070,13 @@ export class Simulation {
 			world,
 			player: this.player,
 			params,
-			roll: (key, sides) => rollDice(addr, key, sides),
+			roll: (key, sides) => roll(addr, key, sides),
 		};
 	}
 
 	/** 克隆覆写：冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账坐标。 */
 	private restore(s0: World): void {
-		Object.assign(this.world, JSON.parse(JSON.stringify(s0)) as World);
+		Object.assign(this.world, clone(s0));
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
@@ -1292,7 +1323,7 @@ export class Simulation {
 	}
 
 	snapshot(): World {
-		return JSON.parse(JSON.stringify(this.world)) as World;
+		return clone(this.world);
 	}
 
 	/** 闭合基座：可见者出卡，可指称而不可见者出句柄（known）；关系过名字、披露与闭包（H）。 */
@@ -1380,14 +1411,14 @@ export class Simulation {
 						}
 					}
 					// 记录自含克隆，不与活账本共享引用
-					changes.push({ cell: "vertex", prev: JSON.parse(JSON.stringify(gone)) as Entity, next: null });
+					changes.push({ cell: "vertex", prev: clone(gone), next: null });
 					for (const r of dissolved) changes.push({ cell: "edge", from: r.from, to: r.to, type: r.type, prev: r.value, next: null });
 				} else {
 					if (entity(this.world, d.next.id)) return refuse(`spawn "${d.next.id}": entity already exists`);
 					const ent: Entity = { id: d.next.id, props: d.next.props };
 					if (!Object.values(ent.props).every(isValue)) return refuse(`spawn "${d.next.id}": props contain a non-value (non-null non-empty scalar or scalar array; absence is a missing key)`);
-					changes.push({ cell: "vertex", prev: null, next: JSON.parse(JSON.stringify(ent)) as Entity });
-					this.world.entities.push(JSON.parse(JSON.stringify(ent)) as Entity);
+					changes.push({ cell: "vertex", prev: null, next: clone(ent) });
+					this.world.entities.push(clone(ent));
 				}
 				continue;
 			}

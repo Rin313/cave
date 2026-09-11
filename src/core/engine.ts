@@ -10,8 +10,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, projectWindow, pruneContext, resume, verbatim } from "./context.ts";
-import { deepFreeze, errorText } from "./util.ts";
-import { Simulation, spineLines, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
+import { Simulation, deepFreeze, errorText, spineLines, type Action, type ChronicleEntry, type GameDef, type ParamSpec, type Commit, type PromptKit, type RecentEntry, type VerbDef } from "./sim.ts";
 
 export interface EngineOptions {
 	modelRuntime?: ModelRuntime;
