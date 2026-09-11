@@ -301,7 +301,7 @@ export interface VerbDef {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 不进动词面、不可被 will 提案；仍可由代码直连 apply。 */
+	/** 不进动词面、不可被 will 提案；`private ∧ clock` 由泵调用，`private ∧ ¬clock` 仅仪器直连（不入账）。 */
 	private?: boolean;
 	clock?: boolean;
 	rules: Rule[];
@@ -557,7 +557,7 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-/** 来源，由调用点决定并随步入账：意志（玩家经动词面提案）、时钟（泵逐刻自鸣）、代码（引擎直连 apply）。 */
+/** 来源：will（玩家经动词面）、clock（泵逐刻）入账；code 是仪器直连（进程内，不入账、不可施于活实例）。 */
 export type Origin = "will" | "clock" | "code";
 
 /** 提案者：审查上下文用；admit 是以零变更审查整世界（装载终点）。 */
@@ -759,7 +759,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		if (s.origin !== "clock") {
 			flush();
 			granted = s.price;
-			// 代码直连步不入事件流：不产尝试行，后果由状态视图与新见段承接
+			// 直连步不入事件流（仪器域：不入账、不投影）
 			if (s.origin === "code") continue;
 			const { face, changeLine } = renderer(i);
 			const changes = s.ok ? narratableChanges(sim.def, s.changes).map(changeLine).filter((x): x is string => x !== null) : [];
@@ -1099,6 +1099,32 @@ export class Simulation {
 		for (const step of record.steps) this.markAttempt(step.at, step.origin, step.action.verb);
 	}
 
+	/** 钟算术全段：首步为 will；后一 will 步 at = 前一 will 步 at + 前一 price；其间 clock 步 price 恒 0、at 落在 (前一 will 步 at, 前一 will 步 at + 前一 price] 内非降。 */
+	private clockSpanProblem(record: ChronicleEntry): string | null {
+		const steps = record.steps;
+		if (steps.length === 0) return null;
+		const first = steps[0]!;
+		if (first.origin === "clock") return "首步为时钟步";
+		if (!Number.isInteger(first.at) || !Number.isInteger(first.price) || first.price < 0) return `首步坐标/价格非整数（at ${String(first.at)}，price ${String(first.price)}）`;
+		let base = first.at;
+		let limit = base + first.price;
+		for (let i = 1; i < steps.length; i++) {
+			const s = steps[i]!;
+			if (s.origin === "clock") {
+				if (s.price !== 0) return `时钟步 price ${String(s.price)} ≠ 0`;
+				if (!Number.isInteger(s.at)) return `时钟步 at 非整数（${String(s.at)}）`;
+				if (s.at <= base || s.at > limit) return `时钟步 at ${s.at} 出界 (${base}, ${limit}]`;
+				if (s.at < steps[i - 1]!.at) return `时钟步 at ${s.at} 逆序`;
+				continue;
+			}
+			if (!Number.isInteger(s.price) || s.price < 0) return `will 步 price 非负整数（${String(s.price)}）`;
+			if (s.at !== limit) return `will 步 at ${s.at} ≠ ${limit}`;
+			base = s.at;
+			limit = base + s.price;
+		}
+		return null;
+	}
+
 	/** 重放一条回合记录：𝒞 反推 δ 过门内执行段（不重裁决、不掷骰），逐变更 prev 校验，终态 integrity；authored 不变式不重审——历史由当时的法则裁判过。链断回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
@@ -1117,6 +1143,8 @@ export class Simulation {
 			if (!Number.isInteger(start) || start !== this.world.time) return fail(`起点钟 ${String(start)} 不接续当前钟 ${this.world.time}`);
 			const grants = record.steps.reduce((n, s) => n + s.price, 0);
 			if (!Number.isInteger(record.time) || record.time !== start + grants) return fail(`末钟 ${String(record.time)} ≠ 起点 ${start} + 刻账 ${grants}`);
+			const span = this.clockSpanProblem(record);
+			if (span) return fail(span);
 			for (const step of record.steps) {
 				this.markAttempt(step.at, step.origin, step.action.verb);
 				if (!step.ok) continue;

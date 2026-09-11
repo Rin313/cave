@@ -74,7 +74,7 @@ function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
 	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; voice?: unknown; facts?: unknown; denial?: unknown; proposedBy?: unknown };
 	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
-	if (c.origin !== "will" && c.origin !== "clock" && c.origin !== "code") return false;
+	if (c.origin !== "will" && c.origin !== "clock") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
 	if (c.ok === true) {
