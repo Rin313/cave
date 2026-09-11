@@ -63,19 +63,28 @@ function isChange(v: unknown): boolean {
 	}
 }
 
+/** 步形状：授予行 law 可缺（law 引入前的记录）并由 completeLaw 补全，有则须非空；否决的 rule 同样可缺。 */
 function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
+	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
 	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
 	if (c.origin !== "will" && c.origin !== "clock") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
 	if (c.ok === true) {
 		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
+		if (c.law !== undefined && (typeof c.law !== "string" || c.law === "")) return false;
 		if (c.reply !== undefined && typeof c.reply !== "string") return false;
 		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string"));
 	}
+	if (c.rule !== undefined && (typeof c.rule !== "string" || c.rule === "")) return false;
 	return isDenial(c.denial);
+}
+
+/** 授予行的 law 缺省即守卫 id；law 引入前的记录缺此字段，装载时按缺省补全——可回算载荷同坐标断言之律。 */
+function completeLaw(s: unknown): Commit {
+	const c = s as { ok: boolean; rule: string; law?: string };
+	return c.ok && c.law === undefined ? { ...(s as Extract<Commit, { ok: true }>), law: c.rule } : (s as Commit);
 }
 
 interface RawCheckpoint {
@@ -97,7 +106,7 @@ function loadLog(entries: readonly EntryLike[], warnings: string[]): LogEntries 
 		if (e.customType === TURN_RECORD_TYPE) {
 			const d = e.data as RawTurn | undefined;
 			if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps) && d.steps.every(isCommit)) {
-				out.records.push({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps as Commit[] });
+				out.records.push({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps.map(completeLaw) });
 			} else broken++;
 			continue;
 		}

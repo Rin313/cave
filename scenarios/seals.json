@@ -6,7 +6,7 @@
 			"name": "拆读：信文经 sight 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
 			"steps": [
 				{ "name": "未持信而读：拒绝", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "read.notheld", "reason": "拿到手里", "lines": ["✗ 拆读(火漆信·盐引)：你得先把信拿到手里。"] } },
-				{ "name": "取信：持者变更可说（公共故事走机械行）；信文尚未入视野", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。(火漆信·盐引.持者: 书案 → 信使)"], "viewExcludes": ["盐引批文已托江苏会馆代办"] } },
+				{ "name": "取信：持者变更可说（公共故事走机械行）；信文尚未入视野", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "law": "desk", "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。(火漆信·盐引.持者: 书案 → 信使)"], "viewExcludes": ["盐引批文已托江苏会馆代办"] } },
 				{ "name": "拆读：断口可说（机械行），信文入法则理由；知晓立而信文入卡（propPerception），未知信文与隐藏边零泄漏", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。(火漆信·盐引.火漆: true → false)"], "viewIncludes": ["盐引批文已托江苏会馆代办", "过从甚密"], "viewExcludes": ["秋粮定价每石四百钱", "信任", "知晓"] } }
 			]
 		},

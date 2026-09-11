@@ -9,7 +9,7 @@ import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli
 interface StepExpect {
 	ok?: boolean;
 	reason?: string;
-	/** 提交的否决律（lawOf(Denial.point)）。 */
+	/** 提交的决策律（授予的 law；否决的 lawOf(Denial.point)）。 */
 	law?: string;
 	/** 期望前置条件违约（未知动词/schema 不符），不混同于世界拒绝。 */
 	protocol?: "action.unknown" | "action.schema";
@@ -131,7 +131,7 @@ function assertStep(sim: Simulation, step: ScenarioStep, ex: { steps: Commit[]; 
 		if (e.ok !== undefined && a.ok !== e.ok) p.push(`ok: expected ${e.ok} got ${a.ok}`);
 		if (e.reason !== undefined && !(reply ?? "").includes(e.reason)) p.push(`reason: 期望包含「${e.reason}」，实际「${reply ?? ""}」`);
 		if (e.law !== undefined) {
-			const got = a.ok ? null : lawOf(a.denial.point);
+			const got = a.ok ? a.law : lawOf(a.denial.point);
 			if (got !== e.law) p.push(`law: expected ${e.law} got ${got}`);
 		}
 		if (e.tickDenied === true && denied.length === 0) p.push("tickDenied: 期望刻步被必要性通道拦截，未发生");
@@ -251,9 +251,10 @@ interface MapRow {
 	bug?: string;
 }
 
-/** 授予行：按授予法则×变更形状分组，机械后果的逐 op 落点——分组上界是规则代码分支而非指称域。 */
+/** 授予行：按决策律×守卫×变更形状分组，机械后果的逐 op 落点——分组上界是规则代码分支而非指称域。 */
 interface GrantRow {
 	verb: string;
+	law: string;
 	rule: string;
 	shape: string;
 	count: number;
@@ -335,12 +336,12 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 			const { step, elapsed } = new Simulation(instrumented).apply(action);
 			if (step.ok) {
 				grants.set(action.verb, (grants.get(action.verb) ?? 0) + 1);
-				const rule = step.rule;
+				const { rule, law } = step;
 				const shape = deltaShape(step.changes);
-				const key = `${action.verb}|${rule}|${shape}`;
+				const key = `${action.verb}|${law}|${rule}|${shape}`;
 				const row = grantRows.get(key);
 				if (row) row.count += 1;
-				else grantRows.set(key, { verb: action.verb, rule, shape, count: 1, rep: op });
+				else grantRows.set(key, { verb: action.verb, law, rule, shape, count: 1, rep: op });
 			}
 			else {
 				const bug = bugOf(step.denial);
@@ -428,7 +429,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 		for (const [law, c] of tickLiveness) console.log(`  ${law.padEnd(24)}✓×${c.grant} ✗×${c.deny} ·×${c.abstain}${c.grant + c.deny === 0 ? "  ⚠ 零表态" : ""}`);
 	}
 	console.log("");
-	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按授予法则×变更形状分组（∅＝零变更授予）、载代表 op。");
+	console.log("动词段逐 op 落行：✗ 载法则与理由（兜底落点）；✓ 按决策律×守卫×变更形状分组（∅＝零变更授予）、载代表 op。");
 	const byVerb = new Map<string, MapRow[]>();
 	for (const r of rows) {
 		const list = byVerb.get(r.verb);
@@ -444,7 +445,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 	for (const verbName of Object.keys(def.verbs)) {
 		const vr = byVerb.get(verbName) ?? [];
 		console.log(`「${verbName}」✓ ×${grants.get(verbName) ?? 0}${vr.length ? `  ✗ ×${vr.length}` : ""}`);
-		for (const r of grantByVerb.get(verbName) ?? []) console.log(`  ✓ ${r.shape} ×${r.count} ← ${r.rule}（代表 ${r.rep}）`);
+		for (const r of grantByVerb.get(verbName) ?? []) console.log(`  ✓ ${r.shape} ×${r.count} ← ${r.law}${r.law === r.rule ? "" : `(${r.rule})`}（代表 ${r.rep}）`);
 		for (const r of vr) console.log(`  ✗ ${r.op} → ${r.law}「${r.reason}」${r.bug ? ` ⚠ ${r.bug}` : ""}`);
 	}
 	const bugs = rows.filter((r) => r.bug);
@@ -459,7 +460,7 @@ async function main(): Promise<void> {
 	if (!cmd || cmd === "--help" || cmd === "-h") {
 		process.stdout.write(`用法:
   sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可指称实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）＋常驻规则活性（以各探针动作推钟的刻为域）＋逐 op 落行（✗ 载法则与理由；✓ 按授予法则×变更形状分组，∅＝零变更，载代表 op）＋核心级否决单列 bug（--max 控制预算，默认 10000）
+  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可指称实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）＋常驻规则活性（以各探针动作推钟的刻为域）＋逐 op 落行（✗ 载法则与理由；✓ 按决策律×守卫×变更形状分组，∅＝零变更，载代表 op）＋核心级否决单列 bug（--max 控制预算，默认 10000）
 `);
 		return;
 	}

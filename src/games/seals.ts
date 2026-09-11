@@ -75,16 +75,8 @@ const sealsVisible = (world: World, player: string): Set<string> => {
 	return vis;
 };
 
-/** 可指称域：可见 ∪ 已引见（introduced）——听说其名者可指名，可不出卡。 */
-const sealsReferable = (world: World, player: string): Set<string> => {
-	const vis = sealsVisible(world, player);
-	for (const e of world.entities) if (e.props.introduced === true) vis.add(e.id);
-	return vis;
-};
-
 const base: Omit<GameDef, "prompt"> = {
 	playerId: "player",
-	face: () => des,
 	recentWindow: 6,
 	messages: {
 		noResponse: "无人应答。",
@@ -400,11 +392,14 @@ const base: Omit<GameDef, "prompt"> = {
 			return cell.prop !== "content" || relVal(world, player, cell.entity, "知晓") !== null;
 		};
 	},
-	// 指称门随可指称域：已引见者离屏仍可指名（出句柄目录，不出卡）
-	referable: (world, player) => {
-		const vis = sealsReferable(world, player);
-		return (e: Entity) => vis.has(e.id);
+	// 格命名：顶点取 name 属性（缺省 id）；属性/边沿用注册表缺省
+	name: (world, _player, base) => (cell) => {
+		if (cell.cell !== "vertex") return base(cell);
+		const e = entity(world, cell.id);
+		return e ? des(e) : base(cell);
 	},
+	// 指称门随可指称域：披露缺省（顶点格）并上已引见者——离屏仍可指名（出句柄目录，不出卡）
+	referable: (_world, _player, base) => (e) => base(e) || e.props.introduced === true,
 	digestExtra: extraOf,
 };
 

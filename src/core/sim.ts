@@ -143,9 +143,9 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 裁决结果；ticks 覆写价，授予与否决同轴。 */
+/** 裁决结果；ticks 覆写价，授予与否决同轴；授予的可选 law 缺省即守卫 id，只被呈现与探针消费。 */
 export type Verdict =
-	| { ok: true; deltas: Delta[]; reply?: Text; statements?: Text[]; ticks?: number }
+	| { ok: true; deltas: Delta[]; law?: Text; reply?: Text; statements?: Text[]; ticks?: number }
 	| { ok: false; denial: RuleDenial; ticks?: number };
 
 export interface Rule {
@@ -153,10 +153,11 @@ export interface Rule {
 	judge: (q: Q) => Verdict | null;
 }
 
-export function grant(deltas: Delta[], opts: { reply?: Text; statements?: Text[]; ticks?: number } = {}): Verdict {
+export function grant(deltas: Delta[], opts: { law?: Text; reply?: Text; statements?: Text[]; ticks?: number } = {}): Verdict {
 	return {
 		ok: true,
 		deltas,
+		...(opts.law !== undefined && { law: opts.law }),
 		...(opts.reply !== undefined && { reply: opts.reply }),
 		...(opts.statements !== undefined && { statements: opts.statements }),
 		...(opts.ticks !== undefined && { ticks: opts.ticks }),
@@ -368,16 +369,14 @@ export interface GameDef {
 	relTypes?: Record<string, RelDef>;
 	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
-	/** 脸：顶点命名的缺省实现，缺省 id；只被呈现消费。返回空串则回落 id。 */
-	face?: (world: World, player: string) => (e: Entity) => string;
-	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现 = face/label/present；声明即整体替换。 */
-	name?: (world: World, player: string) => (cell: Addr) => string | null;
+	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性 label、边 present）作为第三参数传入；声明即接管，可委托 base。 */
+	name?: (world: World, player: string, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
 	/** 近况窗口的回合记录数。 */
 	recentWindow: number;
 	/** 披露谓词：顶点格成员即可见；属性/边格谓词即变更行该侧判据。缺省常真，声明即整体替换。 */
 	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
-	/** 可指称谓词：指称门的域。缺省即顶点格披露。 */
-	referable?: (world: World, player: string) => (e: Entity) => boolean;
+	/** 可指称谓词：指称门的域。披露缺省（顶点格 perceives）作为第三参数传入；缺省即披露。 */
+	referable?: (world: World, player: string, base: (e: Entity) => boolean) => (e: Entity) => boolean;
 	/** 状态视图的派生纹理：读世界真相，非指称通道（不产生指称，不改变所见域）。 */
 	digestExtra?: (world: World, player: string) => Record<string, ViewValue>;
 	invariants?: Invariant[];
@@ -575,10 +574,10 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = origin=clock ? 0 : (ticks ?? cost)；授予记法则，否决记 Point 与受众。 */
+/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = origin=clock ? 0 : (ticks ?? cost)；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
-	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; changes: Change[]; reply?: Text; statements?: Text[] }
-	| { at: number; origin: Origin; action: Action; price: number; ok: false; denial: Denial };
+	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; law: Text; changes: Change[]; reply?: Text; statements?: Text[] }
+	| { at: number; origin: Origin; action: Action; price: number; ok: false; rule?: string; denial: Denial };
 
 export interface Resolution {
 	step: Commit;
@@ -785,10 +784,10 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 	return world.relations.find((r) => r.from === from && r.to === to && r.type === type)?.value ?? null;
 }
 
-/** 门内裁决的表态；授予记法则，否决自带裁决点。 */
+/** 门内裁决的表态；授予记守卫与法则，否决自带裁决点与守卫。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; rule: string; reply?: Text; statements?: Text[]; ticks?: number }
-	| { ok: false; denial: Denial; ticks?: number };
+	| { ok: true; deltas: Delta[]; rule: string; law: Text; reply?: Text; statements?: Text[]; ticks?: number }
+	| { ok: false; denial: Denial; rule?: string; ticks?: number };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -874,8 +873,8 @@ export class Simulation {
 	/** 三个域的求值：不触命名，门与投影分路。可指称缺省即顶点格披露。 */
 	private boundary(world: World): { within: (cell: Addr) => boolean; visible: Set<string>; referable: Set<string>; known: Set<string> } {
 		const within = this.perceives(world);
-		const declared = this.def.referable?.(world, this.player);
-		const refers = declared ?? ((e: Entity) => within({ cell: "vertex", id: e.id }));
+		const disclosed = (e: Entity): boolean => within({ cell: "vertex", id: e.id });
+		const refers = this.def.referable?.(world, this.player, disclosed) ?? disclosed;
 		const visible = new Set<string>();
 		const referable = new Set<string>();
 		for (const e of world.entities) {
@@ -885,22 +884,11 @@ export class Simulation {
 		return { within, visible, referable, known: new Set([...visible, ...referable]) };
 	}
 
-	/** 格命名：作者钩子优先，否则 face/label/present；顶点无名回落 id，属性/边无名即 null。 */
-	private naming(world: World): (cell: Addr) => string | null {
-		const hook = this.def.name?.(world, this.player);
-		if (hook) return (cell) => {
-			const token = hook(cell);
-			if (typeof token === "string" && token !== "") return token;
-			return cell.cell === "vertex" ? cell.id : null;
-		};
-		const face = this.def.face?.(world, this.player);
+	/** 注册表缺省命名：顶点 id、属性 label、边 present 派生；作为 base 交给作者钩子。 */
+	private defaultNaming(): (cell: Addr) => string | null {
 		return (cell) => {
 			switch (cell.cell) {
-				case "vertex": {
-					const e = entity(world, cell.id);
-					const token = e !== undefined ? face?.(e) : undefined;
-					return typeof token === "string" && token !== "" ? token : cell.id;
-				}
+				case "vertex": return cell.id;
 				case "prop": {
 					const label = this.def.props[cell.prop]?.label;
 					return label !== undefined && label !== "" ? label : null;
@@ -912,6 +900,18 @@ export class Simulation {
 					return present.label;
 				}
 			}
+		};
+	}
+
+	/** 格命名：作者钩子收缺省实现，可委托或接管；顶点无名回落 id，属性/边无名即 null。 */
+	private naming(world: World): (cell: Addr) => string | null {
+		const base = this.defaultNaming();
+		const hook = this.def.name?.(world, this.player, base);
+		if (!hook) return base;
+		return (cell) => {
+			const token = hook(cell);
+			if (typeof token === "string" && token !== "") return token;
+			return cell.cell === "vertex" ? cell.id : null;
 		};
 	}
 
@@ -969,17 +969,17 @@ export class Simulation {
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, denial: { point: { kind: "crash", site: "rule" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
+				return { ok: false, rule: r.id, denial: { point: { kind: "crash", site: "rule" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
 			if (v.ticks !== undefined) {
-				if (clock) return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 常驻规则不得延伸时间` } };
-				if (!Number.isInteger(v.ticks) || v.ticks < 0) return { ok: false, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
+				if (clock) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: 常驻规则不得延伸时间` } };
+				if (!Number.isInteger(v.ticks) || v.ticks < 0) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ticks 须为非负整数刻数，得到 ${String(v.ticks)}` } };
 			}
 			if (v.ok) {
-				return { ok: true, deltas: v.deltas, rule: r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
+				return { ok: true, deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.ticks !== undefined && { ticks: v.ticks }) };
 			}
-			return { ok: false, denial: v.denial, ...(v.ticks !== undefined && { ticks: v.ticks }) };
+			return { ok: false, rule: r.id, denial: v.denial, ...(v.ticks !== undefined && { ticks: v.ticks }) };
 		}
 		return { ok: false, denial: { point: { kind: "closure" } } };
 	}
@@ -1085,13 +1085,13 @@ export class Simulation {
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
 			if (!cc.ok)
-				return { at, origin, action, price, ok: false, denial: cc.denial };
+				return { at, origin, action, price, ok: false, rule: r.rule, denial: cc.denial };
 			// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
 			const reply = clock ? undefined : r.reply;
 			const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-			return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+			return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 		}
-		return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: false, denial: r.denial };
+		return { at, origin, action, price: clock ? 0 : (r.ticks ?? price), ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 	}
 
 	/** 取序位不消耗；仅当步确定入账才 markAttempt——默与崩溃不移动任何地址。 */
