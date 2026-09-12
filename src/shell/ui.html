@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>cave</title>
+<style>
+	:root { color-scheme: dark; --bg: #14161a; --panel: #1c1f26; --line: #3a4150; --ink: #d7dae0; --dim: #9aa3b2; --accent: #8fb7ff; --warn: #ffb347; --error: #ff6b6b; }
+	* { box-sizing: border-box; }
+	body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr auto; background: var(--bg); color: var(--ink); font: 14px/1.65 ui-monospace, Consolas, monospace; }
+	header, footer { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--panel); }
+	header { border-bottom: 1px solid var(--line); }
+	footer { border-top: 1px solid var(--line); }
+	input, select, button { font: inherit; color: inherit; background: #242832; border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+	input:focus, select:focus { outline: 1px solid var(--accent); }
+	button { cursor: pointer; }
+	button:disabled { opacity: .45; cursor: default; }
+	.grow { flex: 1; }
+	main { overflow: auto; padding: 12px; }
+	#log { display: flex; flex-direction: column; gap: 12px; }
+	.turn { border-left: 2px solid var(--line); padding-left: 10px; }
+	.events, .prose, .live, .warn, .error { white-space: pre-wrap; }
+	.events { color: var(--accent); }
+	.live:empty::after { content: "…"; color: var(--dim); }
+	.prose { color: var(--ink); }
+	.warn { color: var(--warn); }
+	.error { color: var(--error); }
+	.dim, #meta, #stateBox { color: var(--dim); }
+	#state { margin: 6px 0 0; max-height: 34vh; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+	<select id="game"></select>
+	<input id="run" size="12" value="ui">
+	<button id="open">open</button>
+	<button id="reset">reset</button>
+	<button id="stateBtn">state</button>
+	<span id="meta"></span>
+</header>
+<main id="scroll">
+	<details id="stateBox" hidden><summary>世界状态</summary><pre id="state"></pre></details>
+	<div id="log"></div>
+</main>
+<footer>
+	<input id="utterance" class="grow" placeholder="话语…（Enter = act）">
+	<button id="actBtn">act</button>
+	<input id="instruction" class="grow" value="请用文学笔触描写当前场景。">
+	<button id="narrateBtn">narrate</button>
+</footer>
+<script type="module">
+const cave = window.cave;
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+const scroll = $("scroll");
+let live = null;
+let busy = false;
+
+const el = (tag, cls, text) => {
+	const node = document.createElement(tag);
+	node.className = cls;
+	node.textContent = text;
+	return node;
+};
+
+const block = (cls, text = "") => {
+	const node = el("div", cls, text);
+	log.append(node);
+	scroll.scrollTop = scroll.scrollHeight;
+	return node;
+};
+
+const setBusy = (value) => {
+	busy = value;
+	for (const node of document.querySelectorAll("button")) node.disabled = value;
+};
+
+const renderState = ({ turn, time, view }) => {
+	$("meta").textContent = `#${turn} · t${time}`;
+	$("stateBox").hidden = false;
+	$("state").textContent = JSON.stringify(view, null, 1);
+};
+
+const showWarnings = (warnings) => {
+	for (const w of warnings) block("warn", `⚠ ${w}`);
+};
+
+const usageLine = (usage) => {
+	if (!usage?.length) return "";
+	let input = 0;
+	let output = 0;
+	for (const u of usage) {
+		input += u.input + u.cacheRead + u.cacheWrite;
+		output += u.output;
+	}
+	return `tok ${input}→${output}`;
+};
+
+/** 回合收尾：实时流换成定稿投影——事件行来自引擎，散文以结算文本为准。 */
+const settle = (out, usage) => {
+	live?.remove();
+	const turn = block("turn");
+	if (out.lines?.length) turn.append(el("div", "events", out.lines.join("\n")));
+	turn.append(el("div", "prose", out.narration));
+	if (usage) block("dim", usage);
+	scroll.scrollTop = scroll.scrollHeight;
+};
+
+const run = async (fn, streaming = false) => {
+	if (busy) return;
+	setBusy(true);
+	if (streaming) live = block("live");
+	try {
+		await fn();
+	} catch (e) {
+		block("error", e?.message ?? String(e));
+	} finally {
+		live?.remove();
+		live = null;
+		setBusy(false);
+	}
+};
+
+const open = () => run(async () => {
+	log.replaceChildren();
+	const status = block("dim", "打开中…");
+	const { game, run: runId, turn, time, view, warnings } = await cave.open($("game").value, $("run").value.trim());
+	status.remove();
+	renderState({ turn, time, view });
+	showWarnings(warnings);
+	block("dim", `已打开 ${game}/${runId}（世界内容未叙述，可用 narrate 起幕）`);
+});
+
+const act = () => {
+	const utterance = $("utterance").value.trim();
+	if (utterance === "") return;
+	$("utterance").value = "";
+	void run(async () => {
+		const out = await cave.act(utterance);
+		settle(out, usageLine(out.usage));
+		renderState(out);
+		showWarnings(out.warnings);
+	}, true);
+};
+
+const narrate = () => void run(async () => {
+	const out = await cave.narrate($("instruction").value);
+	settle(out, usageLine(out.usage));
+	showWarnings(out.warnings);
+}, true);
+
+cave.onEvent((event) => {
+	if (!live) return;
+	if (event.type === "narration_delta") live.textContent += event.delta;
+	else if (event.type === "narration_reset") live.textContent = "";
+});
+
+$("open").addEventListener("click", open);
+$("actBtn").addEventListener("click", act);
+$("narrateBtn").addEventListener("click", narrate);
+$("stateBtn").addEventListener("click", () => void run(async () => renderState(await cave.state())));
+$("reset").addEventListener("click", () => void run(async () => {
+	await cave.reset($("game").value, $("run").value.trim());
+	log.replaceChildren();
+	$("stateBox").hidden = true;
+	$("meta").textContent = "";
+	block("dim", "已重置（档案已删除）");
+}));
+$("utterance").addEventListener("keydown", (event) => {
+	if (event.key === "Enter") act();
+});
+$("instruction").addEventListener("keydown", (event) => {
+	if (event.key === "Enter") narrate();
+});
+
+for (const game of await cave.games()) {
+	const option = document.createElement("option");
+	option.value = game;
+	option.textContent = game;
+	$("game").append(option);
+}
+</script>
+</body>
+</html>

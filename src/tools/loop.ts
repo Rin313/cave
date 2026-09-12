@@ -1,39 +1,20 @@
 // 编译通过、场景通过、e2e 映射与表达准确都是伪信号，不证明设计正确；验证靠阅读 e2e 会话与分析源码。e2e 的 provider 用 `opencode-go`，model 用 `mimo-v2.5`。
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { SessionManager, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
-import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
+import { type ActOutcome, type Engine, type TokenUsage } from "../core/engine.ts";
 import { openArchive } from "../core/archive.ts";
 import { spineLines, type Simulation } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
+import { openRun, runPaths, type RunPaths } from "./runs.ts";
 
-const runDir = (game: string, runId: string): string => join("runs", game, runId);
-/** records 是回合记录档案（装载的主侧）；session 是 pi 原始 trace（非证据）。 */
-const recordsPath = (dir: string): string => join(dir, "records.jsonl");
-const sessionPath = (dir: string): string => join(dir, "session.jsonl");
-const transcriptPath = (dir: string): string => join(dir, "transcript.jsonl");
-
-function appendTranscript(dir: string, entry: unknown): void {
-	appendFileSync(transcriptPath(dir), JSON.stringify(entry) + "\n", "utf8");
+function appendTranscript(path: string, entry: unknown): void {
+	appendFileSync(path, JSON.stringify(entry) + "\n", "utf8");
 }
 
-function requireRunDir(gameId: string, runId: string): { dir: string; recordsFile: string; sessionFile: string } {
-	const dir = runDir(gameId, runId);
-	const recordsFile = recordsPath(dir);
-	const sessionFile = sessionPath(dir);
-	if (!existsSync(recordsFile) && !existsSync(sessionFile)) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
-	return { dir, recordsFile, sessionFile };
-}
-
-/** 引擎配置按游戏 id 命名空间读取环境变量，多游戏并存互不覆盖。 */
-function engineOptsFromEnv(gameId: string): { provider: string; model: string; thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"] } {
-	const prefix = gameId.toUpperCase();
-	const provider = process.env[`${prefix}_PROVIDER`];
-	const model = process.env[`${prefix}_MODEL`];
-	if (!provider || !model) throw new Error(`模型未配置：请设置 ${prefix}_PROVIDER 与 ${prefix}_MODEL 环境变量`);
-	const thinkingLevel = process.env[`${prefix}_THINKING`] as CreateAgentSessionOptions["thinkingLevel"] | undefined;
-	return { provider, model, ...(thinkingLevel !== undefined && { thinkingLevel }) };
+function requirePaths(gameId: string, runId: string): RunPaths {
+	const paths = runPaths(gameId, runId);
+	if (!existsSync(paths.records) && !existsSync(paths.session)) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
+	return paths;
 }
 
 const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
@@ -68,33 +49,29 @@ function printAct(sim: Simulation, o: {
 }
 
 interface RunCtx {
-	dir: string;
+	paths: RunPaths;
 	sim: Simulation;
 	engine: Engine;
 }
 
 async function withEngine(gameId: string, runId: string, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
-	const { dir, recordsFile, sessionFile } = requireRunDir(gameId, runId);
-	const def = getGame(gameId);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), archive: openArchive(recordsFile), sessionManager: SessionManager.open(sessionFile) });
+	const paths = requirePaths(gameId, runId);
+	const engine = await openRun(gameId, runId);
 	for (const w of engine.loadWarnings) console.log(`  ⚠ ${w}`);
 	try {
-		await fn({ dir, sim: engine.sim, engine });
+		await fn({ paths, sim: engine.sim, engine });
 	} finally {
 		engine.dispose();
 	}
 }
 
 async function cmdStart(gameId: string, runId: string): Promise<void> {
-	const def = getGame(gameId);
-	const dir = runDir(gameId, runId);
-	const recordsFile = recordsPath(dir);
-	const sessionFile = sessionPath(dir);
-	if (existsSync(recordsFile) || existsSync(sessionFile)) throw new Error(`run "${runId}" 已存在（game: ${gameId}），loop reset 后再 start`);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), archive: openArchive(recordsFile), sessionManager: SessionManager.open(sessionFile) });
+	const paths = runPaths(gameId, runId);
+	if (existsSync(paths.records) || existsSync(paths.session)) throw new Error(`run "${runId}" 已存在（game: ${gameId}），loop reset 后再 start`);
+	const engine = await openRun(gameId, runId);
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
-		appendTranscript(dir, { phase: "start", scene, warnings, usage });
+		appendTranscript(paths.transcript, { phase: "start", scene, warnings, usage });
 		console.log(`【${runId}·start】${gameId}`);
 		console.log(scene);
 		warnWarnings(warnings);
@@ -107,11 +84,11 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 
 async function cmdAct(gameId: string, runId: string, raw: string, selection: string | undefined): Promise<void> {
 	await withEngine(gameId, runId, async (ctx) => {
-		const { dir, sim, engine } = ctx;
+		const { paths, sim, engine } = ctx;
 		const utterance = selection === undefined ? raw : `${raw}（选中：「${selection}」）`;
 		const outcome = await engine.act({ utterance });
 		const turn = engine.turn;
-		appendTranscript(dir, {
+		appendTranscript(paths.transcript, {
 			turn,
 			phase: "act",
 			raw,
@@ -133,11 +110,11 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 		.filter((l) => l !== "" && !l.startsWith("#"));
 	if (!lines.length) throw new Error(`话语文件 ${file} 为空`);
 	await withEngine(gameId, runId, async (ctx) => {
-		const { dir, sim, engine } = ctx;
+		const { paths, sim, engine } = ctx;
 		for (const line of lines) {
 			const outcome = await engine.act({ utterance: line });
 			const turn = engine.turn;
-			appendTranscript(dir, {
+			appendTranscript(paths.transcript, {
 				turn, phase: "act", raw: line, selection: null, utterance: line,
 				steps: outcome.steps,
 				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
@@ -148,9 +125,9 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 }
 
 async function cmdRender(gameId: string, runId: string, instruction: string): Promise<void> {
-	await withEngine(gameId, runId, async ({ dir, engine }) => {
+	await withEngine(gameId, runId, async ({ paths, engine }) => {
 		const { narration: scene, warnings, usage } = await engine.narrate(instruction);
-		appendTranscript(dir, { phase: "render", instruction, scene, warnings, usage });
+		appendTranscript(paths.transcript, { phase: "render", instruction, scene, warnings, usage });
 		console.log(`\n【render】${instruction}`);
 		console.log(scene);
 		warnWarnings(warnings);
@@ -160,9 +137,9 @@ async function cmdRender(gameId: string, runId: string, instruction: string): Pr
 }
 
 function cmdState(gameId: string, runId: string, out: string | undefined): void {
-	const { recordsFile } = requireRunDir(gameId, runId);
+	const { records } = requirePaths(gameId, runId);
 	const def = getGame(gameId);
-	const { sim, lastSeq, warnings } = openArchive(recordsFile).load(def);
+	const { sim, lastSeq, warnings } = openArchive(records).load(def);
 	console.log(`【${runId}】${gameId} 已进行 ${lastSeq} 回合`);
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 	if (out === undefined) {
@@ -174,7 +151,7 @@ function cmdState(gameId: string, runId: string, out: string | undefined): void 
 }
 
 function cmdReset(gameId: string, runId: string): void {
-	const { dir } = requireRunDir(gameId, runId);
+	const { dir } = requirePaths(gameId, runId);
 	rmSync(dir, { recursive: true, force: true });
 	process.stdout.write(`已重置 run "${runId}"\n`);
 }

@@ -3,13 +3,15 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"verify": "node src/tools/sim.ts verify"
+		"verify": "node src/tools/sim.ts verify",
+		"shell": "electron src/shell/main.ts"
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "^0.85.1"
 	},
 	"devDependencies": {
 		"@types/node": "^26.2.0",
+		"electron": "^44.3.0",
 		"typescript": "^7.0.2"
 	}
 }
