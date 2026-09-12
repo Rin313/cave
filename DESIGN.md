@@ -153,7 +153,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 ## 投影
 
-**判定跨度**　`span(s) = (脸表, 格命名, 披露谓词)(w⁻, w⁺)`——尝试提交跨其提交边界，时钟提交跨其拍的提交边界。跨度是投影而不得是证据：`w⁻/w⁺` 由 genesis ⊕ 𝒞 重建（逆推逐变更取 prev），脸表、格命名与披露谓词由 `name`／`perceives` 对重建世界即时求值；变更行每侧可显示 ⇔ 该边界对变更格 `present`（有名且披露；缺席格与在场格同过一门）；改名行是派生行——一步内两边界顶点 token 变化且实体两端皆在已知域，即出 `~ 旧 → 新`。投影不回读活世界，也不得把呈现随步入账；言默由重建边界重算，恒同——投影只可省略行文，不可重划。
+**判定跨度**　`span(s) = (脸表, 格命名, 披露谓词)(w⁻, w⁺)`——尝试提交跨其提交边界，时钟提交跨其拍的提交边界。跨度是投影：`w⁻/w⁺` 由 genesis ⊕ 𝒞 重建（逆推逐变更取 prev），脸表、格命名与披露谓词由 `name`／`perceives` 对重建世界即时求值；变更行每侧可显示 ⇔ 该边界对变更格 `present`（有名且披露；缺席格与在场格同过一门）；改名行是派生行——一步内两边界顶点 token 变化且实体两端皆在已知域，即出 `~ 旧 → 新`。投影不回读活世界，也不得把呈现随步入账；言默由重建边界重算，恒同——投影只可省略行文，不可重划。
 
 **事件投影**　AI 所得 = `Π(记录, def) ⊕ 感知变更行 ⊕ 世界腔文本（答复、陈述与否决理由）`。近况 `Π` 是记录与 def 的纯函数且不持久化（记录的提交边界由账本末世界逆推重建，脸表、格命名与披露谓词即时求值，不回读活世界）：作者以 `recent(记录, base)` 选择注入的回合记录（账本序的单调子序列；`base` 即缺省选择＝最后 `recentWindow` 条，`recentWindow` 亦缺席时即全量，可委托），引擎按与 act 结果相同的变更行判据投影（推论·刻账目闭合）；言默同源重算。act 结果的新见段是同一投影的回合内增量：本回合新进可见域的实体出卡，新进可指称域的实体出句柄。
 
@@ -167,13 +167,12 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 ## 面向作者的契约
 
-- **动词表**：`params` 由值声明（type×重数）加可选与描述构成，派生接口模式、内核校验与规则参数的编译期类型；`ref` 值过指称门（域即可指称集）；`many` 令参数为非空序列——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。全表另派生 AI 广告（`verbFace`／`catalog`：id、label、description、cost、逐参数的 type×重数×可选×ref 与过门注记）；`act` 工具描述缺省即协议约束＋该广告，作者经 `prompt.tool` 委托或覆盖——两种编码同源，不得双写。
+- **动词表**：`params` 由值声明（type×重数）加可选与描述构成，派生接口模式、内核校验与规则参数的编译期类型；`ref` 值过指称门（域即可指称集）；`many` 令参数为非空序列——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。全表另派生 AI 广告（`verbFace`／`catalog`：id、label、description、cost、逐参数的 type×重数×可选×ref 与过门注记）；`act` 工具描述缺省即协议约束＋该广告，作者经 `prompt.tool` 委托或覆盖。
 - **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被断言与探针消费，`text` 是世界腔答复（缺省回落 noResponse），`price` 覆写缺省价；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。否决不携带涉及实体——指称落点在 action 参数与法则理由。受众规则见 `fault`。
-- **引擎文本**（`Messages` 皆非空；`say` 可接管总函数）：引擎合成读者侧文本的场合是闭集 `Speech`——记录点的 `(point, verb)`（rule/closure/gate/invariant/engine/crash）与边界情形 `noProposal`（空提案、未调 act、零行文）、`interrupted(adjudicate|project)`。解析序：记录文本中受众 world 者直用（`deny` 的 text、invariant 的 reply）；其余经 `say(speech, base)`——`base` 对 gate 先取动词 `invisible`、再取 `invisibleEntity`、最后 `noResponse`，其余场合一律 `noResponse`（受众 engine 点的隐身呈现）。`verb.invisible` 是词表缺省，不进入记录、不越级 say。记录点场合的解析是记录与 def 的纯函数（act 结果与近况恒同）；边界场合不在账本；投影失灵先按 `interrupted(project)` 解析，`say` 失败时直取 `noResponse`。`timePassed` 承载静默刻聚合，不属 `say`；回复/陈述是授予侧的逐次文本，亦不入 `say`。文案只被呈现消费，不参与裁决，不得改变言默。
+- **引擎文本**（`Messages` 皆非空；`say` 可接管总函数）：引擎合成读者侧文本的场合是闭集 `Speech`——记录点的 `(point, verb)`（rule/closure/gate/invariant/engine/crash）与边界情形 `noProposal`（空提案、未调 act、零行文）、`interrupted(adjudicate|project)`。解析序：记录文本中受众 world 者直用（`deny` 的 text、invariant 的 reply）；其余经 `say(speech, base)`——`base` 对 gate 先取动词 `invisible`、再取 `invisibleEntity`、最后 `noResponse`，其余场合一律 `noResponse`（受众 engine 点的隐身呈现）。`verb.invisible` 是词表缺省，不进入记录、不越级 say。记录点场合的解析是记录与 def 的纯函数（act 结果与近况恒同）；边界场合不在账本；投影失灵先按 `interrupted(project)` 解析，`say` 失败时直取 `noResponse`。`timePassed` 承载静默刻聚合，不属 `say`；回复/陈述是授予侧的逐次文本，亦不入 `say`。文案只被呈现消费，不参与裁决。
 
 ## 非目标
 
-- 语义校验
 - 多意志
 - 日志防篡改与坐标对账：装载是重建（形状、序位连续、变更可应用、终态 integrity），不是审计；投影失败是消费事件，降级呈现
 
