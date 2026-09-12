@@ -457,13 +457,7 @@ async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
-	if (!cmd || cmd === "--help" || cmd === "-h") {
-		process.stdout.write(`用法:
-  sim verify                     运行 scenarios/ 下全部场景（自动发现，跳过未注册游戏）
-  sim probe --game <id> [--max <n>]    裁决地图：每动词生成尝试空间的有限生成集（指称参数穷举可指称实体，必填自由参数取类型代表常量）——法则×动词活性矩阵（授予/拒绝/弃权/未达，零表态可见：死法则判读属作者）＋常驻规则活性（以各探针动作推钟的刻为域）＋逐 op 落行（✗ 载法则与理由；✓ 按决策律×守卫×变更形状分组，∅＝零变更，载代表 op）＋核心级否决单列 bug（--max 控制预算，默认 10000）
-`);
-		return;
-	}
+	if (!cmd) throw new Error("缺少命令");
 	if (cmd === "verify") {
 		await cmdVerify();
 		return;
