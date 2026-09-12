@@ -841,20 +841,15 @@ function faceAt(field: FieldView, id: string): string {
 	return field.known.has(id) ? field.name({ cell: "vertex", id }) : id;
 }
 
-function renderValue(face: Face, v: Payload, isRef: boolean): { text: string; ids: string[] } {
-	if (!isRef) return { text: String(v), ids: [] };
-	const items = Array.isArray(v) ? v : [v];
-	const texts: string[] = [];
-	const ids: string[] = [];
-	for (const item of items) {
-		if (typeof item !== "string") {
-			texts.push(String(item));
-			continue;
-		}
-		ids.push(item);
-		texts.push(face(item));
-	}
-	return { text: texts.join(", "), ids };
+function renderValue(face: Face, v: Payload, isRef: boolean): string {
+	if (!isRef) return String(v);
+	return (Array.isArray(v) ? v : [v]).map((item) => (typeof item === "string" ? face(item) : String(item))).join(", ");
+}
+
+/** 值位的指称集：结构判定，不触命名（与 renderValue 同判据）。 */
+function valueIds(v: Payload, isRef: boolean): string[] {
+	if (!isRef) return [];
+	return (Array.isArray(v) ? v : [v]).filter((x): x is string => typeof x === "string");
 }
 
 /** 槽声明查表：属性按键、边按类型；未注册即 undefined。 */
@@ -924,7 +919,7 @@ function refsWithin(d: SlotDef | undefined, v: Value, vis: ReadonlySet<string>):
 }
 
 function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }, name: string): string {
-	const val = (v: Payload, ok: boolean, isRef: boolean): string => (ok ? renderValue(face, v, isRef).text : "?");
+	const val = (v: Payload, ok: boolean, isRef: boolean): string => (ok ? renderValue(face, v, isRef) : "?");
 	if (c.cell === "vertex") return `${c.next === null ? "-" : "+"} ${face(c.next === null ? c.prev.id : c.next.id)}`;
 	if (c.cell === "edge") {
 		const ref = slotDef(sim.def, c)?.type === "ref";
@@ -934,21 +929,21 @@ function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolea
 	return `${face(c.entity)}.${name}: ${val(c.prev, sides.prev, ref)} → ${val(c.next, sides.next, ref)}`;
 }
 
-/** 与渲染消费同一解析：指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数。 */
-function referentsOf(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }): string[] {
+/** 指称集对渲染封闭——凡行铸出的同一性皆指称（prop 行主语在内），未披露侧不数；判定不触命名。 */
+function referentsOf(sim: Simulation, c: Change, sides: { prev: boolean; next: boolean }): string[] {
 	if (c.cell === "vertex") return [c.next === null ? c.prev.id : c.next.id];
 	if (c.cell === "edge") {
 		const out = [c.from, c.to];
 		if (slotDef(sim.def, c)?.type === "ref") {
-			if (sides.prev) out.push(...renderValue(face, c.prev, true).ids);
-			if (sides.next) out.push(...renderValue(face, c.next, true).ids);
+			if (sides.prev) out.push(...valueIds(c.prev, true));
+			if (sides.next) out.push(...valueIds(c.next, true));
 		}
 		return out;
 	}
 	const ref = slotDef(sim.def, c)?.type === "ref";
 	const out: string[] = [c.entity];
-	if (sides.prev) out.push(...renderValue(face, c.prev, ref).ids);
-	if (sides.next) out.push(...renderValue(face, c.next, ref).ids);
+	if (sides.prev) out.push(...valueIds(c.prev, ref));
+	if (sides.next) out.push(...valueIds(c.next, ref));
 	return out;
 }
 /**
@@ -991,18 +986,18 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			if (prev !== next) renames.push(`~ ${prev} → ${next}`);
 		}
 		const cellOf = (c: Change): Addr => (c.cell === "vertex" ? { cell: "vertex", id: c.next === null ? c.prev.id : c.next.id } : c);
-		// 每侧可显示 ⇔ 该边界对变更格有名且披露（缺席格与在场格同过一门）
-		const sidesOf = (c: Change): { prev: boolean; next: boolean } => {
+		// 每侧可显示 ⇔ 该边界对变更格有名且披露（缺席格与在场格同过一门）；格名一次求值，行名后态优先
+		const sidesOf = (c: Change): { prev: boolean; next: boolean; name: string | null } => {
 			const cell = cellOf(c);
-			return { prev: b.present(cell), next: a.present(cell) };
+			const bn = b.name(cell);
+			const an = a.name(cell);
+			return { prev: bn !== null && b.sees(cell), next: an !== null && a.sees(cell), name: an ?? bn };
 		};
 		const changeLine = (c: Change): string | null => {
 			const sides = sidesOf(c);
 			if (!sides.prev && !sides.next) return null;
-			if (!referentsOf(sim, c, face, sides).every((r) => field.has(r))) return null;
-			const cell = cellOf(c);
-			const name = a.name(cell) ?? b.name(cell);
-			return name === null ? null : fmtChange(sim, c, face, sides, name);
+			if (!referentsOf(sim, c, sides).every((r) => field.has(r))) return null;
+			return sides.name === null ? null : fmtChange(sim, c, face, sides, sides.name);
 		};
 		return { face, renames, changeLine };
 	};
@@ -1381,7 +1376,7 @@ export class Simulation {
 			.filter((k) => k in action.params)
 			.map((k) => {
 				const v = action.params[k]!;
-				if (!refs.has(k)) return renderValue(face, v, false).text;
+				if (!refs.has(k)) return renderValue(face, v, false);
 				const items = Array.isArray(v) ? v : [v];
 				return items.map((item) => (typeof item === "string" ? face(item) : String(item))).join(", ");
 			});
