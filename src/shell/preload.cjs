@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("cave", {
 	narrate: (instruction) => ipcRenderer.invoke("cave:narrate", { instruction }),
 	state: () => ipcRenderer.invoke("cave:state"),
 	reset: (game, run) => ipcRenderer.invoke("cave:reset", { game, run }),
+	uis: () => ipcRenderer.invoke("cave:uis"),
+	use: (name) => ipcRenderer.invoke("cave:use", { name }),
 	onEvent: (listener) => {
 		const handler = (_event, payload) => listener(payload);
 		ipcRenderer.on("cave:event", handler);

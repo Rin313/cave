@@ -2,9 +2,9 @@
 	"name": "cave",
 	"private": true,
 	"type": "module",
+	"main": "src/shell/main.ts",
 	"scripts": {
-		"verify": "node src/tools/sim.ts verify",
-		"shell": "electron src/shell/main.ts"
+		"verify": "node src/tools/sim.ts verify"
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "^0.85.1"

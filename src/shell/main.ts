@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { rmSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Engine } from "../core/engine.ts";
 import { errorText, spineLines } from "../core/sim.ts";
 import { GAMES } from "../games/registry.ts";
@@ -17,8 +16,68 @@ interface Current {
 let win: BrowserWindow | null = null;
 let current: Current | null = null;
 
-// runs/ 与 pi 资源根锚在项目根：直接启动二进制时 cwd 不在项目内也不会漂移
-process.chdir(join(import.meta.dirname, "..", ".."));
+const APP_ROOT = app.getAppPath();
+const DATA_ROOT = app.isPackaged ? app.getPath("userData") : APP_ROOT;
+/** 界面查序：用户目录（可写、可覆盖）→ 包外资源 → 包内；同名前者遮蔽后者。 */
+const UI_ROOTS = app.isPackaged
+	? [join(DATA_ROOT, "ui"), join(process.resourcesPath, "ui"), join(APP_ROOT, "ui")]
+	: [join(APP_ROOT, "ui")];
+const SETTINGS_FILES = app.isPackaged
+	? [join(DATA_ROOT, "settings.json"), join(process.resourcesPath, "settings.json"), join(APP_ROOT, "settings.json")]
+	: [join(APP_ROOT, "settings.json")];
+
+/** 界面名即目录名，只认 <root>/<name>/index.html；名字不做路径。 */
+function uiFile(name: string): string | null {
+	if (name === "" || name === "." || name === ".." || /[\\/]/.test(name)) return null;
+	for (const root of UI_ROOTS) {
+		const file = join(root, name, "index.html");
+		if (existsSync(file)) return file;
+	}
+	return null;
+}
+
+function uis(): string[] {
+	const names = new Set<string>();
+	for (const root of UI_ROOTS) {
+		if (!existsSync(root)) continue;
+		for (const entry of readdirSync(root, { withFileTypes: true })) {
+			if (entry.isDirectory() && existsSync(join(root, entry.name, "index.html"))) names.add(entry.name);
+		}
+	}
+	return [...names].sort();
+}
+
+function readUiSetting(): string | undefined {
+	for (const file of SETTINGS_FILES) {
+		if (!existsSync(file)) continue;
+		try {
+			const parsed = JSON.parse(readFileSync(file, "utf8")) as { ui?: unknown };
+			if (typeof parsed?.ui === "string") return parsed.ui;
+		} catch {
+			// 破损设置视同缺席；启动失败信息会列出可用界面
+		}
+	}
+	return undefined;
+}
+
+/** 初始界面：settings.json 指定者优先，其次唯一可用界面；不猜、不兜底（shell 不自带界面）。 */
+function bootUi(): string {
+	const named = readUiSetting();
+	if (named !== undefined && uiFile(named) !== null) return named;
+	const names = uis();
+	if (names.length === 1) return names[0]!;
+	if (names.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html`);
+	throw new Error(`未指定界面：可用 ${names.join(", ")}；在 ${SETTINGS_FILES[0]} 写入 { "ui": "<name>" }`);
+}
+
+let ui: string;
+try {
+	ui = bootUi();
+} catch (e) {
+	console.error(errorText(e));
+	process.exit(2);
+}
+const uiPath = uiFile(ui)!;
 
 function closeCurrent(): void {
 	if (!current) return;
@@ -46,10 +105,21 @@ function pair(req: { game?: unknown; run?: unknown } | undefined): { game: strin
 
 ipcMain.handle("cave:games", () => Object.keys(GAMES));
 
+ipcMain.handle("cave:uis", () => uis());
+
+/** 换界面：只导航当前窗口，不动引擎与 run；选择写入设置供下次启动。 */
+ipcMain.handle("cave:use", (_event, req: { name?: unknown }) => {
+	if (typeof req?.name !== "string") throw new Error("use 需要界面名");
+	const file = uiFile(req.name);
+	if (file === null) throw new Error(`未知界面：${req.name}（可用：${uis().join(", ") || "无"}）`);
+	writeFileSync(SETTINGS_FILES[0]!, `${JSON.stringify({ ui: req.name }, null, "\t")}\n`, "utf8");
+	void win?.loadFile(file);
+});
+
 ipcMain.handle("cave:open", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	closeCurrent();
-	const engine = await openRun(game, run);
+	const engine = await openRun(game, run, DATA_ROOT);
 	current = { game, run, engine, unsubscribe: engine.subscribe((event) => win?.webContents.send("cave:event", event)) };
 	return { game, run, ...snapshot(), warnings: [...engine.loadWarnings] };
 });
@@ -86,15 +156,8 @@ ipcMain.handle("cave:state", () => snapshot());
 ipcMain.handle("cave:reset", (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	if (current?.game === game && current.run === run) closeCurrent();
-	rmSync(runPaths(game, run).dir, { recursive: true, force: true });
+	rmSync(runPaths(game, run, DATA_ROOT).dir, { recursive: true, force: true });
 });
-
-/** --ui 接受本地文件路径或 URL：任何 HTML 页都可作为界面，preload 注入的 cave 是唯一通道。 */
-function uiTarget(): string {
-	const at = process.argv.indexOf("--ui");
-	const target = (at >= 0 ? process.argv[at + 1] : undefined) ?? join(import.meta.dirname, "ui.html");
-	return target.includes("://") ? target : pathToFileURL(resolve(target)).href;
-}
 
 app.whenReady().then(() => {
 	win = new BrowserWindow({
@@ -111,8 +174,7 @@ app.whenReady().then(() => {
 		win = null;
 		closeCurrent();
 	});
-	void win.loadURL(uiTarget());
-	if (process.argv.includes("--devtools")) win.webContents.openDevTools();
+	void win.loadFile(uiPath);
 });
 
 app.on("window-all-closed", () => app.quit());
