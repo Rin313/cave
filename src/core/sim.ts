@@ -613,7 +613,7 @@ function integrityProblems(def: GameDef, world: World): string | null {
 		}
 	}
 	const edgeIds = new Set<string>();
-	for (const r of world.relations ?? []) {
+	for (const r of world.relations) {
 		if (r === null || typeof r !== "object" || Array.isArray(r)) return "integrity: relation must be a record";
 		for (const k of Object.keys(r)) {
 			if (k !== "from" && k !== "to" && k !== "type" && k !== "value") return `integrity: relation.${k} is not part of the relation shape`;
