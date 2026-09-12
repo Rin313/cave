@@ -82,17 +82,14 @@ async function cmdStart(gameId: string, runId: string): Promise<void> {
 	}
 }
 
-async function cmdAct(gameId: string, runId: string, raw: string, selection: string | undefined): Promise<void> {
+async function cmdAct(gameId: string, runId: string, utterance: string): Promise<void> {
 	await withEngine(gameId, runId, async (ctx) => {
 		const { paths, sim, engine } = ctx;
-		const utterance = selection === undefined ? raw : `${raw}（选中：「${selection}」）`;
 		const outcome = await engine.act({ utterance });
 		const turn = engine.turn;
 		appendTranscript(paths.transcript, {
 			turn,
 			phase: "act",
-			raw,
-			selection: selection ?? null,
 			utterance,
 			steps: outcome.steps,
 			narration: outcome.narration,
@@ -115,7 +112,7 @@ async function cmdBatch(gameId: string, runId: string, file: string): Promise<vo
 			const outcome = await engine.act({ utterance: line });
 			const turn = engine.turn;
 			appendTranscript(paths.transcript, {
-				turn, phase: "act", raw: line, selection: null, utterance: line,
+				turn, phase: "act", utterance: line,
 				steps: outcome.steps,
 				narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage,
 			});
@@ -156,7 +153,6 @@ function cmdReset(gameId: string, runId: string): void {
 	process.stdout.write(`已重置 run "${runId}"\n`);
 }
 
-/** 解析位置参数为完整话语（支持不带引号的多词文本）。 */
 function joinUtterance(positionals: string[]): string {
 	return positionals.join(" ").trim();
 }
@@ -165,25 +161,7 @@ async function main() {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
 
-	if (!cmd || cmd === "--help" || cmd === "-h") {
-		process.stdout.write(`用法:
-  loop start --run <id> --game <id>
-  loop act <话语> --run <id> --game <id> [--select <选中文本>]
-  loop batch <utterances.txt> --run <id> --game <id>
-  loop render --run <id> --game <id> [--instruction <指令>]
-  loop state --run <id> --game <id> [--out <file>]
-  loop reset --run <id> --game <id>
-
-输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：records.jsonl 是机器档案（回合记录，装载重放的主侧），session.jsonl 是 pi 原始会话 trace（非证据），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
-batch 话语文件每行一条（同一引擎会话内顺序执行，A/B 话语集用）；空行与 # 注释跳过。
---select 由本工具并合进话语（transcript 记 raw/selection 分解）。
-render 是研究操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合）。
-state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用）。
---game 恒必填：run 按游戏分目录，无跨游戏消歧。
-环境变量: <GAME>_PROVIDER <GAME>_MODEL <GAME>_THINKING（按游戏 id 命名空间；必填，无默认模型）
-`);
-		return;
-	}
+	if (!cmd) throw new Error("缺少命令");
 
 	const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
 	const positionals = a.positionals;
@@ -196,7 +174,7 @@ state 打印状态视图；--out 按需导出世界快照 JSON（机械 diff 用
 		case "act": {
 			const utterance = flagStr(a, "utterance") ?? joinUtterance(positionals);
 			if (!utterance) throw new Error("act 需要话语（位置参数或 --utterance）");
-			await cmdAct(gameId, runId, utterance, flagStr(a, "select"));
+			await cmdAct(gameId, runId, utterance);
 			return;
 		}
 		case "batch": {
