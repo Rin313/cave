@@ -49,7 +49,7 @@ const referenced = (q: Q, id: string): string | null => {
 };
 
 function extraOf(world: World, player: string, field: FieldView): Record<string, ViewValue> {
-	const name = (id: string): string => field.name({ cell: "vertex", id }) ?? id;
+	const name = (id: string): string => field.name({ cell: "vertex", id });
 	const affinity: string[] = [];
 	const seen = new Set<string>();
 	for (const r of world.relations) {
@@ -425,7 +425,7 @@ Expression discipline:
 
 const sealsRecentLines = (kit: PromptKit): string[] => {
 	if (!kit.recent.length) return [];
-	const lines = [`${kit.recent.length} recent turn(s), oldest last:`];
+	const lines = [`${kit.recent.length} recent turn(s), newest last:`];
 	for (const r of kit.recent) {
 		lines.push(`- t${r.time} ${r.utterance}`);
 		if (r.moves.length) for (const l of r.moves) lines.push(`  ${l}`);

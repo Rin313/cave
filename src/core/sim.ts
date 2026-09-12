@@ -270,7 +270,7 @@ export function param<T extends SlotType, O extends ParamOpts = object>(
 	type: T,
 	opts?: O & Record<Exclude<keyof O, keyof ParamOpts>, never>,
 ): { type: T } & O {
-	return Object.assign({ type }, opts ?? ({} as O), { type });
+	return Object.assign({ type }, opts, { type });
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
@@ -466,7 +466,7 @@ export interface NarrateKit extends PromptKit, ViewKit {
 /** 近况缺省排版：回合坐标、话语与事件行；无事件即显式标记，沉默可读。 */
 function recentBlock(recent: readonly RecentEntry[]): string {
 	if (recent.length === 0) return "";
-	const lines = ["[Recent turns, oldest last]"];
+	const lines = ["[Recent turns, newest last]"];
 	for (const r of recent) {
 		lines.push(`- t${r.time} ${r.utterance}`);
 		if (r.moves.length === 0) lines.push("  no visible events");
@@ -663,7 +663,11 @@ export interface FieldView {
 	visible: Set<string>;
 	referable: Set<string>;
 	known: Set<string>;
-	name: (cell: Addr) => string | null;
+	/** 顶点名恒在（无名折为 id）；属性/边无名即 null。 */
+	name: {
+		(cell: VertexAddr): string;
+		(cell: Addr): string | null;
+	};
 }
 
 /** 闭合后的状态视图基座：卡、句柄、边（名字、披露与指称闭包同时成立；边名即呈现 token，不携 τ）；作者视图钩子的缺省值与素材。 */
@@ -835,7 +839,7 @@ type Face = (id: string) => string;
 
 /** 域外不触命名（回落 id 只是指称句柄的底），故未知者的名字不经任何行文泄漏。 */
 function faceAt(field: FieldView, id: string): string {
-	return field.known.has(id) ? field.name({ cell: "vertex", id }) ?? id : id;
+	return field.known.has(id) ? field.name({ cell: "vertex", id }) : id;
 }
 
 function renderValue(face: Face, v: Payload, isRef: boolean): { text: string; ids: string[] } {
@@ -985,7 +989,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			if (!b.known.has(id)) continue;
 			const prev = b.name({ cell: "vertex", id });
 			const next = a.name({ cell: "vertex", id });
-			if (prev !== null && next !== null && prev !== next) renames.push(`~ ${prev} → ${next}`);
+			if (prev !== next) renames.push(`~ ${prev} → ${next}`);
 		}
 		const cellOf = (c: Change): Addr => (c.cell === "vertex" ? { cell: "vertex", id: c.next === null ? c.prev.id : c.next.id } : c);
 		// 每侧可显示 ⇔ 该边界对变更格有名且披露（缺席格与在场格同过一门）
@@ -998,7 +1002,8 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			if (!sides.prev && !sides.next) return null;
 			if (!referentsOf(sim, c, face, sides).every((r) => field.has(r))) return null;
 			const cell = cellOf(c);
-			return fmtChange(sim, c, face, sides, a.name(cell) ?? b.name(cell) ?? "");
+			const name = a.name(cell) ?? b.name(cell);
+			return name === null ? null : fmtChange(sim, c, face, sides, name);
 		};
 		return { face, renames, changeLine };
 	};
@@ -1154,17 +1159,19 @@ export class Simulation {
 	}
 
 	/** 格命名：作者钩子收缺省实现，可委托或接管；顶点无名回落 id，属性/边无名即 null；声明即全函数，返回域外即缺陷。 */
-	private naming(world: World): (cell: Addr) => string | null {
+	private naming(world: World): FieldView["name"] {
 		const base = this.defaultNaming();
-		if (this.def.name === undefined) return base;
-		const hook = this.def.name(world, this.player, base);
+		const hook = this.def.name === undefined ? base : this.def.name(world, this.player, base);
 		if (typeof hook !== "function") throw new Error("GameDef.name 须返回命名函数");
-		return (cell) => {
+		function lookup(cell: VertexAddr): string;
+		function lookup(cell: Addr): string | null;
+		function lookup(cell: Addr): string | null {
 			const token = hook(cell);
 			if (token === null) return cell.cell === "vertex" ? cell.id : null;
 			if (typeof token !== "string" || token === "") throw new Error(`GameDef.name 须返回非空 token 或 null，得到 ${JSON.stringify(token)}`);
 			return token;
-		};
+		}
+		return lookup;
 	}
 
 	/** 提交边界的求值：披露＋三个域＋格命名＋可显示谓词；脸由命名在已知域上即时求值，不物化。 */
