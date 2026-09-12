@@ -121,6 +121,16 @@ export class Engine {
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const resumed = resume(def, sessionManager.getBranch());
+		if (resumed.truncated) {
+			// 截断以分支落地：叶指针移回完好前缀末条（前缀为空则重置到根），续写进入新分支；旧尾部在文件中原样保留、不再进入装载
+			if (resumed.lastEntryId !== null) {
+				sessionManager.branch(resumed.lastEntryId);
+				resumed.warnings.push(`档案截断：续写从 seq${resumed.lastSeq} 另起分支（旧尾部不再进入装载）`);
+			} else if (resumed.records.length === 0) {
+				sessionManager.resetLeaf();
+				resumed.warnings.push("档案截断于首条：续写另起新根");
+			}
+		}
 		const archive: Archive = { records: resumed.records, lastSeq: resumed.lastSeq, dead: null };
 
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());

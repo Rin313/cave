@@ -421,9 +421,11 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string" && s !== ""))) out.push("statements 须为非空字符串序列");
 		return out;
 	}
-	const denial = v.denial as { point?: { law?: unknown }; text?: unknown } | undefined;
+	const denial = v.denial as { point?: unknown; text?: unknown } | undefined;
 	if (!denial || typeof denial !== "object") return [...out, "否决须携 denial"];
-	if (typeof denial.point?.law !== "string" || denial.point.law === "") out.push("否决的 law 须为非空字符串");
+	const point = denial.point as { kind?: unknown; law?: unknown } | null | undefined;
+	if (point === null || point === undefined || typeof point !== "object" || point.kind !== "rule") out.push("作者的否决只能是 rule 点");
+	else if (typeof point.law !== "string" || point.law === "") out.push("否决的 law 须为非空字符串");
 	if (denial.text !== undefined && (typeof denial.text !== "string" || denial.text === "")) out.push("否决的 text 须为非空字符串");
 	return out;
 }
@@ -769,14 +771,16 @@ function isChange(v: unknown): boolean {
 	}
 }
 
-/** 步形状：授予行 law 必填非空；世界腔文本非空；答复只属于 will；否决的 rule 可缺（gate/closure 无守卫）。 */
+/** 步形状：坐标与价是非负整数；授予行 law 必填非空；世界腔文本非空；答复只属于 will（clock 无答复、价 0、参数空）；否决的 rule 可缺（gate/closure 无守卫）。 */
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
 	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
-	if (typeof c.at !== "number" || typeof c.ok !== "boolean" || typeof c.price !== "number") return false;
+	if (typeof c.at !== "number" || !Number.isInteger(c.at) || c.at < 0) return false;
+	if (typeof c.ok !== "boolean" || typeof c.price !== "number" || !Number.isInteger(c.price) || c.price < 0) return false;
 	if (c.origin !== "will" && c.origin !== "clock") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
+	if (c.origin === "clock" && (c.price !== 0 || Object.keys(a.params).length > 0)) return false;
 	if (c.ok === true) {
 		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
 		if (typeof c.law !== "string" || c.law === "") return false;

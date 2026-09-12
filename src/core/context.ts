@@ -7,6 +7,7 @@ export type CtxMessages = ContextEvent["messages"];
 export const TURN_RECORD_TYPE = "turn";
 
 interface EntryLike {
+	id?: string;
 	type: string;
 	customType?: unknown;
 	data?: unknown;
@@ -19,15 +20,20 @@ interface RawTurn {
 	steps?: unknown;
 }
 
+interface LoadedTurn {
+	entry: EntryLike;
+	record: ChronicleEntry;
+}
+
 /** 信封粗筛：只收形状完好的回合条目；最终完好判据是重放。 */
-function loadRecords(entries: readonly EntryLike[], warnings: string[]): ChronicleEntry[] {
-	const out: ChronicleEntry[] = [];
+function loadRecords(entries: readonly EntryLike[], warnings: string[]): LoadedTurn[] {
+	const out: LoadedTurn[] = [];
 	let broken = 0;
 	for (const e of entries) {
 		if (e.type !== "custom" || e.customType !== TURN_RECORD_TYPE) continue;
 		const d = e.data as RawTurn | undefined;
 		if (d && typeof d.seq === "number" && Number.isInteger(d.seq) && d.seq >= 1 && typeof d.time === "number" && typeof d.utterance === "string" && Array.isArray(d.steps) && d.steps.every(isCommit)) {
-			out.push(deepFreeze({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps }));
+			out.push({ entry: e, record: deepFreeze({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps }) });
 		} else broken++;
 	}
 	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 或旧步形状的条目）`);
@@ -39,6 +45,10 @@ export interface Resumed {
 	/** 存活回合记录（重放通过的连续前缀）；近况由 def.recent 从此选择。 */
 	records: ChronicleEntry[];
 	lastSeq: number;
+	/** 存活前缀末条回合的会话条目 id（能定位时）；截断时引擎据此另起分支，使续写不再被旧尾部遮蔽。 */
+	lastEntryId: string | null;
+	/** 序位不接续或变更不可应用：装载已截断至完好前缀。 */
+	truncated: boolean;
 	warnings: string[];
 }
 
@@ -49,28 +59,30 @@ export function resume(def: GameDef, entries: readonly EntryLike[]): Resumed {
 	const records: ChronicleEntry[] = [];
 	let lastSeq = 0;
 	let expected = 1;
-	let broken = false;
-	for (const r of loadRecords(entries, warnings)) {
-		if (broken) continue;
+	let truncated = false;
+	let lastEntryId: string | null = null;
+	for (const { entry, record: r } of loadRecords(entries, warnings)) {
+		if (truncated) continue;
 		if (r.seq !== expected) {
 			warnings.push(`档案链断于 seq${expected}（得到 seq${r.seq}）：世界与近况同界截断`);
-			broken = true;
+			truncated = true;
 			continue;
 		}
 		const reason = sim.replayRecord(r);
 		if (reason) {
 			warnings.push(`档案链断（${reason}）：世界与近况同界截断`);
-			broken = true;
+			truncated = true;
 			continue;
 		}
 		records.push(r);
 		lastSeq = r.seq;
+		lastEntryId = typeof entry.id === "string" && entry.id !== "" ? entry.id : null;
 		expected = r.seq + 1;
 	}
 	// 装载终点：终态对当下法则的零变更审查——历史不重审，当前世界必过 admit
 	const finallyDenied = sim.admit();
 	if (finallyDenied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(finallyDenied.point)}（${denialReasonText(finallyDenied)}）`);
-	return { sim, records, lastSeq, warnings };
+	return { sim, records, lastSeq, lastEntryId, truncated, warnings };
 }
 
 /** 缺省近况选择：最后 recentWindow 条；recentWindow 缺席即全量（作者接管选择时的 base）。 */
