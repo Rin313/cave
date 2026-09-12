@@ -300,24 +300,27 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 /** 规则链：动词与常驻规则同构的规则序列；两者身份都是 (origin, id)，链内 id 唯一，校验共用。 */
 export type RuleChain = Rule[];
 
+/** 规则链注册项的共同面：动词与常驻规则同制。 */
+interface RuleDecl {
+	rules: RuleChain;
+}
+
 /** 意志动词：唯一调用点是 will（玩家经动词面）。 */
-export interface VerbDef {
+export interface VerbDef extends RuleDecl {
 	label: string;
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
 	/** 门否决文案（词表缺省，位于 say 的 base 之下，不进入记录）：无指称参数时不可能被消费；缺省回落 messages.invisibleEntity。 */
 	invisible?: string;
-	rules: RuleChain;
 }
 
 /** 常驻规则：唯一调用点是泵（每刻一次，空参）。不进动词面、无参数、无价、无呈现名；id 只进账本与骰子地址。 */
-export interface TickDef {
+export interface TickDef extends RuleDecl {
 	id: string;
-	rules: RuleChain;
 }
 
-/** 面向 AI 的动词派生面：广告与接口模式自此同源，不再各自手写。 */
+/** 面向 AI 的动词派生面 */
 export interface VerbFace {
 	id: string;
 	label: string;
@@ -336,7 +339,7 @@ export interface ParamFace {
 	description?: string;
 }
 
-/** 由动词表构造式派生广告面，无对既有图的变换。 */
+/** 由动词表构造式派生广告面。 */
 export function verbFace(verbs: Readonly<Record<string, VerbDef>>): readonly VerbFace[] {
 	return Object.entries(verbs).map(([id, v]) => ({
 		id,
@@ -501,7 +504,7 @@ export interface GameDef {
 	props?: Record<string, SlotDef>;
 	/** 边类型注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
 	relTypes?: Record<string, SlotDef>;
-	/** 常驻规则表（可选）：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
+	/** 常驻规则表：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
 	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, player: string, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
@@ -586,7 +589,7 @@ function slotValueProblem(d: SlotDef, v: Value, ids: ReadonlySet<string>): strin
 	return null;
 }
 
-/** 存储层 integrity：引擎自检，恒 engine 受众。 */
+/** 存储层 integrity */
 function integrityProblems(def: GameDef, world: World): string | null {
 	if (!Array.isArray(world.entities)) return "integrity: world.entities must be an array";
 	if (!Array.isArray(world.relations)) return "integrity: world.relations must be an array";
@@ -677,6 +680,9 @@ function tupleKey(parts: readonly string[]): string {
 
 /** 入账来源：will（玩家经动词面）、clock（泵逐刻）。 */
 export type Origin = "will" | "clock";
+
+/** 注册与查询的诊断名。 */
+const ORIGIN_LABEL: Record<Origin, string> = { will: "动词", clock: "常驻规则" };
 
 /** 提案者：审查上下文用；rule 携授予法则与本次尝试的 origin/action，admit 是以零变更审查整世界（装载终点）。 */
 export type Proposal =
@@ -1055,8 +1061,8 @@ type RawResult =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 常驻规则：id → 规则链；每刻按声明序由泵调用。 */
-	private readonly ticks: Map<string, readonly Rule[]>;
+	/** 规则链注册表：两 origin 同制，(origin, id) 是身份；clock 的插入序即刻序。 */
+	private readonly chains: Record<Origin, Map<string, readonly Rule[]>> = { will: new Map(), clock: new Map() };
 	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位；peek 纯读，mark 只在提交点。 */
 	private readonly attemptSeq = new Map<number, Map<string, number>>();
 
@@ -1074,24 +1080,17 @@ export class Simulation {
 			if (invariantIds.has(inv.id)) throw new Error(`不变式 id 重复：${inv.id}`);
 			invariantIds.add(inv.id);
 		}
-		for (const [name, v] of Object.entries(def.verbs)) {
-			if (!Number.isInteger(v.cost) || v.cost < 0) throw new Error(`动词 ${name} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
-			assertRules(`动词 ${name}`, v.rules);
-			for (const [p, s] of Object.entries(v.params)) validateDecl(`动词 ${name} 的参数「${p}」`, true, s);
-			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${name} 的 invisible 须为非空字符串`);
-			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${name} 无指称参数，invisible 文案不会被消费`);
+		for (const [id, v] of Object.entries(def.verbs)) {
+			if (!Number.isInteger(v.cost) || v.cost < 0) throw new Error(`动词 ${id} 的 cost 须为非负整数刻数，得到 ${String(v.cost)}`);
+			for (const [p, s] of Object.entries(v.params)) validateDecl(`动词 ${id} 的参数「${p}」`, true, s);
+			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${id} 的 invisible 须为非空字符串`);
+			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${id} 无指称参数，invisible 文案不会被消费`);
+			this.register("will", id, v);
 		}
-		const ticks = new Map<string, readonly Rule[]>();
-		for (const t of def.ticks ?? []) {
-			if (typeof t.id !== "string" || t.id === "") throw new Error("常驻规则 id 须为非空字符串");
-			if (ticks.has(t.id)) throw new Error(`常驻规则 id 重复：${t.id}`);
-			assertRules(`常驻规则 ${t.id}`, t.rules);
-			ticks.set(t.id, t.rules);
-		}
+		for (const t of def.ticks ?? []) this.register("clock", t.id, t);
 		// props 与 relTypes 同制：注册即契约；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
 		for (const [k, d] of Object.entries(def.props ?? {})) validateDecl(`属性「${k}」`, false, d);
 		for (const [t, d] of Object.entries(def.relTypes ?? {})) validateDecl(`边类型「${t}」`, false, d);
-		this.ticks = ticks;
 		// 结构校验恒挂；作者不变式走 admit（历史不重审），开局世界在此另判一次以尽早显形 def 错误
 		const broken = integrityProblems(this.def, this.readState());
 		if (broken) throw new Error(`初始世界破坏完整性：${broken}`);
@@ -1188,10 +1187,19 @@ export class Simulation {
 		return verb;
 	}
 
-	/** 常驻规则的规则链；泵只按声明表调用，未注册即内核缺陷。 */
-	private tickRules(id: string): readonly Rule[] {
-		const rules = this.ticks.get(id);
-		if (!rules) throw new Error(`常驻规则 ${id} 未注册`);
+	/** 注册共同契约：id 非空、表内唯一、链内 id 唯一；两 origin 同制。 */
+	private register(origin: Origin, id: string, decl: RuleDecl): void {
+		if (typeof id !== "string" || id === "") throw new Error(`${ORIGIN_LABEL[origin]} id 须为非空字符串`);
+		const table = this.chains[origin];
+		if (table.has(id)) throw new Error(`${ORIGIN_LABEL[origin]} id 重复：${id}`);
+		assertRules(`${ORIGIN_LABEL[origin]} ${id}`, decl.rules);
+		table.set(id, decl.rules);
+	}
+
+	/** 规则链查询：身份 (origin, id)；未注册即内核缺陷（will 的形态校验另在 staticForm）。 */
+	private chainOf(origin: Origin, id: string): readonly Rule[] {
+		const rules = this.chains[origin].get(id);
+		if (rules === undefined) throw new Error(`${ORIGIN_LABEL[origin]} ${id} 未注册`);
 		return rules;
 	}
 
@@ -1308,19 +1316,10 @@ export class Simulation {
 		deepFreeze(action);
 		const at = s0.time;
 		const clock = origin === "clock";
-		let rules: readonly Rule[];
-		let refParams: readonly string[];
-		let price: number;
-		if (clock) {
-			rules = this.tickRules(action.verb);
-			refParams = [];
-			price = 0;
-		} else {
-			const verb = this.staticForm(action);
-			rules = verb.rules;
-			refParams = refParamsOf(verb);
-			price = verb.cost;
-		}
+		const verb = clock ? undefined : this.staticForm(action);
+		const rules = this.chainOf(origin, action.verb);
+		const refParams = verb === undefined ? [] : refParamsOf(verb);
+		const price = verb === undefined ? 0 : verb.cost;
 		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
 		const gate = this.boundary(s0).referable;
 		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, clock);
@@ -1369,7 +1368,7 @@ export class Simulation {
 		const out: Commit[] = [];
 		for (let i = 0; i < price; i++) {
 			this.world.time += 1;
-			for (const id of this.ticks.keys()) {
+			for (const id of this.chains.clock.keys()) {
 				const c = this.attempt(this.readState(), { verb: id, params: {} }, "clock");
 				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || c.reply !== undefined || !!c.statements?.length) out.push(c);
 			}
