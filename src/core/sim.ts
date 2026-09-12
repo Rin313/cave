@@ -749,11 +749,10 @@ function isPoint(v: unknown): v is Point {
 	}
 }
 
-/** 否决形状：Point + ⟨text⟩?；文本非空；engine 受众必携文本；旧形状（reason/rule id）显式弃置。 */
+/** 否决形状：Point + ⟨text⟩?；文本非空；engine 受众必携文本。 */
 function isDenial(v: unknown): boolean {
 	if (v === null || typeof v !== "object") return false;
-	const d = v as { point?: unknown; text?: unknown; reason?: unknown };
-	if (d.reason !== undefined) return false;
+	const d = v as { point?: unknown; text?: unknown };
 	if (!isPoint(d.point)) return false;
 	if (d.text !== undefined && (typeof d.text !== "string" || d.text === "")) return false;
 	return audienceOf(d.point) !== "engine" || typeof d.text === "string";

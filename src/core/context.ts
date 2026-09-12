@@ -36,7 +36,7 @@ function loadRecords(entries: readonly EntryLike[], warnings: string[]): LoadedT
 			out.push({ entry: e, record: deepFreeze({ seq: d.seq, time: d.time, utterance: d.utterance, steps: d.steps }) });
 		} else broken++;
 	}
-	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏（含无 seq 或旧步形状的条目）`);
+	if (broken) warnings.push(`回合条目 ${broken} 条形状损坏`);
 	return out;
 }
 
