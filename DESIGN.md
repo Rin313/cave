@@ -145,7 +145,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 ## 协议
 
-一切状态是 `w = (t, E, Rel)`；∀ 变异恰一入口 `G(Δ*, ⟨rule⟩)`。
+∀ 变异恰一入口 `G(Δ*, ⟨rule⟩)`。
 
 **内容与坐标**　`E, Rel` 是内容，门的原子域；`t` 是坐标（派生，非内容），不产 𝒞，写者唯一（落钟循环），谓词照常读钟。钟的每次写入都归因于某个 will 步的生效 price（刻账目），与该步的果无关；耦合律是 `Δ钟 = price`：`t = t₀ + Σ will 步生效 price`（clock 步 price 恒 0），泵在 `(at, at+price]` 内逐刻写钟并运行 clock 步；裁决可选携 price（覆写缺省 cost，授予与否决同轴），入账后由生效 price 承接（覆写不另存）。`step.at` 与回合 `time` 是记录下来的审计坐标，须等于由该律回算的边界；全段算术（首步为 will；后一 will 步 at = 前一 will 步 at + 前一 price；其间 clock 步 at 落在 (前一 will 步 at, 前一 will 步 at + 前一 price] 内非降）不符即链断。回滚的坐标边界由账目裁定：已入账的刻不可回滚，未入账的刻必须一并回滚。
 
