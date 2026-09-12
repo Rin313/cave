@@ -78,7 +78,7 @@ export interface Messages {
 	noResponse: string;
 	/** 指称门否决的缺省文案（say 的 base）；动词 invisible 更具体，优先。 */
 	invisibleEntity?: string;
-	/** 静默刻聚合文案（⏱ ×n，n = |{at : 言@at = ∅}|）。 */
+	/** 静默刻聚合文案 */
 	timePassed: string;
 }
 
