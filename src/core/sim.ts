@@ -109,21 +109,20 @@ export type SlotDef =
 	| (SlotCommon & { type: LitType })
 	| (SlotCommon & { type: "ref"; strong: boolean });
 
-/** 裁决点。rule 的 law 只被呈现与探针消费；gate/closure 无载荷，呈现身份由 lawOf 产生。 */
+/** 裁决点。rule 的 law 只被呈现与探针消费；gate/closure/engine 无载荷，呈现身份由 lawOf 产生。 */
 export type Point =
 	| { kind: "rule"; law: string }
 	| { kind: "gate" }
 	| { kind: "closure" }
 	| { kind: "invariant"; id: string; fault: "world" | "engine" }
-	| { kind: "engine"; check: "integrity" | "commit" | "grant" }
-	| { kind: "crash"; site: "rule" | "invariant" };
+	| { kind: "engine" };
 
 /** 受众：裁决点的全函数；唯一由作者选择的是 invariant 的 fault。 */
 export function audienceOf(point: Point): "world" | "engine" {
 	switch (point.kind) {
 		case "rule": case "gate": case "closure": return "world";
 		case "invariant": return point.fault;
-		case "engine": case "crash": return "engine";
+		case "engine": return "engine";
 	}
 }
 
@@ -719,8 +718,7 @@ export function lawOf(point: Point): string {
 		case "gate": return "action.invisible";
 		case "closure": return "action.unanswered";
 		case "invariant": return `invariant.${point.id}`;
-		case "engine": return `engine.${point.check}`;
-		case "crash": return `${point.site}.crash`;
+		case "engine": return "engine";
 	}
 }
 
@@ -737,14 +735,13 @@ export interface Resolution {
 /** 记录形状：Point/Denial/Change/Commit 的运行时值域——提交路径（产出）与装载路径（接受）共用同一判据。 */
 function isPoint(v: unknown): v is Point {
 	if (v === null || typeof v !== "object") return false;
-	const p = v as { kind?: unknown; law?: unknown; id?: unknown; fault?: unknown; check?: unknown; site?: unknown };
+	const p = v as { kind?: unknown; law?: unknown; id?: unknown; fault?: unknown };
 	switch (p.kind) {
 		case "rule": return typeof p.law === "string" && p.law !== "";
 		case "gate": return true;
 		case "closure": return true;
 		case "invariant": return typeof p.id === "string" && p.id !== "" && (p.fault === "world" || p.fault === "engine");
-		case "engine": return p.check === "integrity" || p.check === "commit" || p.check === "grant";
-		case "crash": return p.site === "rule" || p.site === "invariant";
+		case "engine": return true;
 		default: return false;
 	}
 }
@@ -1219,11 +1216,11 @@ export class Simulation {
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, rule: r.id, denial: { point: { kind: "crash", site: "rule" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
+				return { ok: false, rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
 			}
 			if (!v) continue;
 			const problems = verdictProblems(v, clock);
-			if (problems.length) return { ok: false, rule: r.id, denial: { point: { kind: "engine", check: "grant" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
+			if (problems.length) return { ok: false, rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
 			if (v.ok) {
 				return { ok: true, deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.price !== undefined && { price: v.price }) };
 			}
@@ -1253,7 +1250,7 @@ export class Simulation {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
-				return { ok: false, denial: { point: { kind: "engine", check: "commit" }, text: out.refusal } };
+				return { ok: false, denial: { point: { kind: "engine" }, text: out.refusal } };
 			}
 			const inv = this.checkInvariants({ kind: "rule", rule, origin, action }, s0, out.changes);
 			if (inv) {
@@ -1264,7 +1261,7 @@ export class Simulation {
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
-			return { ok: false, denial: { point: { kind: "crash", site: "invariant" }, text: debug } };
+			return { ok: false, denial: { point: { kind: "engine" }, text: debug } };
 		}
 	}
 
@@ -1278,7 +1275,7 @@ export class Simulation {
 		const world = this.readState();
 		const ctx: CheckCtx = { def: this.def, player: this.player, proposal, before, changes: deepFreeze(changes) };
 		const broken = integrityProblems(this.def, world);
-		if (broken) return { point: { kind: "engine", check: "integrity" }, text: broken };
+		if (broken) return { point: { kind: "engine" }, text: broken };
 		for (const inv of this.def.invariants ?? []) {
 			const reason = inv.check(world, ctx);
 			if (!reason) continue;
