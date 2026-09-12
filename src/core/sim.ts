@@ -1324,19 +1324,21 @@ export class Simulation {
 		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
 		const gate = this.boundary(s0).referable;
 		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, clock);
+		// 价随表态定死（裁决价覆写 ?? 动词 cost）；授予被审查拒绝时价与守卫一并保留，不退回缺省
+		const effective = clock ? 0 : (r.price ?? price);
 		let step: Commit;
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
 			if (!cc.ok) {
-				step = { at, origin, action, price, ok: false, rule: r.rule, denial: cc.denial };
+				step = { at, origin, action, price: effective, ok: false, rule: r.rule, denial: cc.denial };
 			} else {
 				// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
 				const reply = clock ? undefined : r.reply;
 				const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-				step = { at, origin, action, price: clock ? 0 : (r.price ?? price), ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+				step = { at, origin, action, price: effective, ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 			}
 		} else {
-			step = { at, origin, action, price: clock ? 0 : (r.price ?? price), ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
+			step = { at, origin, action, price: effective, ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 		}
 		// 绊线：提交产出必落在装载域内（与装载路径同一判据）
 		if (!isCommit(step)) throw new Error(`内核缺陷：提交产出的记录被装载判据拒绝 ${JSON.stringify(step)}`);

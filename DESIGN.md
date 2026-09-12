@@ -51,7 +51,7 @@ wₙ = w₀ ⊕ C₁ ⊕ … ⊕ Cₙ
 ```
 
 ```
-G : Δ* × ⟨rule⟩ → 𝒞 ⊎ Denial                原子：拒绝 ⇒ w 不变
+G : Δ* × ⟨rule⟩ → 𝒞 ⊎ Denial                原子：拒绝 ⇒ 不产出 𝒞（E、Rel 不变）；t 与刻后果由泵另计
 Point ::= rule(⟨law⟩)                        -- 作者法则否决；law 必填，只被呈现与探针消费
         | gate                               -- 感知准入
         | closure                            -- 全弃权闭合
@@ -104,7 +104,7 @@ roll(addr, key, sides) = 1 + ⌊h(addr, key) · sides⌋      h : 确定性哈�
 Commit ::= (at, origin, action, price, 果)
 origin ∈ { will, clock }              -- 入账表态的来源；调用点的标记，作者不可传
 action ::= (verb, params)             -- 公共载荷；clock 的 params 恒空
-price  =  origin = clock ? 0 : (price ?? cost)          -- 括号内即裁决价覆写（缺省 cost）
+price  =  origin = clock ? 0 : (price ?? cost)          -- 括号内即裁决价覆写（缺省 cost）；表态处定死，审查与否决不重算
 果     ::= granted(guard, law, changes, reply?, statements?) | denied(guard?, Denial)
 ```
 
@@ -147,7 +147,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 一切状态是 `w = (t, E, Rel)`；∀ 变异恰一入口 `G(Δ*, ⟨rule⟩)`。
 
-**内容与坐标**　`E, Rel` 是内容，门的原子域；`t` 是坐标（派生，非内容），不产 𝒞，写者唯一（落钟循环），谓词照常读钟。钟的每次写入都归因于某次授予的落钟（刻账目），耦合律是 `Δ钟 = price`：`t = t₀ + Σ price`，泵按 price 逐刻；裁决可选携 price（覆写缺省 cost，授予与否决同轴），入账后由生效 price 承接（覆写不另存）。`step.at` 与回合 `time` 是记录下来的审计坐标，须等于由该律回算的边界；全段算术（首步为 will；后一 will 步 at = 前一 will 步 at + 前一 price；其间 clock 步 at 落在 (前一 will 步 at, 前一 will 步 at + 前一 price] 内非降）不符即链断。回滚的坐标边界由账目裁定：已入账的刻不可回滚，未入账的刻必须一并回滚。
+**内容与坐标**　`E, Rel` 是内容，门的原子域；`t` 是坐标（派生，非内容），不产 𝒞，写者唯一（落钟循环），谓词照常读钟。钟的每次写入都归因于某个 will 步的生效 price（刻账目），与该步的果无关；耦合律是 `Δ钟 = price`：`t = t₀ + Σ will 步生效 price`（clock 步 price 恒 0），泵在 `(at, at+price]` 内逐刻写钟并运行 clock 步；裁决可选携 price（覆写缺省 cost，授予与否决同轴），入账后由生效 price 承接（覆写不另存）。`step.at` 与回合 `time` 是记录下来的审计坐标，须等于由该律回算的边界；全段算术（首步为 will；后一 will 步 at = 前一 will 步 at + 前一 price；其间 clock 步 at 落在 (前一 will 步 at, 前一 will 步 at + 前一 price] 内非降）不符即链断。回滚的坐标边界由账目裁定：已入账的刻不可回滚，未入账的刻必须一并回滚。
 
 **刻账目闭合**　授予区间的每刻或言或默：`言@at` ＝ 通过变更行判据的变更行、答复、陈述、拒绝之并；`言@at = ∅` 即默。言默是记录的函数（由重建边界重算恒同）；投影只可省略行文，不可重划言默——静默聚合 `timePassed ×n` 计 `|{at : 言@at = ∅}|`。
 
