@@ -166,7 +166,7 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 裁决结果；price 覆写缺省 cost（授予与否决同轴）；授予的可选 law 缺省即守卫 id，只被呈现与探针消费。 */
+/** 裁决结果；price 覆写缺省 cost（授予与否决同轴）；reply 只属 act（clock 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被呈现与探针消费。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; law?: Text; reply?: Text; statements?: Text[]; price?: number }
 	| { ok: false; denial: RuleDenial; price?: number };
@@ -313,7 +313,7 @@ export interface VerbDef extends RuleDecl {
 	invisible?: string;
 }
 
-/** 常驻规则：唯一调用通道是 clock（泵每刻一次，空参）。不进动词面、无参数、无价、无呈现名；id 只进账本与骰子地址。 */
+/** 常驻规则：唯一调用通道是 clock（泵每刻一次，空参）。不进动词面、无参数、无价、无答复、无呈现名；id 只进账本与骰子地址。 */
 export interface TickDef extends RuleDecl {
 	id: string;
 }
@@ -416,6 +416,7 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
 		if (!Array.isArray(v.deltas)) out.push("deltas 须为序列");
 		if (v.reply !== undefined && (typeof v.reply !== "string" || v.reply === "")) out.push("reply 须为非空字符串");
+		if (clock && v.reply !== undefined) out.push("常驻规则不得答复");
 		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string" && s !== ""))) out.push("statements 须为非空字符串序列");
 		return out;
 	}
@@ -1003,14 +1004,13 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	};
 	const msgs = sim.def.messages;
 	const lines: string[] = [];
-	const said = new Map<number, { changes: string[]; reply: Text[]; statements: Text[]; denials: string[] }>();
+	const said = new Map<number, { changes: string[]; statements: Text[]; denials: string[] }>();
 	let granted = 0;
 	const flush = (): void => {
-		for (const { changes, reply, statements, denials } of said.values()) {
-			const spoken = [...reply, ...statements];
-			if (changes.length || spoken.length) lines.push(`⏱ ${[
+		for (const { changes, statements, denials } of said.values()) {
+			if (changes.length || statements.length) lines.push(`⏱ ${[
 				changes.length ? `(${changes.join("; ")})` : "",
-				spoken.length ? `[${spoken.join("; ")}]` : "",
+				statements.length ? `[${statements.join("; ")}]` : "",
 			].join("")}`);
 			for (const d of denials) lines.push(`⏱ ✗ ${d}`);
 		}
@@ -1033,15 +1033,14 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 			].join("");
 			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, face)}${reply !== undefined ? `：${reply}` : ""}${tail}`);
 		} else {
-			const held = said.get(s.at) ?? { changes: [], reply: [], statements: [], denials: [] };
+			const held = said.get(s.at) ?? { changes: [], statements: [], denials: [] };
 			if (s.ok) {
 				held.changes.push(...changes);
-				if (s.reply !== undefined) held.reply.push(s.reply);
 				if (s.statements?.length) held.statements.push(...s.statements);
 			} else {
 				held.denials.push(renderDenial(sim.def, s.denial, s.action.verb));
 			}
-			if (held.changes.length || held.reply.length || held.statements.length || held.denials.length) said.set(s.at, held);
+			if (held.changes.length || held.statements.length || held.denials.length) said.set(s.at, held);
 		}
 	}
 	flush();
@@ -1321,10 +1320,7 @@ export class Simulation {
 			if (!cc.ok) {
 				step = { at, trigger, action, price: effective, ok: false, rule: r.rule, denial: cc.denial };
 			} else {
-				// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
-				const reply = clock ? undefined : r.reply;
-				const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-				step = { at, trigger, action, price: effective, ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+				step = { at, trigger, action, price: effective, ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(r.reply !== undefined && { reply: r.reply }), ...(r.statements !== undefined && { statements: r.statements }) };
 			}
 		} else {
 			step = { at, trigger, action, price: effective, ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
@@ -1360,7 +1356,7 @@ export class Simulation {
 			this.world.time += 1;
 			for (const id of this.chains.clock.keys()) {
 				const c = this.attempt(this.readState(), { verb: id, params: {} }, "clock");
-				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || c.reply !== undefined || !!c.statements?.length) out.push(c);
+				if (!c.ok ? c.denial.point.kind !== "closure" : c.changes.length > 0 || !!c.statements?.length) out.push(c);
 			}
 		}
 		return out;

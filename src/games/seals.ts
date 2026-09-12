@@ -311,7 +311,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (!delivered) return null;
 					return grant(
 						[D.spawn({ id: "letter_night", props: { name: "夜笺", kind: "letter", in: "desk", seal: true, sender: "guest", recipient: "steward", content: "老渠道走水，下月起改陆。引子照旧，勿复书。" } })],
-						{ reply: "又有一封夜笺送到，搁在书案上。" },
+						{ statements: ["又有一封夜笺送到，搁在书案上。"] },
 					);
 				},
 			}],
@@ -329,7 +329,7 @@ const base: Omit<GameDef, "prompt"> = {
 						if (!best || v > best.v) best = { from: r.from, to: r.to, v };
 					}
 					if (!best || best.v < 2) return null;
-					return grant([], { reply: `你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。` });
+					return grant([], { statements: [`你瞥见${nameOf(q.world, best.from)}与${nameOf(q.world, best.to)}在廊下低语，谈了许久。`] });
 				},
 			}],
 		},
@@ -343,11 +343,11 @@ const base: Omit<GameDef, "prompt"> = {
 					if (q.world.time % 8 === 6 && g.props.in === "study") {
 						return grant(
 							[D.set("guest", "in", "parlor"), D.relSet("guest", "steward", "信任", Number(relVal(q.world, "guest", "steward", "信任") ?? 0) + 1)],
-							{ reply: "灰衣人踱进了正厅，与管家寒暄。" },
+							{ statements: ["灰衣人踱进了正厅，与管家寒暄。"] },
 						);
 					}
 					if (q.world.time % 8 === 2 && g.props.in === "parlor") {
-						return grant([D.set("guest", "in", "study")], { reply: `${nameOf(q.world, "guest")}携着酒盏，踱回了书房。` });
+						return grant([D.set("guest", "in", "study")], { statements: [`${nameOf(q.world, "guest")}携着酒盏，踱回了书房。`] });
 					}
 					return null;
 				},
