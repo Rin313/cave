@@ -100,7 +100,7 @@ interface ValueDecl {
 
 /** 注册槽：值声明 + 呈现名；ref 另携生命周期。 */
 interface SlotCommon extends ValueDecl {
-	/** 呈现名；缺席或 null 即该表缺省（属性无名、边 τ），非空串即该名。 */
+	/** 呈现名；非空串即该名，null 即无名，缺席即该格类缺省（属性无名、边 τ）。 */
 	label?: string | null;
 }
 
@@ -508,7 +508,7 @@ export interface GameDef {
 	relTypes?: Record<string, SlotDef>;
 	/** 常驻规则表：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
-	/** 格命名：非空 token 即有名，null/空串即无名；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
+	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, player: string, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
 	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回要注入 AI 的记录子序列（须严格递增 seq 且取自传入记录）。此钩子只做选择，投影与言默判据归引擎。 */
 	recent?: (records: readonly ChronicleEntry[], base: readonly ChronicleEntry[]) => readonly ChronicleEntry[];
@@ -1143,7 +1143,7 @@ export class Simulation {
 		return { within, visible, referable, known: new Set([...visible, ...referable]) };
 	}
 
-	/** 注册表缺省命名：顶点 id、属性 label、边 label（缺席即 τ）；作为 base 交给作者钩子。 */
+	/** 注册表缺省命名：顶点 id；属性 label（缺席/null 即无名）；边 label（缺席即 τ、null 即无名）。作为 base 交给作者钩子。 */
 	private defaultNaming(): (cell: Addr) => string | null {
 		return (cell) => {
 			switch (cell.cell) {
