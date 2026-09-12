@@ -158,10 +158,9 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状。判定输入不含 origin。 */
+/** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状。判定输入只含内容、参数与骰子。 */
 export interface Q<P = Record<string, Value>> {
 	readonly world: World;
-	readonly player: string;
 	readonly params: P;
 	/** 确定性骰子；key 以出处路径限定，不同出处的同名 key 不共享结果。 */
 	roll(key: string, sides: number): number;
@@ -296,7 +295,7 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	};
 }
 
-/** 规则链：动词与常驻规则同构的规则序列；两者身份都是 (origin, id)，链内 id 唯一，校验共用。 */
+/** 规则链：动词与常驻规则同构的规则序列；两者身份都是 (trigger, id)，链内 id 唯一，校验共用。 */
 export type RuleChain = Rule[];
 
 /** 规则链注册项的共同面：动词与常驻规则同制。 */
@@ -304,7 +303,7 @@ interface RuleDecl {
 	rules: RuleChain;
 }
 
-/** 意志动词：唯一调用点是 will（玩家经动词面）。 */
+/** 外部动词：唯一调用通道是 act（AI 经动词面）。 */
 export interface VerbDef extends RuleDecl {
 	label: string;
 	description: string;
@@ -314,7 +313,7 @@ export interface VerbDef extends RuleDecl {
 	invisible?: string;
 }
 
-/** 常驻规则：唯一调用点是泵（每刻一次，空参）。不进动词面、无参数、无价、无呈现名；id 只进账本与骰子地址。 */
+/** 常驻规则：唯一调用通道是 clock（泵每刻一次，空参）。不进动词面、无参数、无价、无呈现名；id 只进账本与骰子地址。 */
 export interface TickDef extends RuleDecl {
 	id: string;
 }
@@ -449,7 +448,7 @@ export interface ViewKit {
 	digest: string;
 }
 
-/** 意志回合提示数据：状态视图 + 话语 + 近况。 */
+/** act 回合提示数据：状态视图 + 话语 + 近况。 */
 export interface TurnKit extends PromptKit, ViewKit {
 	/** 玩家话语（verbatim） */
 	utterance: string;
@@ -497,8 +496,6 @@ export function defaultNarratePrompt(kit: NarrateKit): string {
 }
 
 export interface GameDef {
-	/** 指向普通实体的锚引用 */
-	playerId: string;
 	verbs: Record<string, VerbDef>;
 	world: World;
 	/** 属性注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册键即字面（无契约、无缺省名），词法纪律归作者。 */
@@ -507,18 +504,16 @@ export interface GameDef {
 	relTypes?: Record<string, SlotDef>;
 	/** 常驻规则表：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
-	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第三参数传入；声明即接管，可委托 base。 */
-	name?: (world: World, player: string, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
+	/** 视角：访问结构（格级披露 × 实体级可指称）；缺省全见、可指称即顶点披露。 */
+	perspective?: (world: World) => Partial<Access>;
+	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第二参数传入；声明即接管，可委托 base。 */
+	name?: (world: World, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
 	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回要注入 AI 的记录子序列（须严格递增 seq 且取自传入记录）。此钩子只做选择，投影与言默判据归引擎。 */
 	recent?: (records: readonly ChronicleEntry[], base: readonly ChronicleEntry[]) => readonly ChronicleEntry[];
 	/** 缺省近况选择的窗口大小（回合记录数）；recent 缺席时必填，recent 在时作为 base 的参数（缺省即 base = 全量记录）。 */
 	recentWindow?: number;
-	/** 披露谓词：顶点格成员即可见；属性/边格谓词即变更行该侧判据。缺省常真，声明即整体替换。 */
-	perceives?: (world: World, player: string) => (cell: Addr) => boolean;
-	/** 可指称谓词：指称门的域。披露缺省（顶点格 perceives）作为第三参数传入；缺省即披露。 */
-	referable?: (world: World, player: string, base: (e: Entity) => boolean) => (e: Entity) => boolean;
 	/** 状态视图：收冻结真相、闭合基座与该边界的格视图（命名、披露谓词与可见/可指称/已知域）；返回任意 JSON，缺省即基座；增补部分在闭包之外。 */
-	view?: (world: World, player: string, base: ViewBase, field: FieldView) => ViewValue;
+	view?: (world: World, base: ViewBase, field: FieldView) => ViewValue;
 	invariants?: Invariant[];
 	/** 引擎文本解析：收场合与缺省实现 base，声明即接管总函数；返回值须为非空字符串。只被呈现消费。 */
 	say?: (speech: Speech, base: (speech: Speech) => string) => string;
@@ -527,7 +522,7 @@ export interface GameDef {
 		system: string;
 		/** act 工具描述：base = 协议约束 + 派生动词目录（catalog）；可委托或覆盖（本地化、分区、删减）。 */
 		tool?: (base: string) => string;
-		/** 意志回合提示：base = 缺省数据排版；可委托或整段覆盖。 */
+		/** act 回合提示：base = 缺省数据排版；可委托或整段覆盖。 */
 		turn?: (kit: TurnKit, base: (kit: TurnKit) => string) => string;
 		/** 渲染调用提示：base = 缺省数据排版；可委托或整段覆盖。 */
 		narrate?: (kit: NarrateKit, base: (kit: NarrateKit) => string) => string;
@@ -538,7 +533,6 @@ export interface GameDef {
 /** 检查相读态：world 是提交后读态，before 是提交前读态（回滚锚），changes 是本次提交的全部变更；proposal 携本次尝试。 */
 export interface CheckCtx {
 	def: GameDef;
-	player: string;
 	proposal: Proposal;
 	before: World;
 	changes: readonly Change[];
@@ -604,7 +598,6 @@ function integrityProblems(def: GameDef, world: World): string | null {
 	}
 	if (ids.size !== world.entities.length) return "integrity: duplicate entity ids";
 	if (!Number.isInteger(world.time) || world.time < 0) return "integrity: world.time must be a non-negative integer";
-	if (!ids.has(def.playerId)) return `integrity: playerId -> missing entity ${def.playerId}`;
 	for (const e of world.entities) {
 		if (typeof e.id !== "string" || e.id === "") return "integrity: entity id must be non-empty string";
 		for (const k of Object.keys(e)) {
@@ -655,9 +648,15 @@ export type Handle = {
 	name: string;
 };
 
+/** 视角的访问结构：格级披露（sees，缺席格同样求值）与实体级可指称（refers）；两轴独立，H = P ∪ Ref。 */
+export interface Access {
+	sees: (cell: Addr) => boolean;
+	refers: (e: Entity) => boolean;
+}
+
 /** 一个提交边界的求值：披露谓词、可显示谓词、可见/可指称/已知域与格命名。由世界即时求值，不入账；命名只被呈现消费。 */
 export interface FieldView {
-	within: (cell: Addr) => boolean;
+	sees: (cell: Addr) => boolean;
 	/** 结构化显示的唯一判据：有名 ∧ 披露；顶点名恒在，故退化为披露。 */
 	present: (cell: Addr) => boolean;
 	visible: Set<string>;
@@ -683,15 +682,15 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-/** 入账来源：will（玩家经动词面）、clock（泵逐刻）。 */
-export type Origin = "will" | "clock";
+/** 入账通道：act（外部输入经动词面）、clock（泵逐刻）。 */
+export type Trigger = "act" | "clock";
 
 /** 注册与查询的诊断名。 */
-const ORIGIN_LABEL: Record<Origin, string> = { will: "动词", clock: "常驻规则" };
+const TRIGGER_LABEL: Record<Trigger, string> = { act: "动词", clock: "常驻规则" };
 
-/** 提案者：审查上下文用；rule 携授予法则与本次尝试的 origin/action，admit 是以零变更审查整世界（装载终点）。 */
+/** 提案者：审查上下文用；rule 携授予法则与本次尝试的 trigger/action，admit 是以零变更审查整世界（装载终点）。 */
 export type Proposal =
-	| { kind: "rule"; rule: string; origin: Origin; action: Action }
+	| { kind: "rule"; rule: string; trigger: Trigger; action: Action }
 	| { kind: "admit" };
 
 function hashStr(s: string): number {
@@ -710,9 +709,9 @@ export function roll(addr: string, key: string, sides: number): number {
 	return 1 + Math.floor(h * sides);
 }
 
-/** 入账表态的机器身份：账本位置 (at, origin, id, 序位)——id 即动词或常驻规则。对入账表态单射、且由账本前缀复原：随机是账本位置的纯函数。 */
-function attemptAddr(at: number, origin: Origin, verb: string, ordinal: number): string {
-	return tupleKey(["attempt", String(at), origin, verb, String(ordinal)]);
+/** 入账表态的机器身份：账本位置 (at, trigger, id, 序位)——id 即动词或常驻规则。对入账表态单射、且由账本前缀复原：随机是账本位置的纯函数。 */
+function attemptAddr(at: number, trigger: Trigger, verb: string, ordinal: number): string {
+	return tupleKey(["attempt", String(at), trigger, verb, String(ordinal)]);
 }
 
 /** 裁决点的呈现身份（场景断言与探针用）；分类看 kind，不看字符串。 */
@@ -726,10 +725,10 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = origin=clock ? 0 : (price ?? cost)；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
+/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = trigger=clock ? 0 : (price ?? cost)；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
-	| { at: number; origin: Origin; action: Action; price: number; ok: true; rule: string; law: Text; changes: Change[]; reply?: Text; statements?: Text[] }
-	| { at: number; origin: Origin; action: Action; price: number; ok: false; rule?: string; denial: Denial };
+	| { at: number; trigger: Trigger; action: Action; price: number; ok: true; rule: string; law: Text; changes: Change[]; reply?: Text; statements?: Text[] }
+	| { at: number; trigger: Trigger; action: Action; price: number; ok: false; rule?: string; denial: Denial };
 
 export interface Resolution {
 	step: Commit;
@@ -771,21 +770,21 @@ function isChange(v: unknown): boolean {
 	}
 }
 
-/** 步形状：坐标与价是非负整数；授予行 law 必填非空；世界腔文本非空；答复只属于 will（clock 无答复、价 0、参数空）；否决的 rule 可缺（gate/closure 无守卫）。 */
+/** 步形状：坐标与价是非负整数；授予行 law 必填非空；世界腔文本非空；答复只属于 act（clock 无答复、价 0、参数空）；否决的 rule 可缺（gate/closure 无守卫）。 */
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object") return false;
-	const c = s as { at?: unknown; price?: unknown; ok?: unknown; origin?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
+	const c = s as { at?: unknown; price?: unknown; ok?: unknown; trigger?: unknown; action?: unknown; rule?: unknown; law?: unknown; changes?: unknown; reply?: unknown; statements?: unknown; denial?: unknown };
 	if (typeof c.at !== "number" || !Number.isInteger(c.at) || c.at < 0) return false;
 	if (typeof c.ok !== "boolean" || typeof c.price !== "number" || !Number.isInteger(c.price) || c.price < 0) return false;
-	if (c.origin !== "will" && c.origin !== "clock") return false;
+	if (c.trigger !== "act" && c.trigger !== "clock") return false;
 	const a = c.action as { verb?: unknown; params?: unknown } | null | undefined;
 	if (a === null || typeof a !== "object" || typeof a.verb !== "string" || a.params === null || typeof a.params !== "object") return false;
-	if (c.origin === "clock" && (c.price !== 0 || Object.keys(a.params).length > 0)) return false;
+	if (c.trigger === "clock" && (c.price !== 0 || Object.keys(a.params).length > 0)) return false;
 	if (c.ok === true) {
 		if (typeof c.rule !== "string" || c.rule === "" || !Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
 		if (typeof c.law !== "string" || c.law === "") return false;
 		if (c.reply !== undefined && (typeof c.reply !== "string" || c.reply === "")) return false;
-		if (c.origin === "clock" && c.reply !== undefined) return false;
+		if (c.trigger === "clock" && c.reply !== undefined) return false;
 		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string" && x !== ""));
 	}
 	if (c.rule !== undefined && (typeof c.rule !== "string" || c.rule === "")) return false;
@@ -1028,7 +1027,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		const s = steps[i]!;
 		const { face, renames, changeLine } = renderer(i);
 		const changes = s.ok ? [...renames, ...s.changes.map(changeLine).filter((x): x is string => x !== null)] : [];
-		if (s.origin !== "clock") {
+		if (s.trigger !== "clock") {
 			flush();
 			granted = s.price;
 			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial, s.action.verb);
@@ -1066,9 +1065,9 @@ type RawResult =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 规则链注册表：两 origin 同制，(origin, id) 是身份；clock 的插入序即刻序。 */
-	private readonly chains: Record<Origin, Map<string, readonly Rule[]>> = { will: new Map(), clock: new Map() };
-	/** 入账表态的序位来源：同 (at, origin, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位；peek 纯读，mark 只在提交点。 */
+	/** 规则链注册表：两通道同制，(trigger, id) 是身份；clock 的插入序即刻序。 */
+	private readonly chains: Record<Trigger, Map<string, readonly Rule[]>> = { act: new Map(), clock: new Map() };
+	/** 入账表态的序位来源：同 (at, trigger, verb) 的已入账表态数——账本位置的函数，默不入账也不消耗序位；peek 纯读，mark 只在提交点。 */
 	private readonly attemptSeq = new Map<number, Map<string, number>>();
 
 	constructor(def: GameDef, world?: World) {
@@ -1090,7 +1089,7 @@ export class Simulation {
 			for (const [p, s] of Object.entries(v.params)) validateDecl(`动词 ${id} 的参数「${p}」`, true, s);
 			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${id} 的 invisible 须为非空字符串`);
 			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${id} 无指称参数，invisible 文案不会被消费`);
-			this.register("will", id, v);
+			this.register("act", id, v);
 		}
 		for (const t of def.ticks ?? []) this.register("clock", t.id, t);
 		// props 与 relTypes 同制：注册即契约；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
@@ -1105,10 +1104,6 @@ export class Simulation {
 		}
 	}
 
-	get player(): string {
-		return this.def.playerId;
-	}
-
 	/** steps 之前的世界：自终态逆推变更（与投影同法）；rewind 不触钟，故钟取首步边界。步空即当前世界。 */
 	beforeWorld(steps: readonly Commit[]): World {
 		const w = this.snapshot();
@@ -1117,31 +1112,25 @@ export class Simulation {
 		return w;
 	}
 
-	/** 披露谓词：缺省全见；声明即接管全部格，返回域外即缺陷。 */
-	private perceives(world: World): (cell: Addr) => boolean {
-		if (this.def.perceives === undefined) return () => true;
-		const within = this.def.perceives(world, this.player);
-		if (typeof within !== "function") throw new Error("GameDef.perceives 须返回谓词函数");
-		return within;
-	}
-
-	/** 三个域的求值：不触命名，门与投影分路。可指称缺省即顶点格披露；声明即接管，返回域外即缺陷。 */
-	private boundary(world: World): { within: (cell: Addr) => boolean; visible: Set<string>; referable: Set<string>; known: Set<string> } {
-		const within = this.perceives(world);
-		const disclosed = (e: Entity): boolean => within({ cell: "vertex", id: e.id });
-		let refers = disclosed;
-		if (this.def.referable !== undefined) {
-			const hook = this.def.referable(world, this.player, disclosed);
-			if (typeof hook !== "function") throw new Error("GameDef.referable 须返回谓词函数");
-			refers = hook;
+	/** 视角求值：作者钩子给访问结构，缺省全见、可指称即顶点披露；三域由此派生，门与投影分路。 */
+	private boundary(world: World): { sees: (cell: Addr) => boolean; visible: Set<string>; referable: Set<string>; known: Set<string> } {
+		const raw: unknown = this.def.perspective === undefined ? {} : this.def.perspective(world);
+		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("GameDef.perspective 须返回访问结构 { sees?, refers? }");
+		const spec = raw as Partial<Access>;
+		for (const k of Object.keys(spec)) {
+			if (k !== "sees" && k !== "refers") throw new Error(`GameDef.perspective 不接受字段「${k}」（访问结构：sees/refers）`);
 		}
+		const sees = spec.sees ?? (() => true);
+		if (typeof sees !== "function") throw new Error("GameDef.perspective.sees 须为格谓词");
+		const refers = spec.refers ?? ((e: Entity): boolean => sees({ cell: "vertex", id: e.id }));
+		if (typeof refers !== "function") throw new Error("GameDef.perspective.refers 须为实体谓词");
 		const visible = new Set<string>();
-		const referable = new Set<string>();
+		const refs = new Set<string>();
 		for (const e of world.entities) {
-			if (within({ cell: "vertex", id: e.id })) visible.add(e.id);
-			if (refers(e)) referable.add(e.id);
+			if (sees({ cell: "vertex", id: e.id })) visible.add(e.id);
+			if (refers(e)) refs.add(e.id);
 		}
-		return { within, visible, referable, known: new Set([...visible, ...referable]) };
+		return { sees, visible, referable: refs, known: new Set([...visible, ...refs]) };
 	}
 
 	/** 注册表缺省命名：顶点 id；属性 label（缺席/null 即无名）；边 label（缺席即 τ、null 即无名）。作为 base 交给作者钩子。 */
@@ -1161,7 +1150,7 @@ export class Simulation {
 	/** 格命名：作者钩子收缺省实现，可委托或接管；顶点无名回落 id，属性/边无名即 null；声明即全函数，返回域外即缺陷。 */
 	private naming(world: World): FieldView["name"] {
 		const base = this.defaultNaming();
-		const hook = this.def.name === undefined ? base : this.def.name(world, this.player, base);
+		const hook = this.def.name === undefined ? base : this.def.name(world, base);
 		if (typeof hook !== "function") throw new Error("GameDef.name 须返回命名函数");
 		function lookup(cell: VertexAddr): string;
 		function lookup(cell: Addr): string | null;
@@ -1178,7 +1167,7 @@ export class Simulation {
 	fieldView(world: World = this.readState()): FieldView {
 		const field = this.boundary(world);
 		const name = this.naming(world);
-		return { ...field, name, present: (cell) => name(cell) !== null && field.within(cell) };
+		return { ...field, name, present: (cell) => name(cell) !== null && field.sees(cell) };
 	}
 
 	/** 一切 def 侧钩子与提交回滚共用的冻结读态。 */
@@ -1194,19 +1183,19 @@ export class Simulation {
 		return verb;
 	}
 
-	/** 注册共同契约：id 非空、表内唯一、链内 id 唯一；两 origin 同制。 */
-	private register(origin: Origin, id: string, decl: RuleDecl): void {
-		if (typeof id !== "string" || id === "") throw new Error(`${ORIGIN_LABEL[origin]} id 须为非空字符串`);
-		const table = this.chains[origin];
-		if (table.has(id)) throw new Error(`${ORIGIN_LABEL[origin]} id 重复：${id}`);
-		assertRules(`${ORIGIN_LABEL[origin]} ${id}`, decl.rules);
+	/** 注册共同契约：id 非空、表内唯一、链内 id 唯一；两通道同制。 */
+	private register(trigger: Trigger, id: string, decl: RuleDecl): void {
+		if (typeof id !== "string" || id === "") throw new Error(`${TRIGGER_LABEL[trigger]} id 须为非空字符串`);
+		const table = this.chains[trigger];
+		if (table.has(id)) throw new Error(`${TRIGGER_LABEL[trigger]} id 重复：${id}`);
+		assertRules(`${TRIGGER_LABEL[trigger]} ${id}`, decl.rules);
 		table.set(id, decl.rules);
 	}
 
-	/** 规则链查询：身份 (origin, id)；未注册即内核缺陷（will 的形态校验另在 staticForm）。 */
-	private chainOf(origin: Origin, id: string): readonly Rule[] {
-		const rules = this.chains[origin].get(id);
-		if (rules === undefined) throw new Error(`${ORIGIN_LABEL[origin]} ${id} 未注册`);
+	/** 规则链查询：身份 (trigger, id)；未注册即内核缺陷（act 的形态校验另在 staticForm）。 */
+	private chainOf(trigger: Trigger, id: string): readonly Rule[] {
+		const rules = this.chains[trigger].get(id);
+		if (rules === undefined) throw new Error(`${TRIGGER_LABEL[trigger]} ${id} 未注册`);
 		return rules;
 	}
 
@@ -1240,7 +1229,6 @@ export class Simulation {
 	private query(world: World, params: Record<string, Value>, addr: string): Q {
 		return {
 			world,
-			player: this.player,
 			params,
 			roll: (key, sides) => roll(addr, key, sides),
 		};
@@ -1252,14 +1240,14 @@ export class Simulation {
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
-	private commitChecked(s0: World, deltas: Delta[], rule: string, origin: Origin, action: Action): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
+	private commitChecked(s0: World, deltas: Delta[], rule: string, trigger: Trigger, action: Action): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
 				return { ok: false, denial: { point: { kind: "engine" }, text: out.refusal } };
 			}
-			const inv = this.checkInvariants({ kind: "rule", rule, origin, action }, s0, out.changes);
+			const inv = this.checkInvariants({ kind: "rule", rule, trigger, action }, s0, out.changes);
 			if (inv) {
 				this.restore(s0);
 				return { ok: false, denial: inv };
@@ -1280,7 +1268,7 @@ export class Simulation {
 	/** 审查：先 integrity 后游戏不变式；world 是提交后读态，before 是提交前读态（回滚锚），changes 是本次提交的全部变更。 */
 	private checkInvariants(proposal: Proposal, before: World, changes: Change[]): Denial | null {
 		const world = this.readState();
-		const ctx: CheckCtx = { def: this.def, player: this.player, proposal, before, changes: deepFreeze(changes) };
+		const ctx: CheckCtx = { def: this.def, proposal, before, changes: deepFreeze(changes) };
 		const broken = integrityProblems(this.def, world);
 		if (broken) return { point: { kind: "engine" }, text: broken };
 		for (const inv of this.def.invariants ?? []) {
@@ -1304,8 +1292,8 @@ export class Simulation {
 		try {
 			const res = this.applyInner(action, s0);
 			// 序位随账目一同提交：apply 失败（钩子/投影崩溃）时世界回滚，未入账的尝试不得移动地址
-			this.markAttempt(res.step.at, res.step.origin, res.step.action.verb);
-			for (const c of res.elapsed) this.markAttempt(c.at, c.origin, c.action.verb);
+			this.markAttempt(res.step.at, res.step.trigger, res.step.action.verb);
+			for (const c of res.elapsed) this.markAttempt(c.at, c.trigger, c.action.verb);
 			this.pruneAttempts();
 			return deepFreeze(res);
 		} catch (e) {
@@ -1315,36 +1303,36 @@ export class Simulation {
 	}
 
 	private applyInner(action: Action, s0: World): Resolution {
-		const step = this.attempt(s0, action, "will");
+		const step = this.attempt(s0, action, "act");
 		return { step, elapsed: this.pump(step.price) };
 	}
 
-	private attempt(s0: World, action: Action, origin: Origin): Commit {
+	private attempt(s0: World, action: Action, trigger: Trigger): Commit {
 		deepFreeze(action);
 		const at = s0.time;
-		const clock = origin === "clock";
+		const clock = trigger === "clock";
 		const verb = clock ? undefined : this.staticForm(action);
-		const rules = this.chainOf(origin, action.verb);
+		const rules = this.chainOf(trigger, action.verb);
 		const refParams = verb === undefined ? [] : refParamsOf(verb);
 		const price = verb === undefined ? 0 : verb.cost;
-		const addr = attemptAddr(at, origin, action.verb, this.peekAttempt(at, origin, action.verb));
+		const addr = attemptAddr(at, trigger, action.verb, this.peekAttempt(at, trigger, action.verb));
 		const gate = this.boundary(s0).referable;
 		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, clock);
 		// 价随表态定死（裁决价覆写 ?? 动词 cost）；授予被审查拒绝时价与守卫一并保留，不退回缺省
 		const effective = clock ? 0 : (r.price ?? price);
 		let step: Commit;
 		if (r.ok) {
-			const cc = this.commitChecked(s0, r.deltas, r.rule, origin, action);
+			const cc = this.commitChecked(s0, r.deltas, r.rule, trigger, action);
 			if (!cc.ok) {
-				step = { at, origin, action, price: effective, ok: false, rule: r.rule, denial: cc.denial };
+				step = { at, trigger, action, price: effective, ok: false, rule: r.rule, denial: cc.denial };
 			} else {
 				// 答复只属于有提案者的步：clock 授予的 reply 入账前插进 statements，记录层不出现无提案者的答复
 				const reply = clock ? undefined : r.reply;
 				const statements = clock && r.reply !== undefined ? [r.reply, ...(r.statements ?? [])] : r.statements;
-				step = { at, origin, action, price: effective, ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
+				step = { at, trigger, action, price: effective, ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(reply !== undefined && { reply }), ...(statements !== undefined && { statements }) };
 			}
 		} else {
-			step = { at, origin, action, price: effective, ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
+			step = { at, trigger, action, price: effective, ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 		}
 		// 绊线：提交产出必落在装载域内（与装载路径同一判据）
 		if (!isCommit(step)) throw new Error(`内核缺陷：提交产出的记录被装载判据拒绝 ${JSON.stringify(step)}`);
@@ -1352,17 +1340,17 @@ export class Simulation {
 	}
 
 	/** 取序位是纯读，不移动任何状态；仅当步确定入账才 markAttempt——默与崩溃不消耗序位。 */
-	private peekAttempt(at: number, origin: Origin, verb: string): number {
-		return this.attemptSeq.get(at)?.get(`${origin}\u0000${verb}`) ?? 0;
+	private peekAttempt(at: number, trigger: Trigger, verb: string): number {
+		return this.attemptSeq.get(at)?.get(`${trigger}\u0000${verb}`) ?? 0;
 	}
 
-	private markAttempt(at: number, origin: Origin, verb: string): void {
+	private markAttempt(at: number, trigger: Trigger, verb: string): void {
 		let seq = this.attemptSeq.get(at);
 		if (seq === undefined) {
 			seq = new Map();
 			this.attemptSeq.set(at, seq);
 		}
-		const key = `${origin}\u0000${verb}`;
+		const key = `${trigger}\u0000${verb}`;
 		seq.set(key, (seq.get(key) ?? 0) + 1);
 	}
 
@@ -1421,7 +1409,7 @@ export class Simulation {
 			const broken = integrityProblems(this.def, this.readState());
 			if (broken) return fail(broken);
 			// 序位只在整条记录通过后推进：失败路径没有非世界状态需要回滚
-			for (const step of record.steps) this.markAttempt(step.at, step.origin, step.action.verb);
+			for (const step of record.steps) this.markAttempt(step.at, step.trigger, step.action.verb);
 			this.pruneAttempts();
 			return null;
 		} catch (e) {
@@ -1481,7 +1469,7 @@ export class Simulation {
 		const field = this.fieldView(w);
 		const base = this.viewBase(w, field);
 		if (this.def.view === undefined) return base;
-		const out = this.def.view(w, this.player, base, field);
+		const out = this.def.view(w, base, field);
 		if (out === undefined) throw new Error("GameDef.view 须返回 JSON 值（undefined 是缺陷）");
 		return out;
 	}

@@ -10,7 +10,7 @@ export function withDevWait(def: GameDef): GameDef {
 			...def.verbs,
 			[DEV_WAIT]: defineVerb({
 				label: "流逝",
-				description: "测试摇钟：推进 n 刻（工具层合成；仅用于测试 def，以普通 will 动作消费）。",
+				description: "测试摇钟：推进 n 刻（工具层合成；仅用于测试 def，以普通 act 动作消费）。",
 				params: { n: param("number", { optional: true, description: "刻数，缺省 1" }) },
 				cost: 0,
 				rules: [{

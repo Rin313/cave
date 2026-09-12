@@ -2,6 +2,9 @@ import type { Addr, Delta, Entity, FieldView, GameDef, NarrateKit, PromptKit, Q,
 import { D, defineVerb, deny, entity, grant, param, relVal } from "../core/sim.ts";
 import { enclosingSpace, hostOf, inTreeVisible } from "./space.ts";
 
+/** 自身实体是游戏的内容约定；视角由此派生，内核不持身份。 */
+const ANCHOR = "player";
+
 const SEALS_PROPS: Record<string, SlotDef> = {
 	name: { type: "string" },
 	kind: { type: "string", label: "类别" },
@@ -34,7 +37,7 @@ const isLetter = (q: Q, id: string) => {
 };
 
 /** 无主语动词的缺省主语：居所链最近宿主。 */
-const host = (q: Q): string => hostOf(q.world, q.player);
+const host = (q: Q): string => hostOf(q.world, ANCHOR);
 
 /** 强引用关系由属性注册表声明派生（指称模式含数组值）；边是弱引用，随实体删除。 */
 const referenced = (q: Q, id: string): string | null => {
@@ -48,7 +51,7 @@ const referenced = (q: Q, id: string): string | null => {
 	return null;
 };
 
-function extraOf(world: World, player: string, field: FieldView): Record<string, ViewValue> {
+function extraOf(world: World, field: FieldView): Record<string, ViewValue> {
 	const name = (id: string): string => field.name({ cell: "vertex", id });
 	const affinity: string[] = [];
 	const seen = new Set<string>();
@@ -60,7 +63,7 @@ function extraOf(world: World, player: string, field: FieldView): Record<string,
 		affinity.push(`${name(r.from)}与${name(r.to)}过从甚密`);
 	}
 	const suspicion = world.relations
-		.filter((r) => r.type === "猜疑" && r.to === hostOf(world, player) && Number(r.value ?? 0) >= 1)
+		.filter((r) => r.type === "猜疑" && r.to === hostOf(world, ANCHOR) && Number(r.value ?? 0) >= 1)
 		.map((r) => name(r.from));
 	const out: Record<string, ViewValue> = {};
 	if (affinity.length) out["交际"] = affinity;
@@ -68,15 +71,14 @@ function extraOf(world: World, player: string, field: FieldView): Record<string,
 	return out;
 }
 
-/** 可见域：视角锚 = hostOf；魂不可自见。 */
-const sealsVisible = (world: World, player: string): Set<string> => {
-	const vis = inTreeVisible(world, hostOf(world, player), des);
-	vis.delete(player);
+/** 可见域：自身宿主的居所链；魂不可自见。 */
+const sealsVisible = (world: World): Set<string> => {
+	const vis = inTreeVisible(world, hostOf(world, ANCHOR), des);
+	vis.delete(ANCHOR);
 	return vis;
 };
 
 const base: Omit<GameDef, "prompt"> = {
-	playerId: "player",
 	recentWindow: 6,
 	messages: {
 		noResponse: "无人应答。",
@@ -112,7 +114,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (t.props.in !== host(q)) return deny("read.notheld", "你得先把信拿到手里。");
 					const deltas: Delta[] = [];
 					if (t.props.seal === true) deltas.push(D.set(q.params.entity, "seal", false));
-					if (relVal(q.world, q.player, q.params.entity, "知晓") === null) deltas.push(D.relSet(q.player, q.params.entity, "知晓", true));
+					if (relVal(q.world, ANCHOR, q.params.entity, "知晓") === null) deltas.push(D.relSet(ANCHOR, q.params.entity, "知晓", true));
 					if (!deltas.length) return grant([], { reply: `你把${nameOf(q.world, q.params.entity)}又读了一遍，字句没有变。` });
 					return grant(deltas, { reply: `你展信细读：${String(t.props.content ?? "")}` });
 				},
@@ -132,7 +134,7 @@ const base: Omit<GameDef, "prompt"> = {
 					const text = q.params.text.trim();
 					if (!text) return deny("forge.blank", "信文不能是空的。");
 					return grant(
-						[D.set(q.params.entity, "seal", false), D.set(q.params.entity, "content", text), D.relSet(q.player, q.params.entity, "知晓", true)],
+						[D.set(q.params.entity, "seal", false), D.set(q.params.entity, "content", text), D.relSet(ANCHOR, q.params.entity, "知晓", true)],
 						{ reply: "你借着拆封的工夫，重新誊写了信文。" },
 					);
 				},
@@ -221,7 +223,7 @@ const base: Omit<GameDef, "prompt"> = {
 					const t = entity(q.world, q.params.entity);
 					if (!t || t.props.vessel !== true) return deny("channel.notvessel", "那不是能容魂的东西。");
 					if (q.params.entity === host(q)) return deny("channel.self", "你已经居于其中。");
-					return grant([D.set(q.player, "in", q.params.entity)], { reply: `你的神魂没入${nameOf(q.world, q.params.entity)}。` });
+					return grant([D.set(ANCHOR, "in", q.params.entity)], { reply: `你的神魂没入${nameOf(q.world, q.params.entity)}。` });
 				},
 			}],
 		}),
@@ -322,7 +324,7 @@ const base: Omit<GameDef, "prompt"> = {
 					if (q.world.time % 4 !== 2) return null;
 					let best: { from: string; to: string; v: number } | null = null;
 					for (const r of q.world.relations) {
-						if (r.type !== "信任" || r.from === q.player || r.to === q.player) continue;
+						if (r.type !== "信任" || r.from === ANCHOR || r.to === ANCHOR) continue;
 						const v = Number(r.value ?? 0);
 						if (!best || v > best.v) best = { from: r.from, to: r.to, v };
 					}
@@ -384,25 +386,27 @@ const base: Omit<GameDef, "prompt"> = {
 		"猜疑": { type: "number", label: null },
 		"知晓": { type: "boolean", label: null },
 	},
-	// 卡随可见域（顶点格）：居所链；信文只对知晓者可感（判据 = 知晓边）；隐藏边由名字缺省遮蔽
-	perceives: (world, player) => {
-		const vis = sealsVisible(world, player);
-		return (cell: Addr): boolean => {
-			if (cell.cell === "vertex") return vis.has(cell.id);
-			if (cell.cell === "edge") return true;
-			return cell.prop !== "content" || relVal(world, player, cell.entity, "知晓") !== null;
+	// 视角：卡随可见域（顶点格）：居所链；信文只对知晓者可感（判据 = 知晓边）；隐藏边由名字缺省遮蔽。
+	// 可指称域在披露之上并上已引见者——离屏仍可指名（出句柄目录，不出卡）。
+	perspective: (world) => {
+		const vis = sealsVisible(world);
+		return {
+			sees: (cell: Addr): boolean => {
+				if (cell.cell === "vertex") return vis.has(cell.id);
+				if (cell.cell === "edge") return true;
+				return cell.prop !== "content" || relVal(world, ANCHOR, cell.entity, "知晓") !== null;
+			},
+			refers: (e: Entity): boolean => vis.has(e.id) || e.props.introduced === true,
 		};
 	},
 	// 格命名：顶点取 name 属性（缺省 id）；属性/边沿用注册表缺省
-	name: (world, _player, base) => (cell) => {
+	name: (world, base) => (cell) => {
 		if (cell.cell !== "vertex") return base(cell);
 		const e = entity(world, cell.id);
 		return e ? des(e) : base(cell);
 	},
-	// 指称门随可指称域：披露缺省（顶点格）并上已引见者——离屏仍可指名（出句柄目录，不出卡）
-	referable: (_world, _player, base) => (e) => base(e) || e.props.introduced === true,
-	view: (world, player, base, field) => {
-		const extra = extraOf(world, player, field);
+	view: (world, base, field) => {
+		const extra = extraOf(world, field);
 		return Object.keys(extra).length ? { ...base, extra } : base;
 	},
 };

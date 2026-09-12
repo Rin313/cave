@@ -44,14 +44,14 @@ function chainTop(
 }
 
 /** 两链同为 null（未安置）视为同处：持握于未安置锚点的目标可达。 */
-export function inTreeReach(world: World, player: string, id: string, des: (e: Entity) => string, opts: SpaceOpts = {}): { ok: boolean; reason: string } {
+export function inTreeReach(world: World, anchor: string, id: string, des: (e: Entity) => string, opts: SpaceOpts = {}): { ok: boolean; reason: string } {
 	const msgs = { ...REACH_MSGS, ...opts.msgs };
 	if (!entity(world, id)) return { ok: false, reason: msgs.reachMissing };
-	const target = chainTop(world, id, player, msgs, des);
+	const target = chainTop(world, id, anchor, msgs, des);
 	if (!target.ok) return { ok: false, reason: target.reason };
 	// 贴身必达：目标在锚点子树内（被持握/居于其中），锚点自身链的围合无关紧要
-	if (target.top === player) return { ok: true, reason: "" };
-	const home = chainTop(world, player, player, msgs, des);
+	if (target.top === anchor) return { ok: true, reason: "" };
+	const home = chainTop(world, anchor, anchor, msgs, des);
 	if (!home.ok) return { ok: false, reason: home.reason };
 	return home.top === target.top ? { ok: true, reason: "" } : { ok: false, reason: msgs.reachNotHere };
 }
@@ -72,7 +72,7 @@ export function enclosingSpace(world: World, id: string): string | null {
 	return null;
 }
 
-/** 附身 = 对锚 in 的迁移；宿主 despawn 前须先迁出（id 引用契约强制）。 */
+/** 附身 = 对自身 in 的迁移；宿主 despawn 前须先迁出（id 引用契约强制）。 */
 export function hostOf(world: World, anchor: string, opts: SpaceOpts = {}): string {
 	const key = opts.vesselProp ?? "vessel";
 	let cur: string | null = anchor;
@@ -87,11 +87,11 @@ export function hostOf(world: World, anchor: string, opts: SpaceOpts = {}): stri
 	return anchor;
 }
 
-export function inTreeVisible(world: World, player: string, des: (e: Entity) => string, opts: SpaceOpts = {}): Set<string> {
-	const vis = new Set<string>([player]);
+export function inTreeVisible(world: World, anchor: string, des: (e: Entity) => string, opts: SpaceOpts = {}): Set<string> {
+	const vis = new Set<string>([anchor]);
 	for (const e of world.entities) {
 		if (e.props.space === true) vis.add(e.id);
-		if (inTreeReach(world, player, e.id, des, opts).ok) vis.add(e.id);
+		if (inTreeReach(world, anchor, e.id, des, opts).ok) vis.add(e.id);
 	}
 	return vis;
 }

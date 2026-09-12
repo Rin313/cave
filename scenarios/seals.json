@@ -50,7 +50,7 @@
 				{ "name": "掷火被附身的宿主：锚引用挡 despawn——迁移必先入账", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "心神还系着信使", "lines": ["✗ 掷火(信使)：心神还系着信使，解开了才烧得掉。"], "state": { "courier.vessel": true } } },
 				{ "name": "附身：迁移过门；魂不可自见——主语出域，迁移行静默，由法则理由第一人称承载", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": true, "lines": ["✓ 附身(白瓷面具)：你的神魂没入白瓷面具。"], "state": { "player.in": "mask" } } },
 				{ "name": "掷火空出的器皿：器皿可生灭", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": true, "lines": ["✓ 掷火(信使)：你把信使掷进了火盆。(- 信使)"], "viewExcludes": ["信使"] } },
-				{ "name": "掷火魂自身：意志能点名的域里没有意志自身（门答）", "action": { "verb": "burn", "params": { "entity": "player" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 掷火(player)：眼前没有那样的东西。"] } },
+				{ "name": "掷火魂自身：可指称域里没有魂自身（门答）", "action": { "verb": "burn", "params": { "entity": "player" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 掷火(player)：眼前没有那样的东西。"] } },
 				{ "name": "面具持信：无主语动词的缺省主语＝居所链最近器皿", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。(火漆信·粮价.持者: 书案 → 白瓷面具)"], "state": { "letter_grain.in": "mask" } } }
 			]
 		},
@@ -76,11 +76,12 @@
 		{
 			"name": "占问：随机是账本位置的纯函数——同刻各次尝试地址不同（序位入地址），不再共享命运",
 			"steps": [
-				{ "name": "零刻动词不推钟：序位 0", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"], "state": { "$world.time": 0 } } },
+				{ "name": "零刻动词不推钟：序位 0", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"], "state": { "$world.time": 0 } } },
 				{ "name": "第二次：序位 1（同刻不同尝试各别入账）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第三次：序位 2——签变，同刻不再恒同签", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } },
+				{ "name": "第三次：序位 2", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
 				{ "name": "第四次：序位 3", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第五次：序位 4（address 含来源，故重放可复原）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } }
+				{ "name": "第五次：序位 4", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
+				{ "name": "第六次：序位 5——签变，同刻不再恒同签（address 含通道与序位）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } }
 			]
 		},
 		{
@@ -101,7 +102,7 @@
 			"name": "常驻规则不是动词：泵的 id 不进动词面，裸提案即协议违约",
 			"steps": [
 				{ "name": "以常驻规则 id 提案：未知动词，且世界零扰动", "action": { "verb": "post.deliver", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "letter_salt.in": "desk" } } },
-				{ "name": "意志动词照常：上一违约不留痕", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "state": { "$world.time": 0, "letter_salt.in": "courier" } } }
+				{ "name": "外部动词照常：上一违约不留痕", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "state": { "$world.time": 0, "letter_salt.in": "courier" } } }
 			]
 		}
 	]
