@@ -9,7 +9,7 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { CHECKPOINT_RECORD_TYPE, TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
+import { TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
@@ -70,7 +70,7 @@ export class Engine {
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（act 工具尾）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly archive: Archive;
-	/** 装载期诊断：损坏纪要截断、档案链断、检查点弃置的显形出口。 */
+	/** 装载期诊断：形状损坏条目与档案链断的显形出口。 */
 	readonly loadWarnings: readonly string[];
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
@@ -113,7 +113,7 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	/** 装载即对账（resume），档案单侧：引擎自日志组装世界。 */
+	/** 装载即重放（resume）：引擎自日志组装世界。 */
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
 		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一：近况是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
@@ -218,7 +218,7 @@ export class Engine {
 	}
 
 	private assertLive(): void {
-		if (this.archive.dead !== null) throw new Error(`引擎状态已不可信（${this.archive.dead}）：须重启进程由日志对账`);
+		if (this.archive.dead !== null) throw new Error(`引擎状态已不可信（${this.archive.dead}）：须重启进程由日志重建`);
 	}
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
@@ -334,17 +334,12 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[])
 	}
 }
 
-/** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；检查点随后追加（缓存，写失败仅告警可迟到） */
+/** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；落盘失败即不可信，由调用点判死。 */
 function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
 	const record: ChronicleEntry = deepFreeze({ seq: archive.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: run.steps });
 	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
 	archive.records.push(record);
 	archive.lastSeq = record.seq;
-	try {
-		sessionManager.appendCustomEntry(CHECKPOINT_RECORD_TYPE, { seq: record.seq, world: sim.snapshot() });
-	} catch (e) {
-		run.warnings.push(`检查点追加失败（缓存可迟到，由装载对账补上）：${errorText(e)}`);
-	}
 }
 
 /** 接口模式走 JSON Schema 通道；ref 的 JSON 型是 string。 */

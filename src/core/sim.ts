@@ -1393,38 +1393,6 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
-	/** 检查点已含其后果的回合仍须按账本复原点数：世界的重放可以跳过，序位的演进不可以（否则续掷与连续会话分叉）。 */
-	seedAttempts(record: ChronicleEntry): void {
-		for (const step of record.steps) this.markAttempt(step.at, step.origin, step.action.verb);
-		this.pruneAttempts();
-	}
-
-	/** 钟算术全段：首步为 will；后一 will 步 at = 前一 will 步 at + 前一 price；其间 clock 步 price 恒 0、at 落在 (前一 will 步 at, 前一 will 步 at + 前一 price] 内非降。 */
-	private clockSpanProblem(record: ChronicleEntry): string | null {
-		const steps = record.steps;
-		if (steps.length === 0) return null;
-		const first = steps[0]!;
-		if (first.origin === "clock") return "首步为时钟步";
-		if (!Number.isInteger(first.at) || !Number.isInteger(first.price) || first.price < 0) return `首步坐标/价格非整数（at ${String(first.at)}，price ${String(first.price)}）`;
-		let base = first.at;
-		let limit = base + first.price;
-		for (let i = 1; i < steps.length; i++) {
-			const s = steps[i]!;
-			if (s.origin === "clock") {
-				if (s.price !== 0) return `时钟步 price ${String(s.price)} ≠ 0`;
-				if (!Number.isInteger(s.at)) return `时钟步 at 非整数（${String(s.at)}）`;
-				if (s.at <= base || s.at > limit) return `时钟步 at ${s.at} 出界 (${base}, ${limit}]`;
-				if (s.at < steps[i - 1]!.at) return `时钟步 at ${s.at} 逆序`;
-				continue;
-			}
-			if (!Number.isInteger(s.price) || s.price < 0) return `will 步 price 非负整数（${String(s.price)}）`;
-			if (s.at !== limit) return `will 步 at ${s.at} ≠ ${limit}`;
-			base = s.at;
-			limit = base + s.price;
-		}
-		return null;
-	}
-
 	/** 重放：𝒞 反推 δ 逐条应用（不重裁决、不掷骰、不重算级联），逐变更 prev 校验，终态 integrity；authored 不变式不重审。链断回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
@@ -1433,12 +1401,6 @@ export class Simulation {
 			return `seq${record.seq} ${reason}`;
 		};
 		try {
-			const start = record.steps.length ? record.steps[0]!.at : record.time;
-			if (!Number.isInteger(start) || start !== this.world.time) return fail(`起点钟 ${String(start)} 不接续当前钟 ${this.world.time}`);
-			const grants = record.steps.reduce((n, s) => n + s.price, 0);
-			if (!Number.isInteger(record.time) || record.time !== start + grants) return fail(`末钟 ${String(record.time)} ≠ 起点 ${start} + 刻账 ${grants}`);
-			const span = this.clockSpanProblem(record);
-			if (span) return fail(span);
 			for (const step of record.steps) {
 				if (!step.ok) continue;
 				for (const c of step.changes) {
