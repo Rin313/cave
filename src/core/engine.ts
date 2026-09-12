@@ -9,7 +9,8 @@ import {
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { TURN_RECORD_TYPE, recentEntries, pruneContext, resume, verbatim } from "./context.ts";
+import { recentEntries, pruneContext, verbatim } from "./context.ts";
+import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
@@ -17,7 +18,10 @@ export interface EngineOptions {
 	provider: string;
 	model: string;
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+	/** pi 运行时会话（原始 trace）；缺省 inMemory（不落盘），不入装载。 */
 	sessionManager?: SessionManager;
+	/** 回合记录档案；缺省只留进程内存。 */
+	archive?: ArchiveStore;
 }
 
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -57,8 +61,8 @@ interface RunState {
 	warnings: string[];
 }
 
-/** 装载与定稿共享的档案态：records 是全部存活回合（近况选择与投影的源），lastSeq 是定稿序位 */
-interface Archive {
+/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源），lastSeq 是定稿序位 */
+interface Ledger {
 	records: ChronicleEntry[];
 	lastSeq: number;
 	dead: string | null;
@@ -69,7 +73,7 @@ export class Engine {
 	private session: SessionHandle;
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（act 工具尾）与近况选择的共同源；保留全部存活回合记录。 */
-	private readonly archive: Archive;
+	private readonly ledger: Ledger;
 	/** 装载期诊断：形状损坏条目与档案链断的显形出口。 */
 	readonly loadWarnings: readonly string[];
 	private readonly run: RunState;
@@ -78,14 +82,14 @@ export class Engine {
 	private constructor(
 		sim: Simulation,
 		session: SessionHandle,
-		archive: Archive,
+		ledger: Ledger,
 		recent: RecentEntry[],
 		run: RunState,
 		loadWarnings: string[],
 	) {
 		this.sim = sim;
 		this.session = session;
-		this.archive = archive;
+		this.ledger = ledger;
 		this.recent = recent;
 		this.run = run;
 		this.loadWarnings = loadWarnings;
@@ -113,25 +117,17 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	/** 装载即重放（resume）：引擎自日志组装世界。 */
+	/** 装载即重放（archive.load）：引擎自回合记录档案组装世界；pi 会话只作运行时与原始 trace。 */
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
 		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一：近况是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-		const resumed = resume(def, sessionManager.getBranch());
-		if (resumed.truncated) {
-			// 截断以分支落地：叶指针移回完好前缀末条（前缀为空则重置到根），续写进入新分支；旧尾部在文件中原样保留、不再进入装载
-			if (resumed.lastEntryId !== null) {
-				sessionManager.branch(resumed.lastEntryId);
-				resumed.warnings.push(`档案截断：续写从 seq${resumed.lastSeq} 另起分支（旧尾部不再进入装载）`);
-			} else if (resumed.records.length === 0) {
-				sessionManager.resetLeaf();
-				resumed.warnings.push("档案截断于首条：续写另起新根");
-			}
-		}
-		const archive: Archive = { records: resumed.records, lastSeq: resumed.lastSeq, dead: null };
+		const loaded = options.archive?.load(def);
+		const ledger: Ledger = { records: loaded?.records ?? [], lastSeq: loaded?.lastSeq ?? 0, dead: null };
+		const sim = loaded?.sim ?? new Simulation(def);
+		const loadWarnings = loaded?.warnings ?? [];
 
 		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
 		const modelDef = modelRuntime.getModel(options.provider, options.model);
@@ -160,7 +156,7 @@ export class Engine {
 		});
 		await loader.reload();
 
-		const customTools = [buildActTool(def, resumed.sim, run, archive, sessionManager)];
+		const customTools = [buildActTool(def, sim, run, ledger, options.archive)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
 			model: modelDef,
@@ -174,7 +170,7 @@ export class Engine {
 		};
 
 		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(resumed.sim, session, archive, recent, run, resumed.warnings);
+		return new Engine(sim, session, ledger, recent, run, loadWarnings);
 	}
 
 	get sessionFile(): string | undefined {
@@ -183,7 +179,7 @@ export class Engine {
 
 	/** 已定稿回合数；档案链截断后等于存活回合数。 */
 	get turn(): number {
-		return this.archive.lastSeq;
+		return this.ledger.lastSeq;
 	}
 
 	private beginRun(phase: "mapping" | "narration", utterance?: string): void {
@@ -228,13 +224,13 @@ export class Engine {
 	}
 
 	private assertLive(): void {
-		if (this.archive.dead !== null) throw new Error(`引擎状态已不可信（${this.archive.dead}）：须重启进程由日志重建`);
+		if (this.ledger.dead !== null) throw new Error(`引擎状态已不可信（${this.ledger.dead}）：须重启进程由档案重建`);
 	}
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
 		try {
-			const next = recentEntries(this.sim, this.archive.records, this.run.warnings);
+			const next = recentEntries(this.sim, this.ledger.records, this.run.warnings);
 			this.recent.length = 0;
 			this.recent.push(...next);
 		} catch (e) {
@@ -344,12 +340,12 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[])
 	}
 }
 
-/** 定稿：窗口关闭即落条目（回合的内容于裁决完成时已完备，叙述不在定义内）；落盘失败即不可信，由调用点判死。 */
-function finalizeTurn(sim: Simulation, sessionManager: SessionManager, run: RunState, archive: Archive): void {
-	const record: ChronicleEntry = deepFreeze({ seq: archive.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: run.steps });
-	sessionManager.appendCustomEntry(TURN_RECORD_TYPE, record);
-	archive.records.push(record);
-	archive.lastSeq = record.seq;
+/** 定稿：窗口关闭即落档案（回合的内容于裁决完成时已完备，叙述不在定义内）；落盘失败即不可信，由调用点判死。 */
+function finalizeTurn(sim: Simulation, run: RunState, ledger: Ledger, store: ArchiveStore | undefined): void {
+	const record: ChronicleEntry = deepFreeze({ seq: ledger.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: run.steps });
+	store?.append(record);
+	ledger.records.push(record);
+	ledger.lastSeq = record.seq;
 }
 
 /** 接口模式走 JSON Schema 通道；ref 的 JSON 型是 string。 */
@@ -400,7 +396,7 @@ function baseToolDescription(def: GameDef): string {
 	return `Propose actions to the world; the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; one call opens this turn's adjudication window; an empty actions array is a refusal.\nAvailable verbs:\n${catalog(def.verbs)}`;
 }
 
-function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Archive, sessionManager: SessionManager) {
+function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledger, store: ArchiveStore | undefined) {
 	const base = baseToolDescription(def);
 	const description = def.prompt.tool?.(base) ?? base;
 	if (typeof description !== "string" || description.trim() === "") throw new Error("prompt.tool 须返回非空字符串（act 工具描述）");
@@ -434,10 +430,10 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, archive: Arc
 			run.steps = steps;
 			// 定稿先于一切呈现：窗口关闭即落条目
 			try {
-				finalizeTurn(sim, sessionManager, run, archive);
+				finalizeTurn(sim, run, ledger, store);
 			} catch (e) {
-				archive.dead = `定稿落盘失败：${errorText(e)}`;
-				run.warnings.push(archive.dead);
+				ledger.dead = `定稿落盘失败：${errorText(e)}`;
+				run.warnings.push(ledger.dead);
 			}
 			// 事件行与新增呈现分相投影：任一相失灵只降级该相，账目已在定稿
 			let lines: string[];

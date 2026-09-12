@@ -3,13 +3,14 @@ import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 
 import { join } from "node:path";
 import { SessionManager, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import { Engine, type ActOutcome, type TokenUsage } from "../core/engine.ts";
-import { resume } from "../core/context.ts";
+import { openArchive } from "../core/archive.ts";
 import { spineLines, type Simulation } from "../core/sim.ts";
 import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
 const runDir = (game: string, runId: string): string => join("runs", game, runId);
-/** 会话文件固定名：run 的存在性即此文件的存在性，路径无需 sidecar 记载。 */
+/** records 是回合记录档案（装载的主侧）；session 是 pi 原始 trace（非证据）。 */
+const recordsPath = (dir: string): string => join(dir, "records.jsonl");
 const sessionPath = (dir: string): string => join(dir, "session.jsonl");
 const transcriptPath = (dir: string): string => join(dir, "transcript.jsonl");
 
@@ -17,11 +18,12 @@ function appendTranscript(dir: string, entry: unknown): void {
 	appendFileSync(transcriptPath(dir), JSON.stringify(entry) + "\n", "utf8");
 }
 
-function requireRunDir(gameId: string, runId: string): { dir: string; sessionFile: string } {
+function requireRunDir(gameId: string, runId: string): { dir: string; recordsFile: string; sessionFile: string } {
 	const dir = runDir(gameId, runId);
+	const recordsFile = recordsPath(dir);
 	const sessionFile = sessionPath(dir);
-	if (!existsSync(sessionFile)) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
-	return { dir, sessionFile };
+	if (!existsSync(recordsFile) && !existsSync(sessionFile)) throw new Error(`run "${runId}" 不存在（game: ${gameId}），请先 start`);
+	return { dir, recordsFile, sessionFile };
 }
 
 /** 引擎配置按游戏 id 命名空间读取环境变量，多游戏并存互不覆盖。 */
@@ -72,9 +74,9 @@ interface RunCtx {
 }
 
 async function withEngine(gameId: string, runId: string, fn: (ctx: RunCtx) => Promise<void>): Promise<void> {
-	const { dir, sessionFile } = requireRunDir(gameId, runId);
+	const { dir, recordsFile, sessionFile } = requireRunDir(gameId, runId);
 	const def = getGame(gameId);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sessionManager: SessionManager.open(sessionFile) });
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), archive: openArchive(recordsFile), sessionManager: SessionManager.open(sessionFile) });
 	for (const w of engine.loadWarnings) console.log(`  ⚠ ${w}`);
 	try {
 		await fn({ dir, sim: engine.sim, engine });
@@ -86,9 +88,10 @@ async function withEngine(gameId: string, runId: string, fn: (ctx: RunCtx) => Pr
 async function cmdStart(gameId: string, runId: string): Promise<void> {
 	const def = getGame(gameId);
 	const dir = runDir(gameId, runId);
+	const recordsFile = recordsPath(dir);
 	const sessionFile = sessionPath(dir);
-	if (existsSync(sessionFile)) throw new Error(`run "${runId}" 已存在（game: ${gameId}），loop reset 后再 start`);
-	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), sessionManager: SessionManager.open(sessionFile) });
+	if (existsSync(recordsFile) || existsSync(sessionFile)) throw new Error(`run "${runId}" 已存在（game: ${gameId}），loop reset 后再 start`);
+	const engine = await Engine.create(def, { ...engineOptsFromEnv(gameId), archive: openArchive(recordsFile), sessionManager: SessionManager.open(sessionFile) });
 	try {
 		const { narration: scene, warnings, usage } = await engine.narrate("请用文学笔触描写当前场景。");
 		appendTranscript(dir, { phase: "start", scene, warnings, usage });
@@ -157,9 +160,9 @@ async function cmdRender(gameId: string, runId: string, instruction: string): Pr
 }
 
 function cmdState(gameId: string, runId: string, out: string | undefined): void {
-	const { sessionFile } = requireRunDir(gameId, runId);
+	const { recordsFile } = requireRunDir(gameId, runId);
 	const def = getGame(gameId);
-	const { sim, lastSeq, warnings } = resume(def, SessionManager.open(sessionFile).getBranch());
+	const { sim, lastSeq, warnings } = openArchive(recordsFile).load(def);
 	console.log(`【${runId}】${gameId} 已进行 ${lastSeq} 回合`);
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 	if (out === undefined) {
@@ -194,7 +197,7 @@ async function main() {
   loop state --run <id> --game <id> [--out <file>]
   loop reset --run <id> --game <id>
 
-输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：session.jsonl 是机器全量档案（回合记录，装载重放的主侧），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
+输出为紧凑人类可读视图（提案/裁决/叙述与 token 用量）。run 目录 = runs/<game>/<runId>/：records.jsonl 是机器档案（回合记录，装载重放的主侧），session.jsonl 是 pi 原始会话 trace（非证据），transcript.jsonl 是每回合一条的扁平人读视图（A/B 对照与机械 diff）。
 batch 话语文件每行一条（同一引擎会话内顺序执行，A/B 话语集用）；空行与 # 注释跳过。
 --select 由本工具并合进话语（transcript 记 raw/selection 分解）。
 render 是研究操作（回合计数不增）：调用场景呈现服务；时间流逝走玩家动词（映射回合）。
