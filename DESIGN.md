@@ -163,6 +163,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 - 多输入源与多视角
 - 日志防篡改与坐标对账：装载是重建（形状、序位连续、变更可应用、终态 integrity），不是审计；投影失败是消费事件，降级呈现
+- settings UI
 
 ## 架构决策
 
