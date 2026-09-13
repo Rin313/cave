@@ -7,12 +7,11 @@ import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
 import { errorText } from "./sim.ts";
 
-/** 一次运行的全部落盘位置；终端与 shell 两宿主共用同一约定。root 即数据根：终端用 cwd，打包的 shell 用 userData。 */
+/** 一次运行的落盘位置；root 即数据根（打包的 shell 用 userData，dev 用仓库根）。 */
 export interface RunPaths {
 	dir: string;
 	records: string;
 	session: string;
-	transcript: string;
 }
 
 export function runPaths(game: string, run: string, root = "."): RunPaths {
@@ -21,7 +20,6 @@ export function runPaths(game: string, run: string, root = "."): RunPaths {
 		dir,
 		records: join(dir, "records.jsonl"),
 		session: join(dir, "session.jsonl"),
-		transcript: join(dir, "transcript.jsonl"),
 	};
 }
 
