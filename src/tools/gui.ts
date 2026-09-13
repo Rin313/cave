@@ -1,9 +1,11 @@
 // GUI e2e host：经 CDP 调 window.cave 的 IPC 面；数据根承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
+// 宿主 Electron 跨命令保活（窗口对开发者可见）：start/stop/restart 管宿主，close 释放单个运行；改 src 后 restart，改游戏定义后 close 再开。
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { dataDir } from "../core/paths.ts";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
@@ -61,19 +63,6 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const js = (v: unknown): string => JSON.stringify(v);
 const openExpr = (game: string, run: string): string => `window.cave.open(${js(game)},${js(run)})`;
 
-/** dev 启动要求存在界面；仓库不带界面资产，数据根无界面时自动补一个 stub，命令结束即移除。 */
-function ensureStubUi(dataRoot: string): string | null {
-	const root = join(dataRoot, "ui");
-	const found = existsSync(root) && readdirSync(root, { withFileTypes: true }).some((e) => e.isDirectory() && existsSync(join(root, e.name, "index.html")));
-	if (found) return null;
-	const dir = join(root, "e2e");
-	const file = join(dir, "index.html");
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(file, "<!doctype html><title>e2e</title>\n", "utf8");
-	console.error(`已创建 e2e stub 界面：${file}`);
-	return file;
-}
-
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const server = createServer();
@@ -86,35 +75,168 @@ function freePort(): Promise<number> {
 	});
 }
 
-interface App {
-	target: Target;
-	stop: () => void;
+/** 保活宿主的状态记录：参数随记录，供重连判定。 */
+interface Host {
+	pid: number;
+	port: number;
+	exe: string;
+	dataRoot: string;
 }
 
-async function openApp(exe: string, dev: boolean, dataRoot: string): Promise<App> {
-	const port = await freePort();
-	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*"];
-	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, CAVE_DATA_DIR: dataRoot } });
-	let err = "";
-	child.stderr?.on("data", (d: Buffer) => { err += String(d); });
-	const stop = (): void => { child.kill(); };
-	process.once("exit", stop);
-	const deadline = Date.now() + 30_000;
+/** 单实例锁使全局至多一个宿主，故状态与日志全局唯一。 */
+const HOST_FILE = join(tmpdir(), "cave-gui-host.json");
+const HOST_LOG = join(tmpdir(), "cave-gui-host.log");
+
+function readHost(): Host | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(HOST_FILE, "utf8"));
+	} catch {
+		return null;
+	}
+	if (parsed === null || typeof parsed !== "object") return null;
+	const { pid, port, exe, dataRoot } = parsed as Record<string, unknown>;
+	if (typeof pid !== "number" || typeof port !== "number" || typeof exe !== "string" || typeof dataRoot !== "string") return null;
+	return { pid, port, exe, dataRoot };
+}
+
+function writeHost(host: Host): void {
+	writeFileSync(HOST_FILE, `${JSON.stringify(host)}\n`, "utf8");
+}
+
+function pidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return (e as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** 宿主的页面目标；不可达（未起／已死／界面已关）即 null。 */
+async function targetOf(port: number): Promise<Target | null> {
+	try {
+		const list = (await (await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(1500) })).json()) as unknown;
+		if (!Array.isArray(list)) return null;
+		return (list as Target[]).find((t) => t.type === "page" && typeof t.webSocketDebuggerUrl === "string") ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** 宿主日志尾：启动与崩溃诊断。 */
+function logTail(): string {
+	try {
+		const lines = readFileSync(HOST_LOG, "utf8").trimEnd().split(/\r?\n/).filter((l) => l !== "");
+		return lines.length === 0 ? "" : `\n宿主日志尾（${HOST_LOG}）：\n${lines.slice(-10).join("\n")}`;
+	} catch {
+		return "";
+	}
+}
+
+/** 弃置宿主记录；不动进程。 */
+function discardHost(): void {
+	rmSync(HOST_FILE, { force: true });
+}
+
+async function waitHost(exe: string, dataRoot: string, ms: number): Promise<Target | null> {
+	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
-		if (child.exitCode !== null) throw new Error(`Electron 退出（code ${child.exitCode}${child.exitCode === 0 ? "，可能已有实例在运行（单实例锁）" : ""}）：${err.trim()}`);
-		try {
-			const list = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as unknown;
-			if (Array.isArray(list)) {
-				const target = (list as Target[]).find((t) => t.type === "page" && typeof t.webSocketDebuggerUrl === "string");
-				if (target !== undefined) return { target, stop };
-			}
-		} catch {
-			// 界面尚未就绪
+		const host = readHost();
+		if (host !== null && host.exe === exe && host.dataRoot === dataRoot) {
+			const target = await targetOf(host.port);
+			if (target !== null) return target;
 		}
 		await sleep(150);
 	}
-	stop();
-	throw new Error(`等待界面超时（30s）：需在数据根 ui/<name>/index.html 提供界面，打包另可在 resources/ui${err.trim() === "" ? "" : `\n${err.trim()}`}`);
+	return null;
+}
+
+/** 脱离父进程启动宿主；就绪后才落盘状态（并发竞争由单实例锁收敛到先到者）。 */
+async function spawnHost(exe: string, dev: boolean, dataRoot: string): Promise<Target> {
+	const port = await freePort();
+	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*"];
+	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot}）\n`, "utf8");
+	const fd = openSync(HOST_LOG, "a");
+	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd], env: { ...process.env, CAVE_DATA_DIR: dataRoot } });
+	closeSync(fd);
+	child.unref();
+	const deadline = Date.now() + 30_000;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null) {
+			if (child.exitCode === 0) {
+				const target = await waitHost(exe, dataRoot, 10_000);
+				if (target !== null) return target;
+				throw new Error(`Electron 退出（code 0，单实例锁）：已有实例在运行但未记录状态；关闭其窗口后重试${logTail()}`);
+			}
+			throw new Error(`Electron 退出（code ${child.exitCode}）${logTail()}`);
+		}
+		const target = await targetOf(port);
+		if (target !== null) {
+			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot });
+			return target;
+		}
+		await sleep(150);
+	}
+	child.kill();
+	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根 ui/<name>/index.html 提供界面，打包另可在 resources/ui${logTail()}`);
+}
+
+/** 重连或启动宿主：参数不符时报错，进程已死则清理残留后重启。 */
+async function ensureHost(exe: string | undefined, dataRoot: string): Promise<Target> {
+	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
+	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
+	const host = readHost();
+	if (host !== null) {
+		if (host.exe !== binary || host.dataRoot !== dataRoot) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot}）：先 stop 再以当前参数运行`);
+		const target = await targetOf(host.port);
+		if (target !== null) return target;
+		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
+		discardHost();
+	}
+	return await spawnHost(binary, exe === undefined, dataRoot);
+}
+
+/** Page.close 让窗口正常关闭（引擎释放、档案收尾）；超时未退再杀进程兜底。 */
+function requestClose(target: Target): Promise<void> {
+	return new Promise((resolve) => {
+		const ws = new WebSocket(target.webSocketDebuggerUrl);
+		const finish = (): void => {
+			ws.close();
+			resolve();
+		};
+		const timer = setTimeout(finish, 1000);
+		ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Page.close" }));
+		ws.onmessage = () => {
+			clearTimeout(timer);
+			finish();
+		};
+		ws.onerror = () => {
+			clearTimeout(timer);
+			finish();
+		};
+	});
+}
+
+async function stopHost(): Promise<void> {
+	const host = readHost();
+	if (host === null) {
+		console.log("宿主：无运行记录");
+		return;
+	}
+	const target = await targetOf(host.port);
+	if (target !== null) await requestClose(target);
+	const deadline = Date.now() + 5000;
+	while (Date.now() < deadline && pidAlive(host.pid)) await sleep(150);
+	if (pidAlive(host.pid)) {
+		try {
+			process.kill(host.pid);
+		} catch {
+			// 已退出
+		}
+	}
+	discardHost();
+	console.log(`宿主已停止（pid ${host.pid}${target === null ? "，界面本不可达" : ""}）`);
 }
 
 async function evaluate(target: Target, expression: string, timeoutMs: number): Promise<unknown> {
@@ -207,6 +329,12 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			console.log(JSON.stringify(face.records, null, 1));
 			return;
 		}
+		case "close": {
+			const [game, run] = requireRun();
+			await evaluate(target, `window.cave.close(${js(game)},${js(run)})`, timeout);
+			console.log(`【${game}/${run}】已关闭`);
+			return;
+		}
 		case "act": {
 			const [game, run] = requireRun();
 			const utterance = rest.join(" ").trim();
@@ -295,21 +423,23 @@ async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a = parseArgs(argv);
 	if (!cmd) throw new Error("需要命令");
-	const exe = flagStr(a, "exe");
-	const dataRoot = flagStr(a, "data-dir") ?? dataDir();
+	const rawExe = flagStr(a, "exe");
+	const exe = rawExe === undefined ? undefined : resolve(rawExe);
+	const dataRoot = resolve(flagStr(a, "data-dir") ?? dataDir());
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
-	const stub = exe === undefined ? ensureStubUi(dataRoot) : null;
-	let app: App | null = null;
-	try {
-		const electron = exe ?? (createRequire(import.meta.url)("electron") as string);
-		if (!existsSync(electron)) throw new Error(`找不到 Electron：${electron}`);
-		app = await openApp(electron, exe === undefined, dataRoot);
-		await dispatch(cmd, a.positionals, app.target, timeout);
-	} finally {
-		app?.stop();
-		if (stub !== null) rmSync(stub, { recursive: true, force: true });
+	if (cmd === "stop") {
+		await stopHost();
+		return;
 	}
+	if (cmd === "restart") await stopHost();
+	const target = await ensureHost(exe, dataRoot);
+	if (cmd === "start" || cmd === "restart") {
+		const host = readHost();
+		if (host !== null) console.log(`宿主${cmd === "restart" ? "已重启" : "已就绪"}（pid ${host.pid}，debug port ${host.port}，data-dir ${host.dataRoot}）：窗口保活，stop 关闭`);
+		return;
+	}
+	await dispatch(cmd, a.positionals, target, timeout);
 }
 
 runMain(main);
