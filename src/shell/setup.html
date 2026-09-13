@@ -67,7 +67,7 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 (async () => {
 	if (!cave) { $("boot").hidden = false; $("boot").textContent = "window.cave 不可用"; return; }
 	const q = new URLSearchParams(location.search);
-	const meta = await cave.strings();
+	const env = await cave.env();
 	const defaults = {
 		"title": "配置",
 		"close": "完成",
@@ -99,7 +99,7 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 		"login.device": "在 {uri} 输入代码 {code}",
 		"login.advanced": "高级：直接编辑 {dir} 下的 settings.json 与 auth.json（与 CLI 共用）。",
 	};
-	const t = (key, args) => { let s = meta.strings[key] ?? defaults[key] ?? key; if (args) for (const k of Object.keys(args)) s = s.split(`{${k}}`).join(String(args[k])); return s; };
+	const t = (key, args) => { let s = defaults[key] ?? key; if (args) for (const k of Object.keys(args)) s = s.split(`{${k}}`).join(String(args[k])); return s; };
 	let settingsObj = await cave.settings();
 	let allModels = [];
 	let showAll = false;
@@ -109,7 +109,7 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 	$("close").textContent = t("close");
 	$("close").onclick = () => window.close();
 	$("modelTitle").textContent = t("model.section");
-	$("advanced").textContent = t("login.advanced", { dir: meta.configDir });
+	$("advanced").textContent = t("login.advanced", { dir: env.configDir });
 	$("search").placeholder = t("model.search");
 	$("all").textContent = t("model.all");
 	$("search").oninput = drawModels;
