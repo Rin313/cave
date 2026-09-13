@@ -1,108 +1,152 @@
 {
 	"game": "seals",
-	"name": "统一探针",
+	"name": "封印之夜",
 	"scenarios": [
 		{
-			"name": "拆读：信文经 sight 入卡（知晓立而可感）；未知信文与隐藏边不泄漏",
+			"name": "拿取：书案上的一封或多封",
 			"steps": [
-				{ "name": "未持信而读：拒绝", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "read.notheld", "reason": "拿到手里", "lines": ["✗ 拆读(火漆信·盐引)：你得先把信拿到手里。"], "viewIncludes": ["\"from\":\"parlor\",\"to\":\"study\",\"name\":\"path\""], "viewExcludes": ["\"type\":\"path\""] } },
-				{ "name": "取信：持者变更可说（公共故事走机械行）；信文尚未入视野", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "law": "desk", "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。(火漆信·盐引.持者: 书案 → 信使)"], "viewExcludes": ["盐引批文已托江苏会馆代办"] } },
-				{ "name": "拆读：断口可说（机械行），信文入法则理由；知晓立而信文入卡（propPerception），未知信文与隐藏边零泄漏", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。(火漆信·盐引.火漆: true → false)"], "viewIncludes": ["盐引批文已托江苏会馆代办", "过从甚密"], "viewExcludes": ["秋粮定价每石四百钱", "信任", "知晓"] } }
+				{ "name": "一次拿两封：非空序列参数整批裁决", "action": { "verb": "take", "params": { "entities": ["letter_salt", "letter_grain"] } }, "expect": { "ok": true, "law": "desk", "lines": ["✓ 拿取(火漆信·盐引, 火漆信·粮价)：你把火漆信·盐引、火漆信·粮价拿到了手里。(火漆信·盐引.持者: 书案 → 信使; 火漆信·粮价.持者: 书案 → 信使)"], "state": { "letter_salt.in": "courier", "letter_grain.in": "courier" } } },
+				{ "name": "已拿在手里：不在书案，拒绝", "action": { "verb": "take", "params": { "entities": ["letter_salt"] } }, "expect": { "ok": false, "law": "take.notondesk", "reason": "不在书案", "state": { "letter_salt.in": "courier" } } },
+				{ "name": "不是信：拒绝", "action": { "verb": "take", "params": { "entities": ["courier"] } }, "expect": { "ok": false, "law": "take.notletter", "reason": "不是能拿的信" } }
 			]
 		},
 		{
-			"name": "誊写：信文行随知晓立而可说、值侧分侧披露",
+			"name": "拆读：信文只对知情者披露",
 			"steps": [
-				{ "name": "取信", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。(火漆信·粮价.持者: 书案 → 信使)"] } },
-				{ "name": "誊写：自由字符串参数（许愿径）入裁；断口全披露，信文只披露采样侧（未读而誊——旧文不可知）", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改为每石四百五十钱，事宜速办。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改为每石四百五十钱，事宜速办。)：你借着拆封的工夫，重新誊写了信文。(火漆信·粮价.火漆: true → false; 火漆信·粮价.信文: ? → 秋粮定价改为每石四百五十钱，事宜速办。)"], "viewIncludes": ["每石四百五十钱"], "viewExcludes": ["勿为流言所动"], "state": { "letter_grain.content": "秋粮定价改为每石四百五十钱，事宜速办。" } } },
-				{ "name": "重读：知识已立（知晓边在案），零 delta 授予", "action": { "verb": "read", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "reason": "又读了一遍", "lines": ["✓ 拆读(火漆信·粮价)：你把火漆信·粮价又读了一遍，字句没有变。"] } },
-				{ "name": "重誊（已知晓）：两侧采样齐备，值全披露——分侧披露的对照面", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改走漕运，每石四百五十钱。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改走漕运，每石四百五十钱。)：你借着拆封的工夫，重新誊写了信文。(火漆信·粮价.信文: 秋粮定价改为每石四百五十钱，事宜速办。 → 秋粮定价改走漕运，每石四百五十钱。)"], "state": { "letter_grain.content": "秋粮定价改走漕运，每石四百五十钱。" } } }
+				{ "name": "没拿在手里：拒绝", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "read.notheld", "reason": "拿到手里" } },
+				{ "name": "不是信：拒绝", "action": { "verb": "read", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "read.notletter" } },
+				{ "name": "拿在手里", "action": { "verb": "take", "params": { "entities": ["letter_salt"] } }, "expect": { "ok": true } },
+				{ "name": "拆封：火漆落下，信文入卡；未读的信文与隐藏边不泄漏", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。(火漆信·盐引.火漆: true → false)"], "state": { "letter_salt.seal": false }, "viewIncludes": ["盐引批文已托江苏会馆代办"], "viewExcludes": ["秋粮定价每石四百钱", "信任", "猜疑", "知晓"] } },
+				{ "name": "再读：目标状态已成立，零变更授予", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "reason": "又读了一遍", "lines": ["✓ 拆读(火漆信·盐引)：你把火漆信·盐引又读了一遍，字句没有变。"] } }
 			]
 		},
 		{
-			"name": "交割：断口起疑（猜疑边隐藏，代笔披露）；流言只闻其密不闻其值",
+			"name": "誊写：自由文本与断口",
 			"steps": [
-				{ "name": "取信", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true } },
-				{ "name": "拆读（断口留下）", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true } },
-				{ "name": "放回书案", "action": { "verb": "leave", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 放回(火漆信·盐引)：你把火漆信·盐引放回了书案。(火漆信·盐引.持者: 信使 → 书案)"] } },
-				{ "name": "四刻：流言刻（t2）＋交割刻（t4，两信送达，断口起疑）＋静默刻归账", "tick": 4, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引。断口的火漆瞒不过人，太守的目光落在你身上。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×2"], "viewIncludes": ["对你的疑心", "太守与盐商过从甚密"], "viewExcludes": ["猜疑", "信任"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" } } },
-				{ "name": "送达的信不可再取：不在书案", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": false, "law": "take.notondesk", "reason": "不在书案", "lines": ["✗ 拿取(火漆信·粮价)：那封信不在书案上。"] } }
+				{ "name": "没拿在手里：拒绝", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改走漕运。" } }, "expect": { "ok": false, "law": "forge.notheld" } },
+				{ "name": "拿在手里", "action": { "verb": "take", "params": { "entities": ["letter_grain"] } }, "expect": { "ok": true } },
+				{ "name": "空信文：拒绝", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "   " } }, "expect": { "ok": false, "law": "forge.blank", "reason": "不能是空的" } },
+				{ "name": "誊写：断口全披露，信文只披露采样侧", "action": { "verb": "forge", "params": { "entity": "letter_grain", "text": "秋粮定价改走漕运。" } }, "expect": { "ok": true, "lines": ["✓ 誊写(火漆信·粮价,秋粮定价改走漕运。)：你借着拆封的工夫，重新誊写了信文。(火漆信·粮价.火漆: true → false; 火漆信·粮价.信文: ? → 秋粮定价改走漕运。)"], "state": { "letter_grain.content": "秋粮定价改走漕运。" }, "viewIncludes": ["秋粮定价改走漕运。"] } },
+				{ "name": "不是信：拒绝", "action": { "verb": "forge", "params": { "entity": "courier", "text": "x" } }, "expect": { "ok": false, "law": "forge.notletter" } }
 			]
 		},
 		{
-			"name": "言语与指称：known 生命周期×改名连续性（复合格）",
+			"name": "放回：投递前的悔棋",
 			"steps": [
-				{ "name": "向书房里的灰衣人攀谈：不可指名（门答，动词 invisible 词表缺省）", "action": { "verb": "talk", "params": { "target": "guest", "words": "借个火。" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有这个人", "lines": ["✗ 攀谈(guest,借个火。)：眼前没有这个人。"] } },
-				{ "name": "六刻：流言＋交割＋夜笺入案（离屏生灭入账）＋灰衣人漂移入厅", "tick": 6, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·盐引.火漆: true → false; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ (+ 夜笺)[又有一封夜笺送到，搁在书案上。]", "⏱ (灰衣人.持者: 书房 → 正厅)[你瞥见太守与管家在廊下低语，谈了许久。; 灰衣人踱进了正厅，与管家寒暄。]", "⏱ 光阴虚度 ×2"], "viewIncludes": ["灰衣人", "夜笺"], "state": { "guest.in": "parlor", "letter_night.in": "desk" } } },
-				{ "name": "攀谈：原话物化为惰性记录（heard），introduced 标记对模型不可见", "action": { "verb": "talk", "params": { "target": "guest", "words": "面具下的眼睛像是认得我。" } }, "expect": { "ok": true, "lines": ["✓ 攀谈(灰衣人,面具下的眼睛像是认得我。)：你与灰衣人攀谈了一句。(灰衣人.闻言: null → 面具下的眼睛像是认得我。)"], "state": { "guest.heard": "面具下的眼睛像是认得我。", "guest.introduced": true } } },
-				{ "name": "揭面：真名出载荷，变更可说", "action": { "verb": "unmask", "params": { "target": "guest" } }, "expect": { "ok": true, "lines": ["✓ 揭面(沈青)：你揭下了面具。(~ 灰衣人 → 沈青; 沈青.面具: true → false)"], "viewIncludes": ["沈青"], "state": { "guest.mask": false } } },
-				{ "name": "四刻：夜笺交割（次轮入账）＋沈青携盏归书房（离场）＋流言同刻归桶", "tick": 4, "expect": { "ok": true, "lines": ["⏱ (夜笺.持者: 书案 → 管家; 夜笺.火漆: true → false)[管家收了夜笺，拆封读毕。]", "⏱ (沈青.持者: 正厅 → 书房)[你瞥见太守与管家在廊下低语，谈了许久。; 沈青携着酒盏，踱回了书房。]", "⏱ 光阴虚度 ×2"], "state": { "guest.mask": false, "letter_night.in": "steward" } } },
-				{ "name": "跨室再攀谈：known 并入参照域（门放行）＋改名后名字连续（复合格证词）", "action": { "verb": "talk", "params": { "target": "guest", "words": "下一封信走老渠道。" } }, "expect": { "ok": true, "lines": ["✓ 攀谈(沈青,下一封信走老渠道。)：你与沈青攀谈了一句。(沈青.闻言: 面具下的眼睛像是认得我。 → 下一封信走老渠道。)"] } }
+				{ "name": "不在手里：拒绝", "action": { "verb": "leave", "params": { "entity": "letter_salt" } }, "expect": { "ok": false, "law": "leave.notheld" } },
+				{ "name": "不是信：拒绝", "action": { "verb": "leave", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "leave.notletter" } },
+				{ "name": "拿起", "action": { "verb": "take", "params": { "entities": ["letter_salt"] } }, "expect": { "ok": true } },
+				{ "name": "拆读（留下断口）", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true } },
+				{ "name": "放回书案：持者变更可说", "action": { "verb": "leave", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 放回(火漆信·盐引)：你把火漆信·盐引放回了书案。(火漆信·盐引.持者: 信使 → 书案)"], "state": { "letter_salt.in": "desk" } } }
 			]
 		},
 		{
-			"name": "器皿与引用：弱/强引用二分、主体性、魂不可自见",
+			"name": "交割：四刻的陈述与猜疑",
 			"steps": [
-				{ "name": "掷火被信系着的书案：强引用挡 despawn（世界腔面）", "action": { "verb": "burn", "params": { "entity": "desk" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "还系着书案", "lines": ["✗ 掷火(书案)：火漆信·盐引还系着书案，解开了才烧得掉。"], "state": { "letter_salt.seal": true } } },
-				{ "name": "取信", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·盐引)：你把火漆信·盐引拿到了手里。(火漆信·盐引.持者: 书案 → 信使)"] } },
-				{ "name": "拆读（立知晓边）", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 拆读(火漆信·盐引)：你展信细读：盐引批文已托江苏会馆代办，事成之后，岁贡三成分润。(火漆信·盐引.火漆: true → false)"] } },
-				{ "name": "掷火手中的信：解系成功；边随主消散（弱引用，机械行静默）", "action": { "verb": "burn", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "lines": ["✓ 掷火(火漆信·盐引)：你把火漆信·盐引掷进了火盆。(- 火漆信·盐引)"], "viewExcludes": ["火漆信·盐引"] } },
-				{ "name": "掷火被附身的宿主：锚引用挡 despawn——迁移必先入账", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": false, "law": "burn.tied", "reason": "心神还系着信使", "lines": ["✗ 掷火(信使)：心神还系着信使，解开了才烧得掉。"], "state": { "courier.vessel": true } } },
-				{ "name": "附身：迁移过门；魂不可自见——主语出域，迁移行静默，由法则理由第一人称承载", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": true, "lines": ["✓ 附身(白瓷面具)：你的神魂没入白瓷面具。"], "state": { "player.in": "mask" } } },
-				{ "name": "掷火空出的器皿：器皿可生灭", "action": { "verb": "burn", "params": { "entity": "courier" } }, "expect": { "ok": true, "lines": ["✓ 掷火(信使)：你把信使掷进了火盆。(- 信使)"], "viewExcludes": ["信使"] } },
-				{ "name": "掷火魂自身：可指称域里没有魂自身（门答）", "action": { "verb": "burn", "params": { "entity": "player" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有那样的东西", "lines": ["✗ 掷火(player)：眼前没有那样的东西。"] } },
-				{ "name": "面具持信：无主语动词的缺省主语＝居所链最近器皿", "action": { "verb": "take", "params": { "entity": "letter_grain" } }, "expect": { "ok": true, "lines": ["✓ 拿取(火漆信·粮价)：你把火漆信·粮价拿到了手里。(火漆信·粮价.持者: 书案 → 白瓷面具)"], "state": { "letter_grain.in": "mask" } } }
+				{ "name": "拿起并拆读", "action": { "verb": "take", "params": { "entities": ["letter_salt"] } }, "expect": { "ok": true } },
+				{ "name": "拆读", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true } },
+				{ "name": "放回", "action": { "verb": "leave", "params": { "entity": "letter_salt" } }, "expect": { "ok": true } },
+				{ "name": "四刻：两封交割，断口的火漆起疑；静默刻归账", "tick": 4, "expect": { "ok": true, "lines": ["⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引。断口的火漆瞒不过人，太守的目光落在你身上。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×3"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewIncludes": ["对你的疑心", "太守与管家过从甚密"], "viewExcludes": ["信任", "猜疑", "知晓"] } },
+				{ "name": "再一刻：夜笺入案；寄信人尚不可指称，整槽遮蔽", "tick": 1, "expect": { "ok": true, "lines": ["⏱ (+ 夜笺)[又有一封夜笺送到，搁在书案上。]"], "state": { "$world.time": 5, "letter_night.in": "desk", "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"name\":\"寄信人\",\"value\":\"guest\""] } }
 			]
 		},
 		{
-			"name": "走动：邻接前提接线法则、尝试时价、视角随居所翻转",
+			"name": "离屏：交割发生在别处",
 			"steps": [
-				{ "name": "去庭院：正厅无路——邻接前提由法则拒绝，尝试时价照耗（一刻）", "action": { "verb": "go", "params": { "dest": "court" } }, "expect": { "ok": false, "law": "go.noway", "reason": "没有路", "lines": ["✗ 走动(庭院)：从这里没有路通往庭院。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
-				{ "name": "去书案：非地点——地点性前提拒绝，时价照耗；流言刻照常产出（刻是世界的因）", "action": { "verb": "go", "params": { "dest": "desk" } }, "expect": { "ok": false, "law": "go.noplace", "reason": "不是能去的地方", "lines": ["✗ 走动(书案)：那里不是能去的地方。", "⏱ [你瞥见太守与管家在廊下低语，谈了许久。]"], "state": { "$world.time": 2 } } },
-				{ "name": "去书房：一刻流逝，视角翻转入书房——正厅内容物退出参照域", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true, "lines": ["✓ 走动(书房)：你走向书房。(信使.持者: 正厅 → 书房)", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 3, "courier.in": "study" }, "viewIncludes": ["灰衣人"], "viewExcludes": ["火漆信·盐引", "书案"] } },
-				{ "name": "回正厅：视角翻回，交割刻在回廊后照常发生", "action": { "verb": "go", "params": { "dest": "parlor" } }, "expect": { "ok": true, "lines": ["✓ 走动(正厅)：你走向正厅。(信使.持者: 书房 → 正厅)", "⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·盐引.火漆: true → false; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]"], "state": { "$world.time": 4, "courier.in": "parlor" }, "viewIncludes": ["火漆信·盐引"], "viewExcludes": ["灰衣人"] } }
+				{ "name": "去书房：一刻流逝", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true, "lines": ["✓ 走动(书房)：你走向书房。(信使.持者: 正厅 → 书房)", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1, "courier.in": "study" } } },
+				{ "name": "三刻：交割在书房外发生——变更行静默，陈述照言", "tick": 3, "expect": { "ok": true, "lines": ["⏱ [太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×2"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewExcludes": ["火漆信·盐引", "书案"] } },
+				{ "name": "回正厅：夜笺已入案，随视角翻转现身", "action": { "verb": "go", "params": { "dest": "parlor" } }, "expect": { "ok": true, "lines": ["✓ 走动(正厅)：你走向正厅。(信使.持者: 书房 → 正厅)", "⏱ (+ 夜笺)[又有一封夜笺送到，搁在书案上。]"], "state": { "$world.time": 5 }, "viewIncludes": ["夜笺"] } }
 			]
 		},
 		{
-			"name": "等候：越域由法则拒绝而非改写——世界不代映射器重释意图",
+			"name": "走动：路、地点与视角翻转",
 			"steps": [
-				{ "name": "一刻授予：刻步全静默，聚合归账", "action": { "verb": "wait", "params": { "span": 1 } }, "expect": { "ok": true, "lines": ["✓ 等候(1)：你静静站了一会儿。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
-				{ "name": "缺省一刻：可选参数省略过形态校验（接口模式与内核面对可选性判定一致）；落在流言刻，有言成块", "action": { "verb": "wait", "params": {} }, "expect": { "ok": true, "lines": ["✓ 等候：你静静站了一会儿。", "⏱ [你瞥见太守与管家在廊下低语，谈了许久。]"], "state": { "$world.time": 2 } } },
-				{ "name": "过长：拒绝而非钳到 12，钟不动", "action": { "verb": "wait", "params": { "span": 999 } }, "expect": { "ok": false, "law": "wait.span", "reason": "等不了那么久", "lines": ["✗ 等候(999)：你等不了那么久。"], "state": { "$world.time": 2 } } },
-				{ "name": "半刻：时间以刻计，不静默取整", "action": { "verb": "wait", "params": { "span": 2.5 } }, "expect": { "ok": false, "law": "wait.span", "reason": "时间以刻计", "lines": ["✗ 等候(2.5)：时间以刻计，没有半刻。"], "state": { "$world.time": 2 } } },
-				{ "name": "零刻：不成等候", "action": { "verb": "wait", "params": { "span": 0 } }, "expect": { "ok": false, "law": "wait.span", "reason": "那不算等候", "lines": ["✗ 等候(0)：那不算等候。"], "state": { "$world.time": 2 } } }
+				{ "name": "去庭院：无路——法则拒绝，时价照耗", "action": { "verb": "go", "params": { "dest": "court" } }, "expect": { "ok": false, "law": "go.noway", "reason": "没有路", "lines": ["✗ 走动(庭院)：从这里没有路通往庭院。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
+				{ "name": "去书案：不是地点", "action": { "verb": "go", "params": { "dest": "desk" } }, "expect": { "ok": false, "law": "go.noplace", "reason": "不是能去的地方", "state": { "$world.time": 2 } } },
+				{ "name": "去书房：视角翻入书房，正厅内容物退出参照域", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true, "state": { "$world.time": 3, "courier.in": "study" }, "viewIncludes": ["灰衣人"], "viewExcludes": ["书案", "火漆信·盐引"] } },
+				{ "name": "已在书房：拒绝；交割刻在别处照常发生", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": false, "law": "go.here", "reason": "已经身在书房", "lines": ["✗ 走动(书房)：你已经身在书房。", "⏱ [太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]"], "state": { "$world.time": 4 } } }
 			]
 		},
 		{
-			"name": "占问：随机是账本位置的纯函数——同刻各次尝试地址不同（序位入地址），不再共享命运",
+			"name": "攀谈：不可指名与非法的话",
 			"steps": [
-				{ "name": "零刻动词不推钟：序位 0", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"], "state": { "$world.time": 0 } } },
-				{ "name": "第二次：序位 1（同刻不同尝试各别入账）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第三次：序位 2", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第四次：序位 3", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第五次：序位 4", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"] } },
-				{ "name": "第六次：序位 5——签变，同刻不再恒同签（address 含通道与序位）", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：凶。"] } }
+				{ "name": "向书房里的灰衣人攀谈：不在场且未引见，拒绝", "action": { "verb": "talk", "params": { "target": "guest", "words": "借个火。" } }, "expect": { "ok": false, "law": "action.invisible", "reason": "眼前没有这个人", "lines": ["✗ 攀谈(guest,借个火。)：眼前没有这个人。"] } },
+				{ "name": "与书案攀谈：不是人，拒绝", "action": { "verb": "talk", "params": { "target": "desk", "words": "喂。" } }, "expect": { "ok": false, "law": "talk.notperson" } },
+				{ "name": "去书房：灰衣人入参照域", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true } },
+				{ "name": "空话：拒绝", "action": { "verb": "talk", "params": { "target": "guest", "words": "   " } }, "expect": { "ok": false, "law": "talk.blank" } },
+				{ "name": "攀谈：引见立；无名属性不进变更行", "action": { "verb": "talk", "params": { "target": "guest", "words": "面具下的眼睛像是认得我。" } }, "expect": { "ok": true, "lines": ["✓ 攀谈(灰衣人,面具下的眼睛像是认得我。)：你与灰衣人攀谈了一句。"], "state": { "guest.introduced": true } } }
 			]
 		},
 		{
-			"name": "离屏交割：prop 行主语过门——主语出域则变更行静默，知识由陈述与回看承接",
+			"name": "引见：离屏仍可指名，寄信人随句柄显形",
 			"steps": [
 				{ "name": "去书房", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true } },
-				{ "name": "三刻：t4 交割在书房外发生——火漆/持者/边行全静默，陈述照言", "tick": 3, "expect": { "ok": true, "lines": ["⏱ [你瞥见太守与管家在廊下低语，谈了许久。]", "⏱ [太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 4, "letter_salt.in": "magistrate", "letter_grain.in": "merchant" }, "viewExcludes": ["火漆信·盐引", "火漆信·粮价", "书案"] } }
+				{ "name": "攀谈：引见", "action": { "verb": "talk", "params": { "target": "guest", "words": "好久不见。" } }, "expect": { "ok": true } },
+				{ "name": "回正厅：人不在场但可指名，出句柄", "action": { "verb": "go", "params": { "dest": "parlor" } }, "expect": { "ok": true, "viewIncludes": ["\"id\":\"guest\",\"name\":\"灰衣人\""] } },
+				{ "name": "跨室再攀谈：可指称域放行", "action": { "verb": "talk", "params": { "target": "guest", "words": "下一封信走老渠道。" } }, "expect": { "ok": true } },
+				{ "name": "五刻：夜笺入案，寄信人随句柄显形", "tick": 5, "expect": { "ok": true, "state": { "$world.time": 7, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺", "\"name\":\"寄信人\",\"value\":\"guest\""] } }
 			]
 		},
 		{
-			"name": "值位指称过参照门：ref 型槽的目标出域则整槽遮蔽——披露的指称必有卡（与边端点同门）",
+			"name": "揭面：真名取代称呼",
 			"steps": [
-				{ "name": "五刻：夜笺到案，寄信人（灰衣人）尚在书房——寄信人出域，整槽遮蔽", "tick": 5, "expect": { "ok": true, "state": { "$world.time": 5, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"name\":\"寄信人\",\"value\":\"guest\""] } },
-				{ "name": "一刻：灰衣人漂移入厅——寄信人随卡显形", "tick": 1, "expect": { "ok": true, "viewIncludes": ["\"name\":\"寄信人\",\"value\":\"guest\""] } }
+				{ "name": "去书房", "action": { "verb": "go", "params": { "dest": "study" } }, "expect": { "ok": true } },
+				{ "name": "揭无面具者：拒绝", "action": { "verb": "unmask", "params": { "target": "courier" } }, "expect": { "ok": false, "law": "unmask.nomask" } },
+				{ "name": "揭面：真名取代称呼，改名行可读", "action": { "verb": "unmask", "params": { "target": "guest" } }, "expect": { "ok": true, "lines": ["✓ 揭面(沈青)：你揭下了面具。(~ 灰衣人 → 沈青; 沈青.面具: true → false)"], "state": { "guest.mask": false }, "viewIncludes": ["沈青"], "viewExcludes": ["灰衣人"] } },
+				{ "name": "再揭：拒绝", "action": { "verb": "unmask", "params": { "target": "guest" } }, "expect": { "ok": false, "law": "unmask.nomask" } }
 			]
 		},
 		{
-			"name": "常驻规则不是动词：泵的 id 不进动词面，裸提案即协议违约",
+			"name": "器皿：强引用挡生灭，魂不可自见",
 			"steps": [
-				{ "name": "以常驻规则 id 提案：未知动词，且世界零扰动", "action": { "verb": "post.deliver", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "letter_salt.in": "desk" } } },
-				{ "name": "外部动词照常：上一违约不留痕", "action": { "verb": "take", "params": { "entity": "letter_salt" } }, "expect": { "ok": true, "state": { "$world.time": 0, "letter_salt.in": "courier" } } }
+				{ "name": "掷火宿主：强引用未解，拒绝", "action": { "verb": "burn", "params": { "entities": ["courier"] } }, "expect": { "ok": false, "law": "burn.tied", "reason": "心神还系着信使" } },
+				{ "name": "附身白瓷面具：迁移不出现在变更行（心神不可自见）", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": true, "lines": ["✓ 附身(白瓷面具)：你的神魂没入白瓷面具。"], "state": { "player.in": "mask" } } },
+				{ "name": "已居于其中：拒绝", "action": { "verb": "channel", "params": { "entity": "mask" } }, "expect": { "ok": false, "law": "channel.self" } },
+				{ "name": "不是器皿：拒绝", "action": { "verb": "channel", "params": { "entity": "desk" } }, "expect": { "ok": false, "law": "channel.notvessel" } },
+				{ "name": "面具持信：缺省主语＝居所链最近的器皿", "action": { "verb": "take", "params": { "entities": ["letter_grain"] } }, "expect": { "ok": true, "state": { "letter_grain.in": "mask" } } },
+				{ "name": "掷火空出的器皿：可生灭", "action": { "verb": "burn", "params": { "entities": ["courier"] } }, "expect": { "ok": true, "lines": ["✓ 掷火(信使)：你把信使掷进了火盆。(- 信使)"], "viewExcludes": ["信使"] } },
+				{ "name": "掷火新宿主：拒绝", "action": { "verb": "burn", "params": { "entities": ["mask"] } }, "expect": { "ok": false, "law": "burn.tied", "reason": "白瓷面具" } }
+			]
+		},
+		{
+			"name": "掷火：解系与批量",
+			"steps": [
+				{ "name": "掷火书案：信还系着，拒绝", "action": { "verb": "burn", "params": { "entities": ["desk"] } }, "expect": { "ok": false, "law": "burn.tied", "reason": "还系着书案" } },
+				{ "name": "拿起两封", "action": { "verb": "take", "params": { "entities": ["letter_salt", "letter_grain"] } }, "expect": { "ok": true } },
+				{ "name": "拆读（立知晓边）", "action": { "verb": "read", "params": { "entity": "letter_salt" } }, "expect": { "ok": true } },
+				{ "name": "批量掷火：解系成功，弱边随主消散", "action": { "verb": "burn", "params": { "entities": ["letter_salt", "letter_grain"] } }, "expect": { "ok": true, "lines": ["✓ 掷火(火漆信·盐引, 火漆信·粮价)：你把火漆信·盐引、火漆信·粮价掷进了火盆。(- 火漆信·盐引; - 火漆信·粮价)"], "viewExcludes": ["火漆信·盐引", "火漆信·粮价"] } },
+				{ "name": "掷火空出的书案：可生灭", "action": { "verb": "burn", "params": { "entities": ["desk"] } }, "expect": { "ok": true, "lines": ["✓ 掷火(书案)：你把书案掷进了火盆。(- 书案)"] } }
+			]
+		},
+		{
+			"name": "占问：同一位置恒同签",
+			"steps": [
+				{ "name": "掷签：不随话语或重启重掷", "action": { "verb": "divine", "params": {} }, "expect": { "ok": true, "lines": ["✓ 占问：铜钱落进灰里：吉。"], "state": { "$world.time": 0 } } }
+			]
+		},
+		{
+			"name": "等候：参数、时价与静默聚合",
+			"steps": [
+				{ "name": "缺省一刻", "action": { "verb": "wait", "params": {} }, "expect": { "ok": true, "lines": ["✓ 等候：你静静站了一会儿。", "⏱ 光阴虚度 ×1"], "state": { "$world.time": 1 } } },
+				{ "name": "半刻：时间以刻计，拒绝且不动钟", "action": { "verb": "wait", "params": { "span": 2.5 } }, "expect": { "ok": false, "law": "wait.span", "reason": "没有半刻", "state": { "$world.time": 1 } } },
+				{ "name": "零刻：不成等候", "action": { "verb": "wait", "params": { "span": 0 } }, "expect": { "ok": false, "law": "wait.span" } },
+				{ "name": "过长：拒绝而非钳到 12", "action": { "verb": "wait", "params": { "span": 99 } }, "expect": { "ok": false, "law": "wait.span" } },
+				{ "name": "四刻：等候决定流逝的刻数；交割与夜笺落在等待里", "action": { "verb": "wait", "params": { "span": 4 } }, "expect": { "ok": true, "lines": ["✓ 等候(4)：你在廊下站了好一阵子。", "⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·盐引.火漆: true → false; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ (+ 夜笺)[又有一封夜笺送到，搁在书案上。]", "⏱ 光阴虚度 ×2"], "state": { "$world.time": 5 } } }
+			]
+		},
+		{
+			"name": "协议：不合形态的提案不留痕",
+			"steps": [
+				{ "name": "序列参数收到标量：schema 违约", "action": { "verb": "take", "params": { "entities": "letter_salt" } }, "expect": { "protocol": "action.schema", "state": { "$world.time": 0, "letter_salt.in": "desk" } } },
+				{ "name": "数值参数收到字符串：schema 违约", "action": { "verb": "wait", "params": { "span": "nope" } }, "expect": { "protocol": "action.schema", "state": { "$world.time": 0 } } },
+				{ "name": "以常驻规则 id 提案：未知动词，世界零扰动", "action": { "verb": "post.deliver", "params": {} }, "expect": { "protocol": "action.unknown", "state": { "$world.time": 0, "letter_salt.in": "desk" } } },
+				{ "name": "上一违约不留痕", "action": { "verb": "take", "params": { "entities": ["letter_salt"] } }, "expect": { "ok": true, "state": { "$world.time": 0, "letter_salt.in": "courier" } } }
+			]
+		},
+		{
+			"name": "夜笺的寄信人：无人识得时不披露",
+			"steps": [
+				{ "name": "五刻：夜笺入案；寄信人出域，值位不披露", "tick": 5, "expect": { "ok": true, "lines": ["⏱ (火漆信·盐引.持者: 书案 → 太守; 火漆信·盐引.火漆: true → false; 火漆信·粮价.持者: 书案 → 盐商; 火漆信·粮价.火漆: true → false)[太守收了火漆信·盐引，拆封读毕。; 盐商收了火漆信·粮价，拆封读毕。]", "⏱ (+ 夜笺)[又有一封夜笺送到，搁在书案上。]", "⏱ 光阴虚度 ×3"], "state": { "$world.time": 5, "letter_night.sender": "guest" }, "viewIncludes": ["夜笺"], "viewExcludes": ["\"name\":\"寄信人\",\"value\":\"guest\""] } }
 			]
 		}
 	]
