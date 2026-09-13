@@ -13,6 +13,7 @@ const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [-
   def <game>
   meta <game>
   state <game> <run>
+  records <game> <run>
   act <game> <run> <话语...>
   batch <game> <run> <话语文件>     （每行一条，空行与 # 注释跳过）
   narrate <game> <run> <指令...>
@@ -46,6 +47,11 @@ interface RunFace {
 	time: number;
 	view: unknown;
 	warnings?: string[];
+}
+
+interface RecordsFace {
+	broken: number;
+	records: unknown[];
 }
 
 interface ActFace extends RunFace {
@@ -203,6 +209,13 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			console.log(`【${game}/${run}】已进行 ${face.turn} 回合（t=${face.time}）`);
 			printWarnings(face.warnings ?? []);
 			console.log(JSON.stringify(face.view, null, 1));
+			return;
+		}
+		case "records": {
+			const [game, run] = requireRun();
+			const face = (await evaluate(target, `window.cave.records(${js(game)},${js(run)})`, timeout)) as unknown as RecordsFace;
+			console.log(`【${game}/${run}】${face.records.length} 回合${face.broken ? `，${face.broken} 条形状损坏` : ""}`);
+			console.log(JSON.stringify(face.records, null, 1));
 			return;
 		}
 		case "act": {

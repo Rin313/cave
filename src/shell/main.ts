@@ -2,10 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstruct
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { parseRecordLines } from "../core/archive.ts";
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { errorText, spineLines, verbFace, type SlotDef } from "../core/sim.ts";
-import { configDir, dataDir } from "../core/paths.ts";
+import { configDir, dataDir, runPaths } from "../core/paths.ts";
 import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
 
@@ -340,6 +341,16 @@ ipcMain.handle("cave:runs", (_event, req: { game?: unknown } | undefined) => {
 	const game = req?.game;
 	if (game !== undefined && !segment(game)) throw new Error("runs 的 game 须为游戏 id");
 	return listRuns(DATA_ROOT, game);
+});
+
+/** 回合记录原样读取（诊断面）：坏行计数显形；不装载 def、不重放、不改档案。 */
+ipcMain.handle("cave:records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
+	const { game, run } = pair(req);
+	const path = runPaths(game, run, DATA_ROOT).records;
+	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
+	const lines = parseRecordLines(readFileSync(path, "utf8"));
+	const records = lines.flatMap((l) => (l.kind === "record" ? [l.record] : []));
+	return { game, run, broken: lines.length - records.length, records };
 });
 
 /** 活实例清单：界面换装/重载后据此附着回既有实例。 */

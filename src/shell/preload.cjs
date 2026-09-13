@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("cave", {
 	games: () => ipcRenderer.invoke("cave:games"),
 	runs: (game) => (game === undefined ? ipcRenderer.invoke("cave:runs") : ipcRenderer.invoke("cave:runs", { game })),
+	records: (game, run) => ipcRenderer.invoke("cave:records", { game, run }),
 	sessions: () => ipcRenderer.invoke("cave:sessions"),
 	def: (game) => ipcRenderer.invoke("cave:def", { game }),
 	meta: (game) => ipcRenderer.invoke("cave:meta", { game }),

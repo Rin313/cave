@@ -74,7 +74,7 @@ export interface Action {
 }
 
 export interface Messages {
-	/** 引擎文本缺省：除 gate（invisibleEntity）外一切场合回落到此；debug 只入 probe 与构造/装载诊断。 */
+	/** 引擎文本缺省：除 gate（invisibleEntity）外一切场合回落到此；debug 只入记录与构造/装载诊断。 */
 	noResponse: string;
 	/** 指称门否决的缺省文案（say 的 base）；动词 invisible 更具体，优先。 */
 	invisibleEntity?: string;
