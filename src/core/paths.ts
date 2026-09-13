@@ -11,14 +11,14 @@ function platformUserData(): string {
 	return join(base, "cave");
 }
 
-/** 配置根：CAVE_CONFIG_DIR 覆盖；缺省取宿主的用户数据目录（Electron 传 app.getPath("userData")）。 */
+/** 配置根：ENGINE_CONFIG_DIR 覆盖；缺省取宿主的用户数据目录（Electron 传 app.getPath("userData")）。 */
 export function configDir(userData?: string): string {
-	return process.env.CAVE_CONFIG_DIR ?? userData ?? platformUserData();
+	return process.env.ENGINE_CONFIG_DIR ?? userData ?? platformUserData();
 }
 
-/** 数据根：runs 与用户级内容（games、ui）的所在；CAVE_DATA_DIR 覆盖，缺省即配置根。 */
+/** 数据根：runs 与用户级内容（games、ui）的所在；ENGINE_DATA_DIR 覆盖，缺省即配置根。 */
 export function dataDir(userData?: string): string {
-	return process.env.CAVE_DATA_DIR ?? configDir(userData);
+	return process.env.ENGINE_DATA_DIR ?? configDir(userData);
 }
 
 /** 一次运行的落盘位置；root 即数据根。 */
