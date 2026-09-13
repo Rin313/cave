@@ -1,10 +1,12 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Engine } from "../core/engine.ts";
 import { listGames } from "../core/games.ts";
 import { errorText, spineLines } from "../core/sim.ts";
-import { configDir, openRun, runPaths } from "../tools/runs.ts";
+import { configDir, ModelConfigError, modelErrorReason, openModelRuntime, openRun, runPaths } from "../tools/runs.ts";
+import { installAuth } from "./auth.ts";
 
 interface Current {
 	game: string;
@@ -14,6 +16,7 @@ interface Current {
 }
 
 let win: BrowserWindow | null = null;
+let settingsWin: BrowserWindow | null = null;
 let current: Current | null = null;
 
 const APP_ROOT = app.getAppPath();
@@ -30,6 +33,14 @@ const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged
 	? [SETTINGS_FILE, join(process.resourcesPath, "settings.json"), join(APP_ROOT, "settings.json")]
 	: [SETTINGS_FILE, join(APP_ROOT, "settings.json")];
+
+let runtime: Promise<ModelRuntime> | null = null;
+/** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效。 */
+function modelRuntime(): Promise<ModelRuntime> {
+	const pending = runtime ?? openModelRuntime(CONFIG_DIR);
+	runtime = pending;
+	return pending;
+}
 
 /** 界面名即目录名，只认 <root>/<name>/index.html；名字不做路径。 */
 function uiFile(name: string): string | null {
@@ -72,6 +83,16 @@ function readUiSetting(): string | undefined {
 	return undefined;
 }
 
+function settings(): Record<string, unknown> {
+	return Object.assign({}, ...loadSettings().reverse());
+}
+
+/** 写入用户级设置文件：当前合并态 + patch；包内缺省因此固化到用户文件。 */
+function saveSettings(patch: Record<string, unknown>): void {
+	mkdirSync(CONFIG_DIR, { recursive: true });
+	writeFileSync(SETTINGS_FILE, `${JSON.stringify(Object.assign(settings(), patch), null, "\t")}\n`, "utf8");
+}
+
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；不猜、不兜底（shell 不自带界面）。 */
 function bootUi(): string {
 	const named = readUiSetting();
@@ -90,6 +111,53 @@ try {
 	process.exit(2);
 }
 const uiPath = uiFile(ui)!;
+
+/** 配置面是内容：settingsUi 指定，缺省保留名 settings；壳不渲染也不解释其内部。 */
+function configUiName(): string {
+	for (const parsed of loadSettings()) {
+		const name = parsed.settingsUi;
+		if (typeof name === "string") {
+			if (uiFile(name) === null) throw new Error(`未知配置界面：${name}（可用：${uis().join(", ") || "无"}）`);
+			return name;
+		}
+	}
+	if (uiFile("settings") !== null) return "settings";
+	throw new Error(`没有配置界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 settings/index.html，或在 ${SETTINGS_FILE} 写入 { "settingsUi": "<name>" }；也可直接配置 ${SETTINGS_FILE} 与 ${join(CONFIG_DIR, "auth.json")}（与 CLI 共用）`);
+}
+
+function windowOptions(): BrowserWindowConstructorOptions {
+	return {
+		backgroundColor: "#14161a",
+		webPreferences: {
+			preload: join(import.meta.dirname, "preload.cjs"),
+			contextIsolation: true,
+			sandbox: true,
+		},
+	};
+}
+
+/** 外链一律交系统浏览器：配置面的 OAuth 链接不开 Electron 子窗口；只放行 http(s)。 */
+function externalLinks(w: BrowserWindow): void {
+	w.webContents.setWindowOpenHandler(({ url }) => {
+		if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+		return { action: "deny" };
+	});
+}
+
+function openSettings(): void {
+	const file = uiFile(configUiName());
+	if (file === null) throw new Error("配置界面不可用");
+	if (settingsWin !== null && !settingsWin.isDestroyed()) {
+		settingsWin.focus();
+		return;
+	}
+	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640 });
+	externalLinks(settingsWin);
+	settingsWin.on("closed", () => {
+		settingsWin = null;
+	});
+	void settingsWin.loadFile(file);
+}
 
 function closeCurrent(): void {
 	if (!current) return;
@@ -124,15 +192,46 @@ ipcMain.handle("cave:use", (_event, req: { name?: unknown }) => {
 	if (typeof req?.name !== "string") throw new Error("use 需要界面名");
 	const file = uiFile(req.name);
 	if (file === null) throw new Error(`未知界面：${req.name}（可用：${uis().join(", ") || "无"}）`);
-	mkdirSync(CONFIG_DIR, { recursive: true });
-	writeFileSync(SETTINGS_FILE, `${JSON.stringify(Object.assign({}, ...loadSettings().reverse(), { ui: req.name }), null, "\t")}\n`, "utf8");
+	saveSettings({ ui: req.name });
 	void win?.loadFile(file);
 });
+
+ipcMain.handle("cave:settings", () => settings());
+
+ipcMain.handle("cave:settings:set", async (_event, req: { patch?: unknown }) => {
+	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
+	const patch = { ...(req.patch as Record<string, unknown>) };
+	for (const key of ["ui", "settingsUi"] as const) {
+		const name = patch[key];
+		if (typeof name === "string" && uiFile(name) === null) throw new Error(`未知界面（${key}）：${name}（可用：${uis().join(", ") || "无"}）`);
+	}
+	if (typeof patch.model === "string") {
+		const { model, error } = resolveCliModel({ cliModel: patch.model, modelRuntime: await modelRuntime() });
+		if (!model || error) throw new Error(`模型 "${patch.model}" 不可用：${modelErrorReason(error)}`);
+	}
+	saveSettings(patch);
+	return settings();
+});
+
+ipcMain.handle("cave:settings:open", () => openSettings());
 
 ipcMain.handle("cave:open", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	closeCurrent();
-	const engine = await openRun(game, run, DATA_ROOT, GAME_ROOTS);
+	let engine: Engine;
+	try {
+		engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: GAME_ROOTS, modelRuntime: await modelRuntime() });
+	} catch (e) {
+		// 配置不齐：自动唤起配置面（若有）；失败文本自身给出文件与 CLI 出口
+		if (e instanceof ModelConfigError) {
+			try {
+				openSettings();
+			} catch {
+				// 无配置面可用
+			}
+		}
+		throw e;
+	}
 	current = { game, run, engine, unsubscribe: engine.subscribe((event) => win?.webContents.send("cave:event", event)) };
 	return { game, run, ...snapshot(), warnings: [...engine.loadWarnings] };
 });
@@ -173,16 +272,9 @@ ipcMain.handle("cave:reset", (_event, req: { game?: unknown; run?: unknown }) =>
 });
 
 app.whenReady().then(() => {
-	win = new BrowserWindow({
-		width: 1200,
-		height: 820,
-		backgroundColor: "#14161a",
-		webPreferences: {
-			preload: join(import.meta.dirname, "preload.cjs"),
-			contextIsolation: true,
-			sandbox: true,
-		},
-	});
+	installAuth(modelRuntime);
+	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
+	externalLinks(win);
 	win.on("closed", () => {
 		win = null;
 		closeCurrent();

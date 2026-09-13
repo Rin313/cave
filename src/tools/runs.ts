@@ -34,6 +34,9 @@ export function configDir(): string {
 	return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "cave");
 }
 
+/** 模型与凭据未就绪：宿主据此把用户引向配置面（文件、CLI 或壳暴露的配置协议）。 */
+export class ModelConfigError extends Error {}
+
 /** 模型是单一引用 `provider/model[:thinking]`：配置根的 settings.json 给缺省，环境变量按游戏 id 覆盖。 */
 function modelReference(game: string, config: string): { ref: string; source: string } {
 	const name = `${game.toUpperCase()}_MODEL`;
@@ -49,11 +52,11 @@ function modelReference(game: string, config: string): { ref: string; source: st
 			throw new Error(`settings.json 解析失败（${file}）：${errorText(e)}`);
 		}
 	}
-	throw new Error(`模型未配置：在 ${file} 写入 { "model": "provider/model[:thinking]" }，或设置 ${name} 环境变量`);
+	throw new ModelConfigError(`模型未配置：在 ${file} 写入 { "model": "provider/model[:thinking]" }，或设置 ${name} 环境变量`);
 }
 
 /** 凭据与模型表随用户级配置根自持：不读 pi agent 的 ~/.pi/agent，用户无需安装 pi agent 或 /login。 */
-function openModelRuntime(config: string): Promise<ModelRuntime> {
+export function openModelRuntime(config: string): Promise<ModelRuntime> {
 	return ModelRuntime.create({
 		authPath: join(config, "auth.json"),
 		modelsPath: join(config, "models.json"),
@@ -62,21 +65,32 @@ function openModelRuntime(config: string): Promise<ModelRuntime> {
 }
 
 /** SDK 的错误提示以 pi CLI 旗标收尾（--list-models/--provider），本项目的配置面没有这些旗标，只保留原因。 */
-function modelErrorReason(error: string | undefined): string {
+export function modelErrorReason(error: string | undefined): string {
 	return (error ?? "未解析到模型").replace(/ Use --[\s\S]*$/, "");
 }
 
-/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写。root 是数据根（runs 与缺省 games 位置），gameRoots 是游戏查找链（先见者遮蔽）。 */
-export async function openRun(game: string, run: string, root = ".", gameRoots: readonly string[] = [root]): Promise<Engine> {
+export interface OpenRunOptions {
+	/** 数据根：runs 的所在；缺省 cwd。 */
+	root?: string;
+	/** 游戏查找链（先见者遮蔽）；缺省 [root]。 */
+	gameRoots?: readonly string[];
+	/** 宿主共享的模型运行时（配置协议与引擎同源）；缺省新建。 */
+	modelRuntime?: ModelRuntime;
+}
+
+/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写。 */
+export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
+	const root = options.root ?? ".";
+	const gameRoots = options.gameRoots ?? [root];
 	const paths = runPaths(game, run, root);
 	const config = configDir();
 	const { ref, source } = modelReference(game, config);
-	const modelRuntime = await openModelRuntime(config);
+	const modelRuntime = options.modelRuntime ?? (await openModelRuntime(config));
 	const { model, thinkingLevel, warning, error } = resolveCliModel({ cliModel: ref, modelRuntime });
-	if (!model || error) throw new Error(`模型 "${ref}"（${source}）不可用：${modelErrorReason(error)}`);
+	if (!model || error) throw new ModelConfigError(`模型 "${ref}"（${source}）不可用：${modelErrorReason(error)}`);
 	if (warning) console.warn(`⚠ ${warning}`);
 	if (!(await modelRuntime.checkAuth(model.provider))) {
-		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(config, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
+		throw new ModelConfigError(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(config, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
 	}
 	return Engine.create(await loadGame(game, gameRoots), {
 		model,
