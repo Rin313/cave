@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("cave", {
 	uis: (game) => (game === undefined ? ipcRenderer.invoke("cave:uis") : ipcRenderer.invoke("cave:uis", { game })),
 	use: (name) => ipcRenderer.invoke("cave:use", { name }),
 	settings: () => ipcRenderer.invoke("cave:settings"),
+	strings: () => ipcRenderer.invoke("cave:strings"),
 	setSettings: (patch) => ipcRenderer.invoke("cave:settings:set", { patch }),
 	openSettings: () => ipcRenderer.invoke("cave:settings:open"),
 	models: () => ipcRenderer.invoke("cave:models"),

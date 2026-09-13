@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh">
+<meta charset="utf-8">
+<title>cave</title>
+<style>
+	:root { color-scheme: dark; }
+	body { margin: 0; background: #14161a; color: #d7dae0; font: 14px/1.6 system-ui, "Segoe UI", sans-serif; }
+	main { max-width: 600px; margin: 0 auto; padding: 24px 20px 40px; }
+	header { display: flex; align-items: center; justify-content: space-between; }
+	h1 { font-size: 18px; margin: 0; }
+	h2 { font-size: 13px; margin: 26px 0 6px; color: #9aa3b0; font-weight: 600; }
+	p { margin: 6px 0; }
+	ul { list-style: none; margin: 0; padding: 0; }
+	li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+	.name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tag { color: #6f7787; font-size: 12px; white-space: nowrap; }
+	.err { color: #e08080; white-space: pre-wrap; }
+	.muted { color: #6f7787; }
+	.row { display: flex; gap: 8px; margin: 8px 0; }
+	.row input { flex: 1; }
+	button, input { font: inherit; color: inherit; background: #1d2026; border: 1px solid #2e333d; border-radius: 6px; padding: 6px 10px; }
+	button { cursor: pointer; }
+	button:hover:not(:disabled) { border-color: #4a5262; }
+	button:disabled { opacity: 0.5; cursor: default; }
+	#flow { border: 1px solid #2e333d; border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+	#flow a { color: #7ab8ff; }
+	footer { margin-top: 30px; }
+</style>
+<main>
+	<header>
+		<h1 id="title"></h1>
+		<button id="close" type="button"></button>
+	</header>
+	<p id="boot" class="err" hidden></p>
+	<section id="uiSection" hidden>
+		<h2 id="uiTitle"></h2>
+		<ul id="uiList"></ul>
+		<p id="uiNone" class="muted" hidden></p>
+	</section>
+	<section>
+		<h2 id="modelTitle"></h2>
+		<p id="current"></p>
+		<div id="providers"></div>
+		<div id="flow" hidden>
+			<div id="notices"></div>
+			<div id="promptArea"></div>
+		</div>
+		<div id="models">
+			<div class="row">
+				<input id="search" type="search">
+				<button id="all" type="button"></button>
+			</div>
+			<ul id="modelList"></ul>
+		</div>
+	</section>
+	<footer><p id="advanced" class="muted"></p></footer>
+</main>
+<script>
+(() => {
+"use strict";
+const cave = window.cave;
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls !== undefined) n.className = cls; return n; };
+const button = (label, onClick) => { const b = el("button", label); b.type = "button"; b.onclick = onClick; return b; };
+const link = (url, label) => { const a = el("a", label); a.href = url; a.target = "_blank"; a.rel = "noreferrer"; return a; };
+
+(async () => {
+	if (!cave) { $("boot").hidden = false; $("boot").textContent = "window.cave 不可用"; return; }
+	const q = new URLSearchParams(location.search);
+	const meta = await cave.strings();
+	const t = (key, args) => { let s = meta.strings[key] ?? key; if (args) for (const k of Object.keys(args)) s = s.split(`{${k}}`).join(String(args[k])); return s; };
+	let settingsObj = await cave.settings();
+	let allModels = [];
+	let showAll = false;
+
+	document.title = t("title");
+	$("title").textContent = t("title");
+	$("close").textContent = t("close");
+	$("close").onclick = () => window.close();
+	$("modelTitle").textContent = t("model.section");
+	$("advanced").textContent = t("login.advanced", { dir: meta.configDir });
+	$("search").placeholder = t("model.search");
+	$("all").textContent = t("model.all");
+	$("search").oninput = drawModels;
+	$("all").onclick = () => { showAll = !showAll; $("all").textContent = showAll ? t("model.available") : t("model.all"); drawModels(); };
+
+	if (q.get("boot") === "1") {
+		$("boot").hidden = false;
+		$("boot").textContent = `${t("boot.title")}：${q.get("error") ?? ""}`;
+		$("uiSection").hidden = false;
+		$("uiTitle").textContent = t("ui.section");
+		await renderUis();
+	}
+	refreshCurrent();
+	await renderProviders();
+	await renderModels();
+
+	function refreshCurrent() {
+		$("current").textContent = `${t("model.current")}：${typeof settingsObj.model === "string" ? settingsObj.model : t("model.none")}`;
+	}
+
+	async function renderUis() {
+		let uis;
+		try { uis = await cave.uis(); }
+		catch (e) { $("uiNone").hidden = false; $("uiNone").textContent = String(e?.message ?? e); return; }
+		$("uiNone").hidden = uis.length > 0;
+		$("uiNone").textContent = t("ui.none");
+		const list = $("uiList");
+		list.replaceChildren();
+		for (const u of uis) {
+			const li = document.createElement("li");
+			const scope = u.game ? `（${u.game.join(", ")}）` : "";
+			const current = u.name === settingsObj.ui ? ` · ${t("ui.current")}` : "";
+			li.append(el("span", `${u.name}${scope}${current}`, "name"));
+			li.append(button(t("ui.use"), () => cave.use(u.name)));
+			list.append(li);
+		}
+	}
+
+	async function renderProviders() {
+		const box = $("providers");
+		box.replaceChildren(el("p", t("model.loading"), "muted"));
+		let providers;
+		try { providers = await cave.auth.providers(); }
+		catch (e) { box.replaceChildren(el("p", String(e?.message ?? e), "err")); return; }
+		const list = document.createElement("ul");
+		for (const p of providers) {
+			const li = document.createElement("li");
+			li.append(el("span", p.name, "name"));
+			li.append(el("span", p.configured ? `${t("model.configured")}${p.label ? `（${p.label}）` : ""}` : t("provider.unconfigured"), "tag"));
+			if (p.apiKey?.login) li.append(button(t("model.apiKey"), () => void startLogin(p.id, "api_key")));
+			if (p.oauth) li.append(button(p.oauth.label || t("model.oauth"), () => void startLogin(p.id, "oauth")));
+			if (p.configured) li.append(button(t("model.logout"), async () => { await cave.auth.logout(p.id); await refreshProvidersAndModels(); }));
+			list.append(li);
+		}
+		box.replaceChildren(list);
+	}
+
+	async function refreshProvidersAndModels() {
+		settingsObj = await cave.settings();
+		refreshCurrent();
+		await renderProviders();
+		await renderModels();
+	}
+
+	async function startLogin(provider, type) {
+		$("flow").hidden = false;
+		$("notices").replaceChildren();
+		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
+		const offPrompt = cave.auth.onPrompt(({ flow, prompt }) => renderPrompt(flow, prompt));
+		const offNotice = cave.auth.onNotice(({ flow, notice }) => renderNotice(notice));
+		try {
+			await cave.auth.login(provider, type);
+			$("promptArea").replaceChildren(el("p", t("login.done"), "muted"));
+		} catch (e) {
+			$("promptArea").replaceChildren(el("p", `${t("login.failed")}：${String(e?.message ?? e)}`, "err"));
+		} finally {
+			offPrompt();
+			offNotice();
+			await refreshProvidersAndModels();
+		}
+	}
+
+	function renderPrompt(flow, prompt) {
+		const area = $("promptArea");
+		area.replaceChildren(el("p", prompt.message));
+		if (prompt.type === "select") {
+			for (const opt of prompt.options ?? []) area.append(button(`${opt.label}${opt.description ? ` — ${opt.description}` : ""}`, () => answer(flow, opt.id)));
+			return;
+		}
+		const row = document.createElement("div");
+		row.className = "row";
+		const input = document.createElement("input");
+		input.type = prompt.type === "secret" ? "password" : "text";
+		input.placeholder = prompt.placeholder ?? "";
+		const submit = button(t("login.submit"), () => answer(flow, input.value));
+		input.addEventListener("keydown", (e) => { if (e.key === "Enter") answer(flow, input.value); });
+		row.append(input, submit);
+		area.append(row);
+		input.focus();
+	}
+
+	function answer(flow, value) {
+		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
+		void cave.auth.answer(flow, value).catch((e) => $("promptArea").replaceChildren(el("p", String(e?.message ?? e), "err")));
+	}
+
+	function renderNotice(notice) {
+		const box = $("notices");
+		if (notice.type === "info") {
+			box.append(el("p", notice.message));
+			for (const l of notice.links ?? []) box.append(link(l.url, l.label ?? l.url));
+		} else if (notice.type === "auth_url") {
+			box.append(link(notice.url, t("login.url")));
+			if (notice.instructions) box.append(el("p", notice.instructions, "muted"));
+		} else if (notice.type === "device_code") {
+			box.append(el("p", t("login.device", { uri: notice.verificationUri, code: notice.userCode })));
+		} else if (notice.type === "progress") {
+			box.append(el("p", notice.message, "muted"));
+		}
+	}
+
+	async function renderModels() {
+		const list = $("modelList");
+		list.replaceChildren(el("li", t("model.loading"), "muted"));
+		try { allModels = await cave.models(); }
+		catch (e) { list.replaceChildren(el("li", String(e?.message ?? e), "err")); return; }
+		drawModels();
+	}
+
+	function drawModels() {
+		const query = $("search").value.trim().toLowerCase();
+		const current = typeof settingsObj.model === "string" ? settingsObj.model : "";
+		const list = $("modelList");
+		list.replaceChildren();
+		const rows = allModels.filter((m) => (showAll || m.available) && (query === "" || m.ref.toLowerCase().includes(query) || m.name.toLowerCase().includes(query)));
+		if (rows.length === 0) { list.append(el("li", t("model.empty"), "muted")); return; }
+		for (const m of rows.slice(0, 200)) {
+			const li = document.createElement("li");
+			li.append(el("span", m.ref === current ? `${m.name} · ${t("ui.current")}` : m.name, "name"));
+			if (!m.available) li.append(el("span", t("model.unconfigured"), "tag"));
+			const use = button(t("model.choose"), async () => {
+				use.disabled = true;
+				try { await cave.setSettings({ model: m.ref }); settingsObj = await cave.settings(); refreshCurrent(); drawModels(); }
+				catch (e) { alert(String(e?.message ?? e)); }
+				finally { use.disabled = false; }
+			});
+			li.append(use);
+			list.append(li);
+		}
+	}
+})();
+})();
+</script>
+</html>

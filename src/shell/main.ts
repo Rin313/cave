@@ -1,12 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { parseRecordLines } from "../core/archive.ts";
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { errorText, spineLines, verbFace, type SlotDef } from "../core/sim.ts";
-import { configDir, dataDir, runPaths } from "../core/paths.ts";
+import { configDir, dataDir, readJsonObject, runPaths, writeJson } from "../core/paths.ts";
 import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
 
@@ -50,6 +50,10 @@ const CONFIG_DIR = configDir(USER_DATA);
 const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 /** 设置查序：用户配置 → 分发缺省（仅打包）。 */
 const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
+/** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
+const SETUP_FILE = join(import.meta.dirname, "setup.html");
+/** 壳自有文案查序：内置 zh 打底 → 包外资源 → 用户配置；SDK 文案不入口。 */
+const LOCALE_DIRS = app.isPackaged ? [join(RESOURCE_ROOT, "locales"), join(CONFIG_DIR, "locales")] : [join(CONFIG_DIR, "locales")];
 
 let runtime: Promise<ModelRuntime> | null = null;
 /** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效。 */
@@ -124,17 +128,12 @@ function uiNames(): string[] {
 	return [...names];
 }
 
-/** 设置按文件优先级读取（高优先在前）；破损设置视同缺席，启动失败信息会列出可用界面。 */
+/** 设置按文件优先级读取（高优先在前）；破损设置视同缺席。 */
 function loadSettings(): Record<string, unknown>[] {
 	const files: Record<string, unknown>[] = [];
 	for (const file of SETTINGS_FILES) {
-		if (!existsSync(file)) continue;
-		try {
-			const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-			if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) files.push(parsed as Record<string, unknown>);
-		} catch {
-			// 破损设置视同缺席
-		}
+		const parsed = readJsonObject(file);
+		if (parsed !== null) files.push(parsed);
 	}
 	return files;
 }
@@ -161,11 +160,10 @@ function settings(): Record<string, unknown> {
 
 /** 写入用户级设置文件：当前合并态 + patch；分发缺省因此固化到用户文件。 */
 function saveSettings(patch: Record<string, unknown>): void {
-	mkdirSync(CONFIG_DIR, { recursive: true });
-	writeFileSync(SETTINGS_FILE, `${JSON.stringify(Object.assign(settings(), patch), null, "\t")}\n`, "utf8");
+	writeJson(SETTINGS_FILE, Object.assign(settings(), patch));
 }
 
-/** 初始界面：settings.json 指定者优先，其次唯一可用界面；不猜、不兜底（shell 不自带界面）。 */
+/** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
 function bootUi(): UiSite {
 	const named = readUiSetting();
 	if (named !== undefined) {
@@ -178,26 +176,37 @@ function bootUi(): UiSite {
 	throw new Error(`未指定界面：可用 ${sites.map((s) => s.name).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<name>" } 或 { "uis": { "<game>": "<name>" } }`);
 }
 
-let ui: UiSite;
+let ui: UiSite | null = null;
+let bootError: string | null = null;
 try {
 	ui = bootUi();
 } catch (e) {
-	console.error(errorText(e));
-	dialog.showErrorBox("cave 无法启动", errorText(e));
-	process.exit(2);
+	bootError = errorText(e);
+	console.error(bootError);
 }
 
-/** 配置面是内容：settingsUi 指定，缺省保留名 settings；壳不渲染也不解释其内部。 */
-function configUiName(): string {
+/** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即壳内引导面。 */
+function settingsSite(): UiSite | null {
 	for (const parsed of loadSettings()) {
 		const name = parsed.settingsUi;
 		if (typeof name === "string") {
-			if (uiSite(name) === null) throw new Error(`未知配置界面：${name}（可用：${uiNames().join(", ") || "无"}）`);
-			return name;
+			const site = uiSite(name);
+			if (site === null) throw new Error(`未知配置界面：${name}（可用：${uiNames().join(", ") || "无"}）`);
+			return site;
 		}
 	}
-	if (uiSite("settings") !== null) return "settings";
-	throw new Error(`没有配置界面：${UI_ROOTS.join(" 或 ")} 下放置 settings/index.html，或在 ${SETTINGS_FILE} 写入 { "settingsUi": "<name>" }；也可直接配置 ${SETTINGS_FILE} 与 ${join(CONFIG_DIR, "auth.json")}（与 CLI 共用）`);
+	return null;
+}
+
+/** 壳自有文案：内置 zh 打底，包外资源与用户配置逐层覆盖。 */
+function localeStrings(): { locale: string; strings: Record<string, string> } {
+	const chosen = settings().locale;
+	const locale = typeof chosen === "string" && chosen.trim() !== "" ? chosen : "zh";
+	const strings: Record<string, string> = {};
+	for (const file of [join(import.meta.dirname, "locales", "zh.json"), ...LOCALE_DIRS.map((dir) => join(dir, `${locale}.json`))]) {
+		for (const [k, v] of Object.entries(readJsonObject(file) ?? {})) if (typeof v === "string") strings[k] = v;
+	}
+	return { locale, strings };
 }
 
 function windowOptions(): BrowserWindowConstructorOptions {
@@ -220,8 +229,6 @@ function externalLinks(w: BrowserWindow): void {
 }
 
 function openSettings(): void {
-	const site = uiSite(configUiName());
-	if (site === null) throw new Error("配置界面不可用");
 	if (settingsWin !== null && !settingsWin.isDestroyed()) {
 		settingsWin.focus();
 		return;
@@ -231,7 +238,7 @@ function openSettings(): void {
 	settingsWin.on("closed", () => {
 		settingsWin = null;
 	});
-	void settingsWin.loadFile(site.file);
+	void settingsWin.loadFile(settingsSite()?.file ?? SETUP_FILE);
 }
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
@@ -399,6 +406,8 @@ ipcMain.handle("cave:use", (_event, req: { name?: unknown }) => {
 
 ipcMain.handle("cave:settings", () => settings());
 
+ipcMain.handle("cave:strings", () => ({ ...localeStrings(), configDir: CONFIG_DIR }));
+
 ipcMain.handle("cave:settings:set", async (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
@@ -492,7 +501,8 @@ app.whenReady().then(() => {
 		win = null;
 		closeAll();
 	});
-	void win.loadFile(ui.file);
+	if (ui !== null) void win.loadFile(ui.file);
+	else void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
 });
 
 app.on("window-all-closed", () => app.quit());
