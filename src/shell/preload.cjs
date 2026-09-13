@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("cave", {
 	games: () => ipcRenderer.invoke("cave:games"),
-	runs: (game) => (game === undefined ? ipcRenderer.invoke("cave:runs") : ipcRenderer.invoke("cave:runs", { game })),
+	runs: (game) => ipcRenderer.invoke("cave:runs", { game }),
 	records: (game, run) => ipcRenderer.invoke("cave:records", { game, run }),
 	sessions: () => ipcRenderer.invoke("cave:sessions"),
 	def: (game) => ipcRenderer.invoke("cave:def", { game }),
@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld("cave", {
 	act: (game, run, utterance) => ipcRenderer.invoke("cave:act", { game, run, utterance }),
 	narrate: (game, run, instruction) => ipcRenderer.invoke("cave:narrate", { game, run, instruction }),
 	state: (game, run) => ipcRenderer.invoke("cave:state", { game, run }),
-	uis: (game) => (game === undefined ? ipcRenderer.invoke("cave:uis") : ipcRenderer.invoke("cave:uis", { game })),
+	uis: (game) => ipcRenderer.invoke("cave:uis", { game }),
 	use: (name) => ipcRenderer.invoke("cave:use", { name }),
 	settings: () => ipcRenderer.invoke("cave:settings"),
 	env: () => ipcRenderer.invoke("cave:env"),

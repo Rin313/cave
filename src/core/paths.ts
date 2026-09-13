@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { errorText } from "./sim.ts";
 
 /** 无宿主（CLI）时按平台约定复算 Electron userData。 */
 function platformUserData(): string {
@@ -31,15 +32,17 @@ export function runPaths(game: string, run: string, root = dataDir()): RunPaths 
 	return { dir, records: join(dir, "records.jsonl"), session: join(dir, "session.jsonl") };
 }
 
-/** JSON 对象文件读写：缺席、坏内容、非对象一律视同缺席；写侧建目录并带换行。 */
-export function readJsonObject(file: string): Record<string, unknown> | null {
+/** JSON 对象文件：缺席返回 null；坏内容与非对象返回 value=null 与错误文本（自带位置）。 */
+export function readJsonObject(file: string): { value: Record<string, unknown> | null; error?: string } | null {
 	if (!existsSync(file)) return null;
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-		return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
-	} catch {
-		return null;
+		parsed = JSON.parse(readFileSync(file, "utf8"));
+	} catch (e) {
+		return { value: null, error: `解析失败（${file}）：${errorText(e)}` };
 	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: null, error: `须为 JSON 对象（${file}）` };
+	return { value: parsed as Record<string, unknown> };
 }
 
 export function writeJson(file: string, value: unknown): void {

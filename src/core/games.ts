@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readJsonObject } from "./paths.ts";
 import * as core from "./sim.ts";
 import { errorText, type GameDef } from "./sim.ts";
 
@@ -42,18 +43,10 @@ export type GameMeta = Record<string, unknown>;
 export function readGameMeta(id: string, roots: readonly string[]): { meta: GameMeta; error?: string } | null {
 	const entry = gameFile(id, roots);
 	if (entry === null) return null;
-	const file = join(dirname(entry), "game.json");
-	if (!existsSync(file)) return { meta: {} };
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(readFileSync(file, "utf8"));
-	} catch (e) {
-		return { meta: {}, error: `游戏元数据解析失败（${file}）：${errorText(e)}` };
-	}
-	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-		return { meta: {}, error: `游戏元数据须为 JSON 对象（${file}）` };
-	}
-	return { meta: parsed as GameMeta };
+	const parsed = readJsonObject(join(dirname(entry), "game.json"));
+	if (parsed === null) return { meta: {} };
+	if (parsed.value === null) return { meta: {}, error: `游戏元数据${parsed.error}` };
+	return { meta: parsed.value };
 }
 
 /** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂。模块缓存按进程：改文件后须重启进程（CLI 每命令新进程，壳重启即生效）。 */

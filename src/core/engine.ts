@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { recentEntries, pruneContext, verbatim } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 /** 会话材料：只在会话按需建立时解析；装载与浏览不需要模型。 */
 export interface AgentSpec {
@@ -34,6 +34,9 @@ type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
 export interface ActOutcome {
 	steps: Commit[];
+	/** 回合变更行与新增呈现：与工具结果同源，一次投影。 */
+	lines: string[];
+	reveals: (Card | Handle)[];
 	narration: string;
 	warnings: string[];
 	usage: TokenUsage[];
@@ -64,6 +67,8 @@ interface RunState {
 	messageStart: number;
 	entryStart: number;
 	steps: Commit[];
+	lines: string[];
+	reveals: (Card | Handle)[];
 	warnings: string[];
 }
 
@@ -139,7 +144,7 @@ export class Engine {
 		const loadWarnings = loaded?.warnings ?? [];
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", messageStart: 0, entryStart: 0, steps: [], warnings: [] };
+		const run: RunState = { phase: "mapping", messageStart: 0, entryStart: 0, steps: [], lines: [], reveals: [], warnings: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
@@ -220,6 +225,8 @@ export class Engine {
 		r.entryStart = session.sessionManager.getEntries().length;
 		r.warnings = [];
 		r.steps = [];
+		r.lines = [];
+		r.reveals = [];
 	}
 
 	async act(action: { utterance: string }): Promise<ActOutcome> {
@@ -248,6 +255,8 @@ export class Engine {
 		this.updateRecent();
 		return {
 			steps: this.run.steps,
+			lines: this.run.lines,
+			reveals: this.run.reveals,
 			narration,
 			warnings: this.run.warnings,
 			usage: this.collectUsage(session),
@@ -467,23 +476,23 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledg
 				ledger.dead = `定稿落盘失败：${errorText(e)}`;
 				run.warnings.push(ledger.dead);
 			}
-			// 事件行与新增呈现分相投影：任一相失灵只降级该相，账目已在定稿
-			let lines: string[];
+			// 事件行与新增呈现分相投影：任一相失灵只降级该相，账目已在定稿；结果即回合呈现，不重算
 			let projected = false;
 			try {
-				lines = spineLines(sim, steps, sim.snapshot());
+				run.lines = spineLines(sim, steps, sim.snapshot());
 				projected = true;
 			} catch (e) {
 				run.warnings.push(`事件投影抛错：${errorText(e)}`);
-				lines = [interruptedText(def)];
+				run.lines = [];
 			}
-			if (!crashed && projected) {
-				try {
-					for (const item of sim.reveals(steps)) lines.push(JSON.stringify(item));
-				} catch (e) {
-					run.warnings.push(`新见段投影抛错：${errorText(e)}`);
-				}
+			try {
+				run.reveals = sim.reveals(steps);
+			} catch (e) {
+				run.warnings.push(`新见段投影抛错：${errorText(e)}`);
+				run.reveals = [];
 			}
+			const lines = projected ? [...run.lines] : [interruptedText(def)];
+			if (!crashed && projected) for (const item of run.reveals) lines.push(JSON.stringify(item));
 			// say 失灵直取 noResponse：呈现缺陷不得丢弃已定稿的账目
 			const say = (speech: Speech): string => {
 				try {

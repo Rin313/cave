@@ -7,7 +7,7 @@ type Prompt = Parameters<Interaction["prompt"]>[0];
 type Notice = Parameters<Interaction["notify"]>[0];
 
 /** 配置协议：只转发 SDK 的目录与交互，不自产文案；配置面是内容。 */
-export interface ProviderInfo {
+interface ProviderInfo {
 	id: string;
 	name: string;
 	configured: boolean;
@@ -18,7 +18,7 @@ export interface ProviderInfo {
 	oauth?: { label: string; subscription: boolean };
 }
 
-export interface ModelRef {
+interface ModelRef {
 	ref: string;
 	provider: string;
 	id: string;
@@ -26,11 +26,11 @@ export interface ModelRef {
 	available: boolean;
 }
 
-export type PromptPayload =
+type PromptPayload =
 	| { type: "text" | "secret" | "manual_code"; message: string; placeholder?: string }
 	| { type: "select"; message: string; options: readonly { id: string; label: string; description?: string }[] };
 
-export type NoticePayload =
+type NoticePayload =
 	| { type: "info"; message: string; links?: readonly { url: string; label?: string }[] }
 	| { type: "auth_url"; url: string; instructions?: string }
 	| { type: "device_code"; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
