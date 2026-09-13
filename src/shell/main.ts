@@ -69,38 +69,23 @@ function segment(v: unknown): v is string {
 	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/]/.test(v);
 }
 
-/** 界面作用域：null 即通用；游戏自带界面缺省绑定其 game，ui.json 的 game 可覆盖或扩为多个。坏元数据回落隐式作用域并携错，界面不因此不可用。 */
-function uiMeta(dir: string, implicit: string[] | null): { scope: string[] | null; error?: string } {
-	const file = join(dir, "ui.json");
-	const read = readJsonObject(file);
-	if (read === null) return { scope: implicit };
-	if (read.value === null) return { scope: implicit, error: `界面元数据${read.error}` };
-	const declared = read.value.game;
-	if (declared === undefined) return { scope: implicit };
-	const list = typeof declared === "string" ? [declared] : Array.isArray(declared) ? declared : null;
-	if (list === null || list.length === 0 || !list.every((g) => segment(g))) return { scope: implicit, error: `界面元数据的 game 须为非空游戏 id 或非空数组（${file}）` };
-	return { scope: [...list] };
-}
-
 interface UiSite {
 	name: string;
 	file: string;
-	scope: string[] | null;
-	error?: string;
+	/** 作用域由位置给出：games/<id>/ui 绑定 id，ui/<name> 恒通用。 */
+	game: string | null;
 }
 
 /** 界面位置：全局在前，游戏自带在后；名称即目录名（游戏自带的即 game id）。 */
 function uiSite(name: string): UiSite | null {
 	if (!segment(name)) return null;
 	for (const root of UI_ROOTS) {
-		const dir = join(root, name);
-		const file = join(dir, "index.html");
-		if (existsSync(file)) return { name, file, ...uiMeta(dir, null) };
+		const file = join(root, name, "index.html");
+		if (existsSync(file)) return { name, file, game: null };
 	}
 	for (const root of CONTENT_ROOTS) {
-		const dir = join(root, "games", name, "ui");
-		const file = join(dir, "index.html");
-		if (existsSync(file)) return { name, file, ...uiMeta(dir, [name]) };
+		const file = join(root, "games", name, "ui", "index.html");
+		if (existsSync(file)) return { name, file, game: name };
 	}
 	return null;
 }
@@ -112,8 +97,8 @@ function uiSites(): UiSite[] {
 		if (!existsSync(root)) continue;
 		for (const entry of readdirSync(root, { withFileTypes: true })) {
 			if (!entry.isDirectory() || sites.has(entry.name)) continue;
-			const dir = join(root, entry.name);
-			if (existsSync(join(dir, "index.html"))) sites.set(entry.name, { name: entry.name, file: join(dir, "index.html"), ...uiMeta(dir, null) });
+			const file = join(root, entry.name, "index.html");
+			if (existsSync(file)) sites.set(entry.name, { name: entry.name, file, game: null });
 		}
 	}
 	for (const root of CONTENT_ROOTS) {
@@ -121,8 +106,8 @@ function uiSites(): UiSite[] {
 		if (!existsSync(dir)) continue;
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			if (!entry.isDirectory() || sites.has(entry.name)) continue;
-			const gameUi = join(dir, entry.name, "ui");
-			if (existsSync(join(gameUi, "index.html"))) sites.set(entry.name, { name: entry.name, file: join(gameUi, "index.html"), ...uiMeta(gameUi, [entry.name]) });
+			const file = join(dir, entry.name, "ui", "index.html");
+			if (existsSync(file)) sites.set(entry.name, { name: entry.name, file, game: entry.name });
 		}
 	}
 	return [...sites.values()];
@@ -351,10 +336,9 @@ function slotFace(slots: Record<string, SlotDef> | undefined): SlotFace[] {
 	}));
 }
 
-const uiFace = (site: UiSite): { name: string; game?: string[]; error?: string } => ({
+const uiFace = (site: UiSite): { name: string; game?: string } => ({
 	name: site.name,
-	...(site.scope !== null && { game: site.scope }),
-	...(site.error !== undefined && { error: site.error }),
+	...(site.game !== null && { game: site.game }),
 });
 
 ipcMain.handle("cave:games", () => listGames(CONTENT_ROOTS));
@@ -393,7 +377,7 @@ ipcMain.handle("cave:def", async (_event, req: { game?: unknown } | undefined) =
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
 ipcMain.handle("cave:uis", (_event, req: { game?: unknown } | undefined) => {
 	const game = gameId(req, "uis");
-	const compatible = uiSites().filter((s) => s.scope === null || game === undefined || s.scope.includes(game));
+	const compatible = uiSites().filter((s) => s.game === null || game === undefined || s.game === game);
 	compatible.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 	return compatible.map(uiFace);
 });

@@ -140,7 +140,7 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 		list.replaceChildren();
 		for (const u of uis) {
 			const li = document.createElement("li");
-			const scope = u.game ? `（${u.game.join(", ")}）` : "";
+			const scope = u.game ? `（${u.game}）` : "";
 			const current = u.name === settingsObj.ui ? ` · ${t("ui.current")}` : "";
 			li.append(el("span", `${u.name}${scope}${current}`, "name"));
 			li.append(button(t("ui.use"), () => cave.use(u.name)));
