@@ -141,17 +141,6 @@ function readUiSetting(): string | undefined {
 	return undefined;
 }
 
-/** 按 game 的界面偏好：高优先文件先见，逐 game 覆盖。 */
-function readUiChoice(game: string): string | undefined {
-	for (const parsed of loadSettings()) {
-		const uis = parsed.uis;
-		if (uis === null || typeof uis !== "object" || Array.isArray(uis)) continue;
-		const name = (uis as Record<string, unknown>)[game];
-		if (typeof name === "string") return name;
-	}
-	return undefined;
-}
-
 function settings(): Record<string, unknown> {
 	return Object.assign({}, ...loadSettings().reverse());
 }
@@ -171,7 +160,7 @@ function bootUi(): UiSite {
 	const sites = uiNames().map(uiSite).filter((s): s is UiSite => s !== null);
 	if (sites.length === 1) return sites[0]!;
 	if (sites.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置游戏自带界面`);
-	throw new Error(`未指定界面：可用 ${sites.map((s) => s.name).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<name>" } 或 { "uis": { "<game>": "<name>" } }`);
+	throw new Error(`未指定界面：可用 ${sites.map((s) => s.name).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<name>" }`);
 }
 
 let ui: UiSite | null = null;
@@ -365,20 +354,13 @@ ipcMain.handle("cave:def", async (_event, req: { game?: unknown } | undefined) =
 	return { game: req.game, verbs: verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
-/** 界面清单：带 game 即按作用域过滤（启动器菜单），用户偏好置顶；序稳定。 */
+/** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
 ipcMain.handle("cave:uis", (_event, req: { game?: unknown } | undefined) => {
 	const game = req?.game;
 	if (game !== undefined && !segment(game)) throw new Error("uis 的 game 须为游戏 id");
 	const sites = uiNames().map(uiSite).filter((s): s is UiSite => s !== null);
 	const compatible = sites.filter((s) => s.scope === null || game === undefined || s.scope.includes(game));
 	compatible.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-	if (game !== undefined) {
-		const chosen = readUiChoice(game);
-		if (chosen !== undefined) {
-			const site = uiSite(chosen);
-			if (site !== null) return [uiFace(site), ...compatible.filter((s) => s.name !== site.name).map(uiFace)];
-		}
-	}
 	return compatible.map(uiFace);
 });
 
@@ -401,13 +383,6 @@ ipcMain.handle("cave:settings:set", async (_event, req: { patch?: unknown }) => 
 	for (const key of ["ui", "settingsUi"] as const) {
 		const name = patch[key];
 		if (typeof name === "string" && uiSite(name) === null) throw new Error(`未知界面（${key}）：${name}（可用：${uiNames().join(", ") || "无"}）`);
-	}
-	if (patch.uis !== undefined) {
-		const uis = patch.uis;
-		if (uis === null || typeof uis !== "object" || Array.isArray(uis)) throw new Error("uis 须为 { <game>: <界面名> }");
-		for (const [game, name] of Object.entries(uis as Record<string, unknown>)) {
-			if (!segment(game) || !segment(name) || uiSite(name) === null) throw new Error(`未知界面偏好：${game} → ${String(name)}`);
-		}
 	}
 	if (typeof patch.model === "string") {
 		const { model, error } = resolveCliModel({ cliModel: patch.model, modelRuntime: await modelRuntime() });
