@@ -52,7 +52,7 @@ const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
-/** 壳自有文案查序：内置 zh 打底 → 包外资源 → 用户配置；SDK 文案不入口。 */
+/** 外部文案覆盖查序：包外资源 → 用户配置；内置面（setup.html）自带缺省，SDK 文案不入口。 */
 const LOCALE_DIRS = app.isPackaged ? [join(RESOURCE_ROOT, "locales"), join(CONFIG_DIR, "locales")] : [join(CONFIG_DIR, "locales")];
 
 let runtime: Promise<ModelRuntime> | null = null;
@@ -198,13 +198,13 @@ function settingsSite(): UiSite | null {
 	return null;
 }
 
-/** 壳自有文案：内置 zh 打底，包外资源与用户配置逐层覆盖。 */
+/** 外部文案覆盖：包外资源与用户配置逐层覆盖；内置缺省在 setup.html 内。 */
 function localeStrings(): { locale: string; strings: Record<string, string> } {
 	const chosen = settings().locale;
 	const locale = typeof chosen === "string" && chosen.trim() !== "" ? chosen : "zh";
 	const strings: Record<string, string> = {};
-	for (const file of [join(import.meta.dirname, "locales", "zh.json"), ...LOCALE_DIRS.map((dir) => join(dir, `${locale}.json`))]) {
-		for (const [k, v] of Object.entries(readJsonObject(file) ?? {})) if (typeof v === "string") strings[k] = v;
+	for (const dir of LOCALE_DIRS) {
+		for (const [k, v] of Object.entries(readJsonObject(join(dir, `${locale}.json`)) ?? {})) if (typeof v === "string") strings[k] = v;
 	}
 	return { locale, strings };
 }

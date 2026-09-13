@@ -68,7 +68,38 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 	if (!cave) { $("boot").hidden = false; $("boot").textContent = "window.cave 不可用"; return; }
 	const q = new URLSearchParams(location.search);
 	const meta = await cave.strings();
-	const t = (key, args) => { let s = meta.strings[key] ?? key; if (args) for (const k of Object.keys(args)) s = s.split(`{${k}}`).join(String(args[k])); return s; };
+	const defaults = {
+		"title": "配置",
+		"close": "完成",
+		"boot.title": "界面未能自动解析",
+		"ui.section": "界面",
+		"ui.current": "当前",
+		"ui.use": "使用",
+		"ui.none": "没有可用界面：在数据根 ui/<name>/index.html 或 games/<id>/ui 放置界面。",
+		"model.section": "模型与凭据",
+		"model.current": "当前模型",
+		"model.none": "未配置",
+		"model.loading": "加载…",
+		"model.configured": "已配置",
+		"provider.unconfigured": "未配置",
+		"model.unconfigured": "未配置凭据",
+		"model.logout": "退出登录",
+		"model.apiKey": "使用 API key",
+		"model.oauth": "登录",
+		"model.search": "筛选",
+		"model.all": "显示全部",
+		"model.available": "仅显示可用",
+		"model.empty": "没有匹配的模型",
+		"model.choose": "使用",
+		"login.waiting": "等待登录…",
+		"login.submit": "确定",
+		"login.done": "已完成。",
+		"login.failed": "登录失败",
+		"login.url": "打开授权链接",
+		"login.device": "在 {uri} 输入代码 {code}",
+		"login.advanced": "高级：直接编辑 {dir} 下的 settings.json 与 auth.json（与 CLI 共用）。",
+	};
+	const t = (key, args) => { let s = meta.strings[key] ?? defaults[key] ?? key; if (args) for (const k of Object.keys(args)) s = s.split(`{${k}}`).join(String(args[k])); return s; };
 	let settingsObj = await cave.settings();
 	let allModels = [];
 	let showAll = false;
