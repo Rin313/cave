@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel, SessionManager } from "@earendil-works/pi-coding-agent";
 import { openArchive } from "../core/archive.ts";
 import { Engine } from "../core/engine.ts";
+import { loadGame } from "../core/games.ts";
 import { errorText } from "../core/sim.ts";
-import { getGame } from "../games/registry.ts";
 
 /** 一次运行的全部落盘位置；终端与 shell 两宿主共用同一约定。root 即数据根：终端用 cwd，打包的 shell 用 userData。 */
 export interface RunPaths {
@@ -66,8 +66,8 @@ function modelErrorReason(error: string | undefined): string {
 	return (error ?? "未解析到模型").replace(/ Use --[\s\S]*$/, "");
 }
 
-/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写。 */
-export async function openRun(game: string, run: string, root = "."): Promise<Engine> {
+/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写。root 是数据根（runs 与缺省 games 位置），gameRoots 是游戏查找链（先见者遮蔽）。 */
+export async function openRun(game: string, run: string, root = ".", gameRoots: readonly string[] = [root]): Promise<Engine> {
 	const paths = runPaths(game, run, root);
 	const config = configDir();
 	const { ref, source } = modelReference(game, config);
@@ -78,7 +78,7 @@ export async function openRun(game: string, run: string, root = "."): Promise<En
 	if (!(await modelRuntime.checkAuth(model.provider))) {
 		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(config, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
 	}
-	return Engine.create(getGame(game), {
+	return Engine.create(await loadGame(game, gameRoots), {
 		model,
 		modelRuntime,
 		agentDir: config,

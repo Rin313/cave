@@ -6,9 +6,9 @@ package.json
 tsconfig.json
 src/
   core/
-  games/
   tools/
   shell/
+games/
 scenarios/
 
 # Standards

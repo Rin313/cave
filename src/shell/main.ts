@@ -2,8 +2,8 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Engine } from "../core/engine.ts";
+import { listGames } from "../core/games.ts";
 import { errorText, spineLines } from "../core/sim.ts";
-import { GAMES } from "../games/registry.ts";
 import { configDir, openRun, runPaths } from "../tools/runs.ts";
 
 interface Current {
@@ -18,6 +18,8 @@ let current: Current | null = null;
 
 const APP_ROOT = app.getAppPath();
 const DATA_ROOT = app.isPackaged ? app.getPath("userData") : APP_ROOT;
+/** 游戏查找链：用户目录（可写、可覆盖）→ 包内；同名前者遮蔽后者。 */
+const GAME_ROOTS = [DATA_ROOT, APP_ROOT];
 /** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按 DATA_ROOT。 */
 const CONFIG_DIR = configDir();
 /** 界面查序：用户目录（可写、可覆盖）→ 包外资源 → 包内；同名前者遮蔽后者。 */
@@ -113,7 +115,7 @@ function pair(req: { game?: unknown; run?: unknown } | undefined): { game: strin
 	return { game: req.game, run: req.run };
 }
 
-ipcMain.handle("cave:games", () => Object.keys(GAMES));
+ipcMain.handle("cave:games", () => listGames(GAME_ROOTS));
 
 ipcMain.handle("cave:uis", () => uis());
 
@@ -130,7 +132,7 @@ ipcMain.handle("cave:use", (_event, req: { name?: unknown }) => {
 ipcMain.handle("cave:open", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	closeCurrent();
-	const engine = await openRun(game, run, DATA_ROOT);
+	const engine = await openRun(game, run, DATA_ROOT, GAME_ROOTS);
 	current = { game, run, engine, unsubscribe: engine.subscribe((event) => win?.webContents.send("cave:event", event)) };
 	return { game, run, ...snapshot(), warnings: [...engine.loadWarnings] };
 });

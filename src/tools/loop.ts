@@ -2,8 +2,8 @@
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { type ActOutcome, type Engine, type TokenUsage } from "../core/engine.ts";
 import { openArchive } from "../core/archive.ts";
+import { loadGame } from "../core/games.ts";
 import { spineLines, type Simulation } from "../core/sim.ts";
-import { getGame } from "../games/registry.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 import { openRun, runPaths, type RunPaths } from "./runs.ts";
 
@@ -133,9 +133,9 @@ async function cmdRender(gameId: string, runId: string, instruction: string): Pr
 	});
 }
 
-function cmdState(gameId: string, runId: string, out: string | undefined): void {
+async function cmdState(gameId: string, runId: string, out: string | undefined): Promise<void> {
 	const { records } = requirePaths(gameId, runId);
-	const def = getGame(gameId);
+	const def = await loadGame(gameId, ["."]);
 	const { sim, lastSeq, warnings } = openArchive(records).load(def);
 	console.log(`【${runId}】${gameId} 已进行 ${lastSeq} 回合`);
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
@@ -187,7 +187,7 @@ async function main() {
 			await cmdRender(gameId, runId, flagStr(a, "instruction") ?? "请用文学笔触重新描写当前场景。");
 			return;
 		case "state":
-			cmdState(gameId, runId, flagStr(a, "out"));
+			await cmdState(gameId, runId, flagStr(a, "out"));
 			return;
 		case "reset":
 			cmdReset(gameId, runId);

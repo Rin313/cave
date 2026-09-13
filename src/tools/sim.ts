@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadGame } from "../core/games.ts";
 import { ProtocolViolation, Simulation, audienceOf, lawOf, refParamsOf, renderDenial, spineLines } from "../core/sim.ts";
 import type { Action, Change, Commit, Denial, GameDef, Q, Rule, Value, VerbDef, Verdict } from "../core/sim.ts";
-import { getGame } from "../games/registry.ts";
 import { devWait, withDevWait } from "./dev.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
@@ -180,9 +180,9 @@ export function runScenario(scenario: Scenario, def: GameDef): ScenarioReport {
 	return { name: scenario.name, passed: reports.filter((r) => r.pass).length, total: reports.length, steps: reports };
 }
 
-function loadScenarioFile(scenarioPath: string): { file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number } {
+async function loadScenarioFile(scenarioPath: string): Promise<{ file: ScenarioFile; reports: ScenarioReport[]; passed: number; total: number }> {
 	const file = JSON.parse(readFileSync(scenarioPath, "utf8")) as ScenarioFile;
-	const def = withDevWait(getGame(file.game));
+	const def = withDevWait(await loadGame(file.game, ["."]));
 	const reports = file.scenarios.map((s) => runScenario(s, def));
 	return {
 		file,
@@ -222,7 +222,7 @@ async function cmdVerify(): Promise<void> {
 	for (const f of files) {
 		const path = join("scenarios", f);
 		try {
-			const { file, reports, passed, total } = loadScenarioFile(path);
+			const { file, reports, passed, total } = await loadScenarioFile(path);
 			console.log(`\n=== ${path}（game: ${file.game}${file.name ? `，${file.name}` : ""}）===`);
 			printReports(reports);
 			console.log(`RESULT: ${passed}/${total} PASS`);
@@ -416,7 +416,7 @@ function probeDef(def: GameDef, maxCombos = 10000): {
 }
 
 async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
-	const def = getGame(gameId);
+	const def = await loadGame(gameId, ["."]);
 	const { rows, grants, grantRows, total, truncated, liveness, tickLiveness } = probeDef(def, maxCombos);
 	console.log(`=== 裁决地图（${gameId}）：所指域穷举 ${total} 个动作${truncated ? "，已达预算截断" : ""} ===`);
 	console.log("法则×动词活性矩阵（域＝初始世界×所指域穷举；✓授予 ✗拒绝 ·弃权 —未达）——零表态的法则是否死法则属作者判读：条件可能随状态演化成立");
