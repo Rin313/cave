@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -23,6 +23,62 @@ export function runPaths(game: string, run: string, root = "."): RunPaths {
 		session: join(dir, "session.jsonl"),
 		transcript: join(dir, "transcript.jsonl"),
 	};
+}
+
+/** 存档目录的派生清单：runs/<game>/<run>/records.jsonl；无记录的目录不是存档。 */
+export interface RunFace {
+	game: string;
+	run: string;
+	turn?: number;
+	time?: number;
+	mtime: number;
+}
+
+/** 尾部读最后一条完好的回合记录（半行与损坏向更早回退）；取不到即省略。 */
+function tailRecord(path: string, size: number): { turn: number; time: number } | null {
+	const fd = openSync(path, "r");
+	try {
+		const start = Math.max(0, size - 64 * 1024);
+		const buf = Buffer.alloc(size - start);
+		const got = readSync(fd, buf, 0, buf.length, start);
+		const lines = buf.subarray(0, got).toString("utf8").split("\n");
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const line = lines[i]!.trim();
+			if (line === "") continue;
+			try {
+				const v = JSON.parse(line) as { seq?: unknown; time?: unknown };
+				if (Number.isInteger(v.seq) && typeof v.time === "number") return { turn: v.seq as number, time: v.time };
+			} catch {
+				// 半行或损坏：向更早回退
+			}
+		}
+	} finally {
+		closeSync(fd);
+	}
+	return null;
+}
+
+/** 枚举存档（按记录文件 mtime 降序）；game 缺席即扫全部游戏目录。 */
+export function listRuns(root: string, game?: string): RunFace[] {
+	const base = join(root, "runs");
+	const games = game !== undefined
+		? [game]
+		: existsSync(base) ? readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
+	const out: RunFace[] = [];
+	for (const g of games) {
+		const dir = join(base, g);
+		if (!existsSync(dir)) continue;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const records = join(dir, entry.name, "records.jsonl");
+			if (!existsSync(records)) continue;
+			const stat = statSync(records);
+			const tail = tailRecord(records, stat.size);
+			out.push({ game: g, run: entry.name, ...(tail !== null && { turn: tail.turn, time: tail.time }), mtime: stat.mtimeMs });
+		}
+	}
+	out.sort((a, b) => b.mtime - a.mtime);
+	return out;
 }
 
 /** 用户级配置根：凭据、模型表与偏好跨项目/宿主共用（与 Electron userData 同径）；运行数据仍按数据根。 */
