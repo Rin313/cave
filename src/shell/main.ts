@@ -5,8 +5,11 @@ import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-ag
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame } from "../core/games.ts";
 import { errorText, spineLines, verbFace, type SlotDef } from "../core/sim.ts";
-import { configDir, listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun, runPaths } from "../core/runs.ts";
+import { configDir, dataDir } from "../core/paths.ts";
+import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun, runPaths } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
+
+if (!app.requestSingleInstanceLock()) app.exit(0);
 
 /** 引擎实例身份是 (game, run)：活实例进程内唯一（同一 run 双写者撕裂档案），界面只是附着者。 */
 interface Session {
@@ -24,22 +27,28 @@ const sessionKey = (game: string, run: string): string => `${game}\u0000${run}`;
 let win: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
 
-const APP_ROOT = app.getAppPath();
-const DATA_ROOT = app.isPackaged ? app.getPath("userData") : APP_ROOT;
-/** 包外资源根：随安装分发，位于 asar 之外。 */
+/** 第二实例聚焦已有窗口；写者唯一由单实例锁保证。 */
+app.on("second-instance", () => {
+	const target = win ?? settingsWin;
+	if (target === null || target.isDestroyed()) return;
+	if (target.isMinimized()) target.restore();
+	target.focus();
+});
+
+const USER_DATA = app.getPath("userData");
+/** 数据根：runs 与用户级内容（games、ui）的所在；引擎包内不复含内容。 */
+const DATA_ROOT = dataDir(USER_DATA);
+/** 包外资源根：随安装分发，位于 asar 之外；dev 无此层。 */
 const RESOURCE_ROOT = process.resourcesPath;
-/** 游戏查找链：用户目录（可写、可覆盖）→ 包外资源 → 包内；同名前者遮蔽后者。 */
-const GAME_ROOTS = app.isPackaged ? [DATA_ROOT, RESOURCE_ROOT, APP_ROOT] : [APP_ROOT];
-/** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按 DATA_ROOT。 */
-const CONFIG_DIR = configDir();
-/** 界面查序：全局 ui/<name>（用户 → 包外资源 → 包内），再游戏自带 games/<name>/ui；同名先见者遮蔽。 */
-const UI_ROOTS = app.isPackaged
-	? [join(DATA_ROOT, "ui"), join(RESOURCE_ROOT, "ui"), join(APP_ROOT, "ui")]
-	: [join(APP_ROOT, "ui")];
+/** 内容根：数据根 → 包外资源（仅打包分发）；同名前者遮蔽后者。 */
+const CONTENT_ROOTS = app.isPackaged ? [DATA_ROOT, RESOURCE_ROOT] : [DATA_ROOT];
+const GAME_ROOTS = CONTENT_ROOTS;
+const UI_ROOTS = CONTENT_ROOTS.map((root) => join(root, "ui"));
+/** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按数据根。 */
+const CONFIG_DIR = configDir(USER_DATA);
 const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
-const SETTINGS_FILES = app.isPackaged
-	? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json"), join(APP_ROOT, "settings.json")]
-	: [SETTINGS_FILE, join(APP_ROOT, "settings.json")];
+/** 设置查序：用户配置 → 分发缺省（仅打包）。 */
+const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
 
 let runtime: Promise<ModelRuntime> | null = null;
 /** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效。 */
@@ -149,7 +158,7 @@ function settings(): Record<string, unknown> {
 	return Object.assign({}, ...loadSettings().reverse());
 }
 
-/** 写入用户级设置文件：当前合并态 + patch；包内缺省因此固化到用户文件。 */
+/** 写入用户级设置文件：当前合并态 + patch；分发缺省因此固化到用户文件。 */
 function saveSettings(patch: Record<string, unknown>): void {
 	mkdirSync(CONFIG_DIR, { recursive: true });
 	writeFileSync(SETTINGS_FILE, `${JSON.stringify(Object.assign(settings(), patch), null, "\t")}\n`, "utf8");

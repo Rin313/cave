@@ -1,13 +1,14 @@
-// GUI e2e host：启动 Electron 壳（缺省 dev，--exe 指定打包产物），经 CDP 调 window.cave 的 IPC 面；会话证据落壳的数据根（dev 即仓库 runs/，打包即 userData/runs/），验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
+// GUI e2e host：启动 Electron 壳（缺省 dev，--exe 指定打包产物），经 CDP 调 window.cave 的 IPC 面；数据根（--data-dir 或 CAVE_DATA_DIR，缺省用户数据目录）承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { dataDir } from "../core/paths.ts";
 import { flagStr, parseArgs, runMain } from "./cli.ts";
 
-const APP_ROOT = join(import.meta.dirname, "..", "..");
-const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [--timeout <秒>]
+const REPO_ROOT = join(import.meta.dirname, "..", "..");
+const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [--data-dir <目录>] [--timeout <秒>]
   games
   def <game>
   state <game> <run>
@@ -15,7 +16,7 @@ const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [-
   batch <game> <run> <话语文件>     （每行一条，空行与 # 注释跳过）
   narrate <game> <run> <指令...>
   reset <game> <run>
-缺省以 dev Electron 启动本仓库；--exe 驱动打包产物（界面须在 userData/ui 或 resources/ui 下）。`;
+缺省以 dev Electron 启动本仓库；--exe 驱动打包产物；数据根取 --data-dir，缺省 CAVE_DATA_DIR 或用户数据目录。`;
 
 interface Target {
 	type: string;
@@ -65,15 +66,17 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const js = (v: unknown): string => JSON.stringify(v);
 const openExpr = (game: string, run: string): string => `window.cave.open(${js(game)},${js(run)})`;
 
-/** dev 启动要求存在界面；仓库不带界面资产，首次 e2e 自动补一个 stub。 */
-function ensureStubUi(): void {
-	const root = join(APP_ROOT, "ui");
+/** dev 启动要求存在界面；仓库不带界面资产，数据根无界面时自动补一个 stub，命令结束即移除。 */
+function ensureStubUi(dataRoot: string): string | null {
+	const root = join(dataRoot, "ui");
 	const found = existsSync(root) && readdirSync(root, { withFileTypes: true }).some((e) => e.isDirectory() && existsSync(join(root, e.name, "index.html")));
-	if (found) return;
+	if (found) return null;
 	const dir = join(root, "e2e");
+	const file = join(dir, "index.html");
 	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, "index.html"), "<!doctype html><title>e2e</title>\n", "utf8");
-	console.error(`已创建 e2e stub 界面：${join(dir, "index.html")}`);
+	writeFileSync(file, "<!doctype html><title>e2e</title>\n", "utf8");
+	console.error(`已创建 e2e stub 界面：${file}`);
+	return file;
 }
 
 function freePort(): Promise<number> {
@@ -93,17 +96,17 @@ interface App {
 	stop: () => void;
 }
 
-async function openApp(exe: string, dev: boolean): Promise<App> {
+async function openApp(exe: string, dev: boolean, dataRoot: string): Promise<App> {
 	const port = await freePort();
 	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*"];
-	const child = spawn(exe, dev ? [APP_ROOT, ...flags] : flags, { stdio: ["ignore", "ignore", "pipe"] });
+	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, CAVE_DATA_DIR: dataRoot } });
 	let err = "";
 	child.stderr?.on("data", (d: Buffer) => { err += String(d); });
 	const stop = (): void => { child.kill(); };
 	process.once("exit", stop);
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
-		if (child.exitCode !== null) throw new Error(`Electron 退出（code ${child.exitCode}）：${err.trim()}`);
+		if (child.exitCode !== null) throw new Error(`Electron 退出（code ${child.exitCode}${child.exitCode === 0 ? "，可能已有实例在运行（单实例锁）" : ""}）：${err.trim()}`);
 		try {
 			const list = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as unknown;
 			if (Array.isArray(list)) {
@@ -116,7 +119,7 @@ async function openApp(exe: string, dev: boolean): Promise<App> {
 		await sleep(150);
 	}
 	stop();
-	throw new Error(`等待界面超时（30s）：dev 需 ui/<name>/index.html，打包产物须在 userData/ui 或 resources/ui 提供界面${err.trim() === "" ? "" : `\n${err.trim()}`}`);
+	throw new Error(`等待界面超时（30s）：需在数据根 ui/<name>/index.html 提供界面，打包另可在 resources/ui${err.trim() === "" ? "" : `\n${err.trim()}`}`);
 }
 
 async function evaluate(target: Target, expression: string, timeoutMs: number): Promise<unknown> {
@@ -249,16 +252,19 @@ async function main(): Promise<void> {
 	const a = parseArgs(argv);
 	if (!cmd) throw new Error(USAGE);
 	const exe = flagStr(a, "exe");
+	const dataRoot = flagStr(a, "data-dir") ?? dataDir();
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
-	if (exe === undefined) ensureStubUi();
-	const electron = exe ?? (createRequire(import.meta.url)("electron") as string);
-	if (!existsSync(electron)) throw new Error(`找不到 Electron：${electron}`);
-	const app = await openApp(electron, exe === undefined);
+	const stub = exe === undefined ? ensureStubUi(dataRoot) : null;
+	let app: App | null = null;
 	try {
+		const electron = exe ?? (createRequire(import.meta.url)("electron") as string);
+		if (!existsSync(electron)) throw new Error(`找不到 Electron：${electron}`);
+		app = await openApp(electron, exe === undefined, dataRoot);
 		await dispatch(cmd, a.positionals, app.target, timeout);
 	} finally {
-		app.stop();
+		app?.stop();
+		if (stub !== null) rmSync(stub, { recursive: true, force: true });
 	}
 }
 

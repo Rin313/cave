@@ -1,20 +1,20 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel, SessionManager } from "@earendil-works/pi-coding-agent";
 import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
+import { configDir, dataDir } from "./paths.ts";
 import { errorText } from "./sim.ts";
 
-/** 一次运行的落盘位置；root 即数据根（打包的 shell 用 userData，dev 用仓库根）。 */
+/** 一次运行的落盘位置；root 即数据根。 */
 export interface RunPaths {
 	dir: string;
 	records: string;
 	session: string;
 }
 
-export function runPaths(game: string, run: string, root = "."): RunPaths {
+export function runPaths(game: string, run: string, root = dataDir()): RunPaths {
 	const dir = join(root, "runs", game, run);
 	return {
 		dir,
@@ -79,15 +79,6 @@ export function listRuns(root: string, game?: string): RunFace[] {
 	return out;
 }
 
-/** 用户级配置根：凭据、模型表与偏好跨项目/宿主共用（与 Electron userData 同径）；运行数据仍按数据根。 */
-export function configDir(): string {
-	const override = process.env.CAVE_CONFIG_DIR;
-	if (override) return override;
-	if (process.platform === "win32") return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "cave");
-	if (process.platform === "darwin") return join(homedir(), "Library", "Application Support", "cave");
-	return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "cave");
-}
-
 /** 模型与凭据未就绪：宿主据此把用户引向配置面（文件、CLI 或壳暴露的配置协议）。 */
 export class ModelConfigError extends Error {}
 
@@ -124,7 +115,7 @@ export function modelErrorReason(error: string | undefined): string {
 }
 
 export interface OpenRunOptions {
-	/** 数据根：runs 的所在；缺省 cwd。 */
+	/** 数据根：runs 的所在；缺省 dataDir()。 */
 	root?: string;
 	/** 游戏查找链（先见者遮蔽）；缺省 [root]。 */
 	gameRoots?: readonly string[];
@@ -134,7 +125,7 @@ export interface OpenRunOptions {
 
 /** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写。 */
 export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
-	const root = options.root ?? ".";
+	const root = options.root ?? dataDir();
 	const gameRoots = options.gameRoots ?? [root];
 	const paths = runPaths(game, run, root);
 	const config = configDir();

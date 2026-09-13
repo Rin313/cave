@@ -1,4 +1,5 @@
 import { loadGame } from "../core/games.ts";
+import { dataDir } from "../core/paths.ts";
 import { ProtocolViolation, Simulation, audienceOf, lawOf, refParamsOf } from "../core/sim.ts";
 import type { Action, Denial, GameDef, Value } from "../core/sim.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
@@ -83,8 +84,8 @@ function scan(def: GameDef, maxCombos: number): { witnesses: Witness[]; total: n
 	return { witnesses, total, truncated };
 }
 
-async function cmdProbe(gameId: string, maxCombos: number): Promise<void> {
-	const def = await loadGame(gameId, ["."]);
+async function cmdProbe(gameId: string, root: string, maxCombos: number): Promise<void> {
+	const def = await loadGame(gameId, [root]);
 	const { witnesses, total, truncated } = scan(def, maxCombos);
 	console.log(`=== 执行检查（${gameId}）：生成 ${total} 个动作${truncated ? "，已达 --max 预算截断" : ""} ===`);
 	if (!witnesses.length) {
@@ -102,8 +103,9 @@ async function main(): Promise<void> {
 	if (!cmd) throw new Error("缺少命令");
 	if (cmd === "probe") {
 		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
+		const root = flagStr(a, "data-dir") ?? dataDir();
 		const max = Number(flagStr(a, "max") ?? 10000);
-		await cmdProbe(gameId, Number.isFinite(max) && max > 0 ? max : 10000);
+		await cmdProbe(gameId, root, Number.isFinite(max) && max > 0 ? max : 10000);
 		return;
 	}
 	throw new Error(`未知命令: ${cmd}`);
