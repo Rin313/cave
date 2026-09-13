@@ -1,3 +1,4 @@
+// window.cave 为不可配置全局属性：界面脚本顶层不得再声明同名 const/let cave（SyntaxError），须置于 IIFE 内或改名。
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("cave", {
