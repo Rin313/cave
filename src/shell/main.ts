@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, shell, type BrowserWindowConstructorOptions } from "electron";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -51,8 +51,8 @@ const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
-/** 引导面底色：与 setup.html 页底一致，避免加载期闪暗。 */
-const SETUP_BACKGROUND = "#f5f0e1";
+/** 引导面底色：与 setup.html 页底一致（随系统深浅），避免加载期闪色。 */
+const setupBackground = (): string => (nativeTheme.shouldUseDarkColors ? "#1a1a1a" : "#f5f0e1");
 
 let runtime: Promise<ModelRuntime> | null = null;
 /** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效；失败即弃，下次重试。 */
@@ -184,6 +184,8 @@ function settingsSite(): UiSite | null {
 function windowOptions(): BrowserWindowConstructorOptions {
 	return {
 		backgroundColor: "#14161a",
+		// 菜单隐藏但保留默认角色：重载/DevTools/缩放快捷键仍有效，Alt 可唤出，常驻视觉噪音消失。
+		autoHideMenuBar: true,
 		webPreferences: {
 			preload: join(import.meta.dirname, "preload.cjs"),
 			contextIsolation: true,
@@ -206,7 +208,7 @@ function openSettings(): void {
 		return;
 	}
 	const file = settingsSite()?.file ?? SETUP_FILE;
-	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640, ...(file === SETUP_FILE && { backgroundColor: SETUP_BACKGROUND }) });
+	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640, ...(file === SETUP_FILE && { backgroundColor: setupBackground() }) });
 	externalLinks(settingsWin);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
@@ -466,7 +468,7 @@ app.whenReady().then(() => {
 	});
 	if (ui !== null) void win.loadFile(ui.file);
 	else {
-		win.setBackgroundColor(SETUP_BACKGROUND);
+		win.setBackgroundColor(setupBackground());
 		void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
 	}
 });
