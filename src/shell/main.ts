@@ -1,12 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame } from "../core/games.ts";
 import { errorText, spineLines, verbFace, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir } from "../core/paths.ts";
-import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun, runPaths } from "../core/runs.ts";
+import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -267,10 +267,26 @@ async function attached(game: string, run: string): Promise<Session> {
 function closeSession(game: string, run: string): void {
 	const session = sessions.get(sessionKey(game, run));
 	if (session === undefined) return;
-	if (session.busy !== null) throw new Error(`回合进行中（${session.busy}）：${game}/${run} 不能关闭或重置`);
+	if (session.busy !== null) throw new Error(`回合进行中（${session.busy}）：${game}/${run} 不能关闭`);
 	sessions.delete(sessionKey(game, run));
 	session.unsubscribe();
 	session.engine.dispose();
+}
+
+/** 配置不齐（模型/凭据）：自动唤起配置面（若有）；失败文本自身给出文件与配置出口。 */
+async function configured<T>(run: () => Promise<T>): Promise<T> {
+	try {
+		return await run();
+	} catch (e) {
+		if (e instanceof ModelConfigError) {
+			try {
+				openSettings();
+			} catch {
+				// 无配置面可用
+			}
+		}
+		throw e;
+	}
 }
 
 /** 窗口关闭即释放全部实例；回合进行中的未竟调用随进程收束。 */
@@ -390,20 +406,7 @@ ipcMain.handle("cave:settings:open", () => openSettings());
 
 ipcMain.handle("cave:open", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
-	let session: Session;
-	try {
-		session = await openSession(game, run);
-	} catch (e) {
-		// 配置不齐：自动唤起配置面（若有）；失败文本自身给出文件与 CLI 出口
-		if (e instanceof ModelConfigError) {
-			try {
-				openSettings();
-			} catch {
-				// 无配置面可用
-			}
-		}
-		throw e;
-	}
+	const session = await openSession(game, run);
 	return { ...snapshot(session), warnings: [...session.engine.loadWarnings] };
 });
 
@@ -416,11 +419,12 @@ ipcMain.handle("cave:close", (_event, req: { game?: unknown; run?: unknown }) =>
 ipcMain.handle("cave:act", async (_event, req: { game?: unknown; run?: unknown; utterance?: unknown }) => {
 	const { game, run } = pair(req);
 	if (typeof req?.utterance !== "string" || req.utterance.trim() === "") throw new Error("act 需要非空 utterance");
+	const utterance = req.utterance;
 	const session = await attached(game, run);
 	if (session.busy !== null) throw new Error(`回合进行中（${session.busy}）：${game}/${run}`);
 	session.busy = "act";
 	try {
-		const outcome = await session.engine.act({ utterance: req.utterance });
+		const outcome = await configured(() => session.engine.act({ utterance }));
 		const warnings = [...outcome.warnings];
 		// 两相投影各自降级：账目已在定稿，呈现失灵不得使已入账回合变成调用失败
 		let lines: string[] = [];
@@ -444,11 +448,12 @@ ipcMain.handle("cave:act", async (_event, req: { game?: unknown; run?: unknown; 
 ipcMain.handle("cave:narrate", async (_event, req: { game?: unknown; run?: unknown; instruction?: unknown }) => {
 	const { game, run } = pair(req);
 	if (typeof req?.instruction !== "string" || req.instruction.trim() === "") throw new Error("narrate 需要非空 instruction");
+	const instruction = req.instruction;
 	const session = await attached(game, run);
 	if (session.busy !== null) throw new Error(`回合进行中（${session.busy}）：${game}/${run}`);
 	session.busy = "narrate";
 	try {
-		const outcome = await session.engine.narrate(req.instruction);
+		const outcome = await configured(() => session.engine.narrate(instruction));
 		return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
 	} finally {
 		session.busy = null;
@@ -458,12 +463,6 @@ ipcMain.handle("cave:narrate", async (_event, req: { game?: unknown; run?: unkno
 ipcMain.handle("cave:state", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	return snapshot(await attached(game, run));
-});
-
-ipcMain.handle("cave:reset", (_event, req: { game?: unknown; run?: unknown }) => {
-	const { game, run } = pair(req);
-	closeSession(game, run);
-	rmSync(runPaths(game, run, DATA_ROOT).dir, { recursive: true, force: true });
 });
 
 app.whenReady().then(() => {

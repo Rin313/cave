@@ -10,7 +10,6 @@ contextBridge.exposeInMainWorld("cave", {
 	act: (game, run, utterance) => ipcRenderer.invoke("cave:act", { game, run, utterance }),
 	narrate: (game, run, instruction) => ipcRenderer.invoke("cave:narrate", { game, run, instruction }),
 	state: (game, run) => ipcRenderer.invoke("cave:state", { game, run }),
-	reset: (game, run) => ipcRenderer.invoke("cave:reset", { game, run }),
 	uis: (game) => (game === undefined ? ipcRenderer.invoke("cave:uis") : ipcRenderer.invoke("cave:uis", { game })),
 	use: (name) => ipcRenderer.invoke("cave:use", { name }),
 	settings: () => ipcRenderer.invoke("cave:settings"),

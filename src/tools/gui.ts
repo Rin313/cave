@@ -15,7 +15,6 @@ const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [-
   act <game> <run> <话语...>
   batch <game> <run> <话语文件>     （每行一条，空行与 # 注释跳过）
   narrate <game> <run> <指令...>
-  reset <game> <run>
 缺省以 dev Electron 启动本仓库；--exe 驱动打包产物；数据根取 --data-dir，缺省 CAVE_DATA_DIR 或用户数据目录。`;
 
 interface Target {
@@ -234,12 +233,6 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const tok = usageLine(result.usage);
 			if (tok) console.log(tok);
 			console.log(result.narration);
-			return;
-		}
-		case "reset": {
-			const [game, run] = requireRun();
-			await evaluate(target, `window.cave.reset(${js(game)},${js(run)})`, timeout);
-			console.log(`已重置 run ${game}/${run}`);
 			return;
 		}
 		default:

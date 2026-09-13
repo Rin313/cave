@@ -12,12 +12,18 @@ import { recentEntries, pruneContext, verbatim } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
-export interface EngineOptions {
+/** 会话材料：只在会话按需建立时解析；装载与浏览不需要模型。 */
+export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
 	modelRuntime: ModelRuntime;
+	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+}
+
+export interface EngineOptions {
+	/** 解析模型与凭据并给建会话材料；首次 act/narrate 才调用。 */
+	agent: () => Promise<AgentSpec>;
 	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
 	agentDir: string;
-	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 	/** pi 运行时会话（原始 trace）；缺省 inMemory（不落盘），不入装载。 */
 	sessionManager?: SessionManager;
 	/** 回合记录档案；缺省只留进程内存。 */
@@ -70,7 +76,14 @@ interface Ledger {
 
 export class Engine {
 	readonly sim: Simulation;
-	private session: SessionHandle;
+	/** 会话按需建立：装载/浏览不需要模型，首次 act/narrate 才解析并建会话。 */
+	private session: SessionHandle | null = null;
+	private opening: Promise<SessionHandle> | null = null;
+	private readonly options: EngineOptions;
+	private readonly loader: DefaultResourceLoader;
+	private readonly settingsManager: SettingsManager;
+	private readonly sessionManager: SessionManager;
+	private readonly customTools: NonNullable<CreateAgentSessionOptions["customTools"]>;
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（act 工具尾）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly ledger: Ledger;
@@ -81,31 +94,27 @@ export class Engine {
 
 	private constructor(
 		sim: Simulation,
-		session: SessionHandle,
+		options: EngineOptions,
+		loader: DefaultResourceLoader,
+		settingsManager: SettingsManager,
+		sessionManager: SessionManager,
+		customTools: NonNullable<CreateAgentSessionOptions["customTools"]>,
 		ledger: Ledger,
 		recent: RecentEntry[],
 		run: RunState,
 		loadWarnings: string[],
 	) {
 		this.sim = sim;
-		this.session = session;
+		this.options = options;
+		this.loader = loader;
+		this.settingsManager = settingsManager;
+		this.sessionManager = sessionManager;
+		this.customTools = customTools;
 		this.ledger = ledger;
 		this.recent = recent;
 		this.run = run;
 		this.loadWarnings = loadWarnings;
 		this.updateRecent();
-		session.subscribe((event) => {
-			switch (event.type) {
-				case "message_update":
-					if (event.assistantMessageEvent.type === "text_delta" && this.run.phase === "narration") {
-						this.emit({ type: "narration_delta", delta: event.assistantMessageEvent.delta });
-					}
-					break;
-				case "auto_retry_start":
-					if (this.run.phase === "narration") this.emit({ type: "narration_reset" });
-					break;
-			}
-		});
 	}
 
 	subscribe(listener: (event: EngineEvent) => void): () => void {
@@ -129,7 +138,6 @@ export class Engine {
 		const sim = loaded?.sim ?? new Simulation(def);
 		const loadWarnings = loaded?.warnings ?? [];
 
-		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", messageStart: 0, entryStart: 0, steps: [], warnings: [] };
 		const settingsManager = SettingsManager.inMemory({
@@ -154,24 +162,49 @@ export class Engine {
 		await loader.reload();
 
 		const customTools = [buildActTool(def, sim, run, ledger, options.archive)];
+		return new Engine(sim, options, loader, settingsManager, sessionManager, customTools, ledger, recent, run, loadWarnings);
+	}
 
-		const sessionOptions: CreateAgentSessionOptions = {
-			model: options.model,
-			modelRuntime: options.modelRuntime,
-			thinkingLevel,
-			resourceLoader: loader,
-			settingsManager,
-			sessionManager,
+	/** 会话按需建立：并发首调共享同一次建立；解析失败原样上抛（配置出口在宿主），世界与档案均未动。 */
+	private ensureSession(): Promise<SessionHandle> {
+		if (this.session !== null) return Promise.resolve(this.session);
+		this.opening ??= this.openSession().catch((e: unknown) => {
+			this.opening = null;
+			throw e;
+		});
+		return this.opening;
+	}
+
+	private async openSession(): Promise<SessionHandle> {
+		const { model, modelRuntime, thinkingLevel } = await this.options.agent();
+		const { session } = await createAgentSession({
+			model,
+			modelRuntime,
+			thinkingLevel: thinkingLevel ?? "high",
+			resourceLoader: this.loader,
+			settingsManager: this.settingsManager,
+			sessionManager: this.sessionManager,
 			tools: ["act"],
-			customTools,
-		};
-
-		const { session } = await createAgentSession(sessionOptions);
-		return new Engine(sim, session, ledger, recent, run, loadWarnings);
+			customTools: this.customTools,
+		});
+		this.session = session;
+		session.subscribe((event) => {
+			switch (event.type) {
+				case "message_update":
+					if (event.assistantMessageEvent.type === "text_delta" && this.run.phase === "narration") {
+						this.emit({ type: "narration_delta", delta: event.assistantMessageEvent.delta });
+					}
+					break;
+				case "auto_retry_start":
+					if (this.run.phase === "narration") this.emit({ type: "narration_reset" });
+					break;
+			}
+		});
+		return session;
 	}
 
 	get sessionFile(): string | undefined {
-		return this.session.sessionFile;
+		return this.session?.sessionFile;
 	}
 
 	/** 已定稿回合数；档案链截断后等于存活回合数。 */
@@ -179,24 +212,25 @@ export class Engine {
 		return this.ledger.lastSeq;
 	}
 
-	private beginRun(phase: "mapping" | "narration", utterance?: string): void {
+	private beginRun(session: SessionHandle, phase: "mapping" | "narration", utterance?: string): void {
 		const r = this.run;
 		r.phase = phase;
 		r.utterance = utterance;
-		r.messageStart = this.session.messages.length;
-		r.entryStart = this.session.sessionManager.getEntries().length;
+		r.messageStart = session.messages.length;
+		r.entryStart = session.sessionManager.getEntries().length;
 		r.warnings = [];
 		r.steps = [];
 	}
 
 	async act(action: { utterance: string }): Promise<ActOutcome> {
 		this.assertLive();
-		this.beginRun("mapping", action.utterance);
+		const session = await this.ensureSession();
+		this.beginRun(session, "mapping", action.utterance);
 		const view = this.sim.view();
 		const kit: TurnKit = { view, digest: digestOf(view), utterance: verbatim(action.utterance), recent: this.recent };
 		try {
 			const prompt = this.sim.def.prompt;
-			await this.session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
+			await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
 		} catch (e) {
 			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
 			if (this.run.phase === "mapping") throw e;
@@ -209,14 +243,14 @@ export class Engine {
 			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
 			narration = this.fallbackSummary([]);
 		} else {
-			narration = this.settleNarration(this.run.steps);
+			narration = this.settleNarration(session, this.run.steps);
 		}
 		this.updateRecent();
 		return {
 			steps: this.run.steps,
 			narration,
 			warnings: this.run.warnings,
-			usage: this.collectUsage(),
+			usage: this.collectUsage(session),
 		};
 	}
 
@@ -238,16 +272,17 @@ export class Engine {
 
 	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
 		this.assertLive();
-		this.beginRun("narration");
+		const session = await this.ensureSession();
+		this.beginRun(session, "narration");
 		const view = this.sim.view();
 		const kit: NarrateKit = { view, digest: digestOf(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 		const prompt = this.sim.def.prompt;
-		await this.session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
-		return { narration: this.settleNarration(steps), warnings: this.run.warnings, usage: this.collectUsage() };
+		await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
+		return { narration: this.settleNarration(session, steps), warnings: this.run.warnings, usage: this.collectUsage(session) };
 	}
 
-	private settleNarration(steps: Commit[]): string {
-		const text = this.narrationText();
+	private settleNarration(session: SessionHandle, steps: Commit[]): string {
+		const text = this.narrationText(session);
 		if (text.trim() === "") {
 			this.run.warnings.push("散文为空。");
 			return this.fallbackSummary(steps);
@@ -256,8 +291,8 @@ export class Engine {
 	}
 
 	/** 叙述 = 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文。 */
-	private narrationText(): string {
-		const messages = this.session.messages.slice(this.run.messageStart);
+	private narrationText(session: SessionHandle): string {
+		const messages = session.messages.slice(this.run.messageStart);
 		const firstAct = messages.findIndex((m) => m.role === "toolResult" && m.toolName === "act");
 		let text = "";
 		for (const m of messages.slice(firstAct + 1)) {
@@ -268,9 +303,9 @@ export class Engine {
 	}
 
 	/** 用量按档案新增条目重读；被重试作废的尝试已计费且已入档，仍计入。 */
-	private collectUsage(): TokenUsage[] {
+	private collectUsage(session: SessionHandle): TokenUsage[] {
 		const out: TokenUsage[] = [];
-		for (const e of this.session.sessionManager.getEntries().slice(this.run.entryStart)) {
+		for (const e of session.sessionManager.getEntries().slice(this.run.entryStart)) {
 			if (e.type !== "message") continue;
 			const m = e.message;
 			if (m.role !== "assistant") continue;
@@ -287,7 +322,7 @@ export class Engine {
 	}
 
 	dispose(): void {
-		this.session.dispose();
+		this.session?.dispose();
 	}
 }
 

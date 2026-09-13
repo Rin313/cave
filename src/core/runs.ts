@@ -123,25 +123,26 @@ export interface OpenRunOptions {
 	modelRuntime?: ModelRuntime;
 }
 
-/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写。 */
+/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写；模型与凭据只在 act/narrate 建会话时解析。 */
 export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
 	const root = options.root ?? dataDir();
 	const gameRoots = options.gameRoots ?? [root];
 	const paths = runPaths(game, run, root);
 	const config = configDir();
-	const { ref, source } = modelReference(game, config);
-	const modelRuntime = options.modelRuntime ?? (await openModelRuntime(config));
-	const { model, thinkingLevel, warning, error } = resolveCliModel({ cliModel: ref, modelRuntime });
-	if (!model || error) throw new ModelConfigError(`模型 "${ref}"（${source}）不可用：${modelErrorReason(error)}`);
-	if (warning) console.warn(`⚠ ${warning}`);
-	if (!(await modelRuntime.checkAuth(model.provider))) {
-		throw new ModelConfigError(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(config, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
-	}
+	const agent = async () => {
+		const { ref, source } = modelReference(game, config);
+		const modelRuntime = options.modelRuntime ?? (await openModelRuntime(config));
+		const { model, thinkingLevel, warning, error } = resolveCliModel({ cliModel: ref, modelRuntime });
+		if (!model || error) throw new ModelConfigError(`模型 "${ref}"（${source}）不可用：${modelErrorReason(error)}`);
+		if (warning) console.warn(`⚠ ${warning}`);
+		if (!(await modelRuntime.checkAuth(model.provider))) {
+			throw new ModelConfigError(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(config, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
+		}
+		return { model, modelRuntime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
+	};
 	return Engine.create(await loadGame(game, gameRoots), {
-		model,
-		modelRuntime,
+		agent,
 		agentDir: config,
-		...(thinkingLevel !== undefined && { thinkingLevel }),
 		archive: openArchive(paths.records),
 		sessionManager: SessionManager.open(paths.session),
 	});
