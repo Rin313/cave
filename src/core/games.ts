@@ -1,5 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as core from "./sim.ts";
 import { errorText, type GameDef } from "./sim.ts";
@@ -33,6 +33,27 @@ export function listGames(roots: readonly string[]): string[] {
 		}
 	}
 	return [...ids].sort();
+}
+
+/** 游戏目录清单（game.json，旁挂）：键由作者定义，壳与引擎不解释；装载前可读、不执行 def。 */
+export type GameMeta = Record<string, unknown>;
+
+/** 读目录清单：缺失即空对象；坏元数据回落并携错（与 ui.json 同制）；未知游戏即 null。 */
+export function readGameMeta(id: string, roots: readonly string[]): { meta: GameMeta; error?: string } | null {
+	const entry = gameFile(id, roots);
+	if (entry === null) return null;
+	const file = join(dirname(entry), "game.json");
+	if (!existsSync(file)) return { meta: {} };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(file, "utf8"));
+	} catch (e) {
+		return { meta: {}, error: `游戏元数据解析失败（${file}）：${errorText(e)}` };
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return { meta: {}, error: `游戏元数据须为 JSON 对象（${file}）` };
+	}
+	return { meta: parsed as GameMeta };
 }
 
 /** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂。模块缓存按进程：改文件后须重启进程（CLI 每命令新进程，壳重启即生效）。 */

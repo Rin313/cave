@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Engine } from "../core/engine.ts";
-import { listGames, loadGame } from "../core/games.ts";
+import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { errorText, spineLines, verbFace, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir } from "../core/paths.ts";
 import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
@@ -344,6 +344,14 @@ ipcMain.handle("cave:runs", (_event, req: { game?: unknown } | undefined) => {
 
 /** 活实例清单：界面换装/重载后据此附着回既有实例。 */
 ipcMain.handle("cave:sessions", () => [...sessions.values()].map((s) => ({ game: s.game, run: s.run, turn: s.engine.turn, time: s.engine.sim.world.time, busy: s.busy })));
+
+/** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
+ipcMain.handle("cave:meta", (_event, req: { game?: unknown } | undefined) => {
+	if (!segment(req?.game)) throw new Error("meta 需要游戏 id");
+	const read = readGameMeta(req.game, GAME_ROOTS);
+	if (read === null) throw new Error(`未知游戏：${req.game}（可用：${listGames(GAME_ROOTS).join(", ") || "无"}）`);
+	return { game: req.game, meta: read.meta, ...(read.error !== undefined && { error: read.error }) };
+});
 
 /** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
 ipcMain.handle("cave:def", async (_event, req: { game?: unknown } | undefined) => {

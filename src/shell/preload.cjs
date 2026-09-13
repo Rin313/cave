@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("cave", {
 	runs: (game) => (game === undefined ? ipcRenderer.invoke("cave:runs") : ipcRenderer.invoke("cave:runs", { game })),
 	sessions: () => ipcRenderer.invoke("cave:sessions"),
 	def: (game) => ipcRenderer.invoke("cave:def", { game }),
+	meta: (game) => ipcRenderer.invoke("cave:meta", { game }),
 	open: (game, run) => ipcRenderer.invoke("cave:open", { game, run }),
 	close: (game, run) => ipcRenderer.invoke("cave:close", { game, run }),
 	act: (game, run, utterance) => ipcRenderer.invoke("cave:act", { game, run, utterance }),

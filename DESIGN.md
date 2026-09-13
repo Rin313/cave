@@ -167,7 +167,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 ## 架构决策
 
-- **壳与界面**：引擎实例身份是 `(game, run)`；壳（Electron 主进程）取单实例锁并持活实例表，保证同一 run 单活（双写者撕裂档案），界面以 `(game, run)` 附着——换界面不动引擎，实例可跨界面续接，关闭显式。界面是投影消费者，与实例身份解耦；界面作用域（`ui.json` 的 `game`，缺席即通用）只用于装配（用户按 game 偏好 → 游戏自带 `games/<id>/ui` → 通用），不构成捆绑；坏元数据回落隐式作用域并显形。`cave:def` 暴露动词目录与注册槽名字等静态派生面；`cave:runs` 是 `runs/<game>/<run>/records.jsonl` 的派生清单（存档发现），无记录目录不是存档；`cave:sessions` 列活实例供界面换装后续接。
+- **壳与界面**：引擎实例身份是 `(game, run)`；壳（Electron 主进程）取单实例锁并持活实例表，保证同一 run 单活（双写者撕裂档案），界面以 `(game, run)` 附着——换界面不动引擎，实例可跨界面续接，关闭显式。界面是投影消费者，与实例身份解耦；界面作用域（`ui.json` 的 `game`，缺席即通用）只用于装配（用户按 game 偏好 → 游戏自带 `games/<id>/ui` → 通用），不构成捆绑；坏元数据回落隐式作用域并显形；游戏的目录事实归 `games/<id>/game.json`（旁挂、装载前可读、不执行 def）：JSON 对象，键由作者定义、壳与引擎不解释；缺席即空对象、坏元数据回落并显形，界面不承载游戏事实。`cave:meta` 原样读该清单；`cave:def` 暴露动词目录与注册槽名字等静态派生面；`cave:runs` 是 `runs/<game>/<run>/records.jsonl` 的派生清单（存档发现），无记录目录不是存档；`cave:sessions` 列活实例供界面换装后续接。
 - 进程内集成 pi agent SDK（`node_modules/@earendil-works/pi-coding-agent/docs/`）。
 - **模型与凭据自持（用户级）**：配置根（`CAVE_CONFIG_DIR` 覆盖；缺省 Windows `%APPDATA%\cave`、macOS `~/Library/Application Support/cave`、Linux `$XDG_CONFIG_HOME/cave`，即 Electron userData）持有 `auth.json`／`models.json`／`models-store.json`／`settings.json`，不读 pi agent 的 `~/.pi/agent`；运行数据（`runs/`）与用户级内容一律按数据根（`CAVE_DATA_DIR` 覆盖，缺省即配置根）：游戏与界面查序为数据根 → 包外资源（仅打包分发，位于 asar 之外），设置查序为用户配置 → 包外资源；引擎包内不复含内容。模型选择是单一引用 `provider/model[:thinking]`（`settings.json` 缺省、`${GAME}_MODEL` 覆盖），凭据取 provider 环境变量或该 `auth.json`——无需安装 pi agent 或 `/login`；文件与 CLI 恒为出口（GUI 启动不继承 shell 环境变量）。模型与凭据只在 act/narrate 建会话时解析：装载与浏览不因此受阻，配置不齐在回合调用处显形并唤起配置面（若有）。
 - **上下文裁剪**：每次调用经 `context` 扩展裁剪为最后一条 user 消息起的后缀（工具结果存为独立 toolResult 角色、不并入 user 消息，回合内该锚恒为回合提示，叙述续行因此保住裁决前缀；context 事件的消息是深拷贝，就地改写不写入会话文件）。

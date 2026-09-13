@@ -4,24 +4,8 @@ import { getDocsPath, ModelRuntime, resolveCliModel, SessionManager } from "@ear
 import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
-import { configDir, dataDir } from "./paths.ts";
+import { configDir, dataDir, runPaths } from "./paths.ts";
 import { errorText } from "./sim.ts";
-
-/** 一次运行的落盘位置；root 即数据根。 */
-export interface RunPaths {
-	dir: string;
-	records: string;
-	session: string;
-}
-
-export function runPaths(game: string, run: string, root = dataDir()): RunPaths {
-	const dir = join(root, "runs", game, run);
-	return {
-		dir,
-		records: join(dir, "records.jsonl"),
-		session: join(dir, "session.jsonl"),
-	};
-}
 
 /** 存档目录的派生清单：runs/<game>/<run>/records.jsonl；无记录的目录不是存档。 */
 export interface RunFace {

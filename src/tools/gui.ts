@@ -11,6 +11,7 @@ const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [--data-dir <目录>] [--timeout <秒>]
   games
   def <game>
+  meta <game>
   state <game> <run>
   act <game> <run> <话语...>
   batch <game> <run> <话语文件>     （每行一条，空行与 # 注释跳过）
@@ -189,6 +190,11 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 		case "def": {
 			if (g === undefined) throw new Error("def 需要 <game>");
 			console.log(JSON.stringify(await evaluate(target, `window.cave.def(${js(g)})`, timeout), null, 1));
+			return;
+		}
+		case "meta": {
+			if (g === undefined) throw new Error("meta 需要 <game>");
+			console.log(JSON.stringify(await evaluate(target, `window.cave.meta(${js(g)})`, timeout), null, 1));
 			return;
 		}
 		case "state": {

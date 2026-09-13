@@ -1,11 +1,14 @@
+import { existsSync, readFileSync } from "node:fs";
+import { parseRecordLines } from "../core/archive.ts";
 import { loadGame } from "../core/games.ts";
-import { dataDir } from "../core/paths.ts";
+import { dataDir, runPaths } from "../core/paths.ts";
 import { ProtocolViolation, Simulation, audienceOf, lawOf, refParamsOf } from "../core/sim.ts";
 import type { Action, Denial, GameDef, Value } from "../core/sim.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
 
-/** 违约判据：引擎侧否决（必要性通道）——出现即缺陷；搜索无见证不证明无缺陷。 */
+/** 违约判据：引擎侧否决（必要性通道）——出现即缺陷；冒烟无见证不证明无缺陷。 */
 interface Witness {
+	where?: string;
 	op: string;
 	point: string;
 	debug: string;
@@ -21,8 +24,8 @@ function opLabel(action: Action): string {
 	return `${action.verb} ${parts}`.trim();
 }
 
-/** 生成域＝初始世界×所指域：指称参数穷举，必填自由参数取代表常量，值条件与状态条件不被穷举。 */
-function scan(def: GameDef, maxCombos: number): { witnesses: Witness[]; total: number; truncated: boolean } {
+/** 冒烟生成域＝初始世界 × 可指称域：指称穷举，必填自由参数取代表常量，值条件与状态条件不被穷举。 */
+function smoke(def: GameDef, maxCombos: number): { witnesses: Witness[]; total: number; truncated: boolean } {
 	const scope = [...new Simulation(def).fieldView().referable];
 	const witnesses: Witness[] = [];
 	let total = 0;
@@ -84,10 +87,36 @@ function scan(def: GameDef, maxCombos: number): { witnesses: Witness[]; total: n
 	return { witnesses, total, truncated };
 }
 
-async function cmdProbe(gameId: string, root: string, maxCombos: number): Promise<void> {
+/** 扫档：记录内的 engine 点；不装载 def、不重放，坏 def 亦可读。 */
+function scanRecords(game: string, run: string, root: string): { witnesses: Witness[]; turns: number; broken: number } {
+	const path = runPaths(game, run, root).records;
+	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
+	const witnesses: Witness[] = [];
+	let turns = 0;
+	let broken = 0;
+	for (const line of parseRecordLines(readFileSync(path, "utf8"))) {
+		if (line.kind === "broken") {
+			broken++;
+			continue;
+		}
+		turns++;
+		for (const step of line.record.steps) {
+			if (step.ok) continue;
+			const w = witnessOf(opLabel(step.action), step.denial);
+			if (w) witnesses.push({ ...w, where: `#${line.record.seq} t${step.at}` });
+		}
+	}
+	return { witnesses, turns, broken };
+}
+
+const USAGE = `用法：probe --game <id> [--run <name>] [--data-dir <目录>] [--max <预算>]
+  缺 --run：初始世界 × 可指称域的单步冒烟（见证搜索，不构成验证）
+  带 --run：扫该档回合记录里的 engine 点（真实故障所在；不装载 def）`;
+
+async function cmdSmoke(gameId: string, root: string, maxCombos: number): Promise<void> {
 	const def = await loadGame(gameId, [root]);
-	const { witnesses, total, truncated } = scan(def, maxCombos);
-	console.log(`=== 执行检查（${gameId}）：生成 ${total} 个动作${truncated ? "，已达 --max 预算截断" : ""} ===`);
+	const { witnesses, total, truncated } = smoke(def, maxCombos);
+	console.log(`=== 冒烟检查（${gameId}）：生成 ${total} 个动作${truncated ? "，已达 --max 预算截断" : ""} ===`);
 	if (!witnesses.length) {
 		console.log("未发现引擎侧违约（见证搜索，不构成验证）。");
 		return;
@@ -97,18 +126,32 @@ async function cmdProbe(gameId: string, root: string, maxCombos: number): Promis
 	process.exitCode = 1;
 }
 
+function cmdRecords(gameId: string, run: string, root: string): void {
+	const { witnesses, turns, broken } = scanRecords(gameId, run, root);
+	console.log(`=== 记录检查（${gameId}/${run}）：${turns} 回合${broken ? `，${broken} 条形状损坏` : ""} ===`);
+	if (!witnesses.length) {
+		console.log("未发现引擎侧违约（记录内 engine 受众的否决）。");
+		return;
+	}
+	for (const w of witnesses) console.log(`[违约] ${w.where} ${w.op} → ${w.point}：${w.debug}`);
+	console.log(`\n引擎侧违约见证 ${witnesses.length} 条。`);
+	process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a: ParsedArgs = parseArgs(argv);
-	if (!cmd) throw new Error("缺少命令");
-	if (cmd === "probe") {
-		const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
-		const root = flagStr(a, "data-dir") ?? dataDir();
-		const max = Number(flagStr(a, "max") ?? 10000);
-		await cmdProbe(gameId, root, Number.isFinite(max) && max > 0 ? max : 10000);
+	if (!cmd) throw new Error(USAGE);
+	if (cmd !== "probe") throw new Error(`未知命令: ${cmd}\n${USAGE}`);
+	const gameId = requireFlag(a, "game", "用 --game <id> 指定游戏");
+	const root = flagStr(a, "data-dir") ?? dataDir();
+	const run = flagStr(a, "run");
+	if (run !== undefined) {
+		cmdRecords(gameId, run, root);
 		return;
 	}
-	throw new Error(`未知命令: ${cmd}`);
+	const max = Number(flagStr(a, "max") ?? 10000);
+	await cmdSmoke(gameId, root, Number.isFinite(max) && max > 0 ? max : 10000);
 }
 
 runMain(main);

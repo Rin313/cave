@@ -15,10 +15,11 @@ export interface ArchiveStore {
 	append(record: ChronicleEntry): void;
 }
 
-type Line = { kind: "record"; record: ChronicleEntry } | { kind: "broken" };
+/** 档案行：形状损坏计为 broken（装载与工具共用同一判据）。 */
+export type ArchiveLine = { kind: "record"; record: ChronicleEntry } | { kind: "broken" };
 
-function parseLines(text: string): Line[] {
-	const out: Line[] = [];
+export function parseRecordLines(text: string): ArchiveLine[] {
+	const out: ArchiveLine[] = [];
 	for (const raw of text.split("\n")) {
 		const line = raw.trim();
 		if (line === "") continue;
@@ -53,7 +54,7 @@ export function openArchive(path: string): ArchiveStore {
 	return {
 		load(def) {
 			const warnings: string[] = [];
-			const lines = existsSync(path) ? parseLines(readFileSync(path, "utf8")) : [];
+			const lines = existsSync(path) ? parseRecordLines(readFileSync(path, "utf8")) : [];
 			const broken = lines.filter((l) => l.kind === "broken").length;
 			if (broken) warnings.push(`回合条目 ${broken} 条形状损坏`);
 			const sim = new Simulation(def);

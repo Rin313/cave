@@ -17,3 +17,15 @@ export function configDir(userData?: string): string {
 export function dataDir(userData?: string): string {
 	return process.env.CAVE_DATA_DIR ?? configDir(userData);
 }
+
+/** 一次运行的落盘位置；root 即数据根。 */
+export interface RunPaths {
+	dir: string;
+	records: string;
+	session: string;
+}
+
+export function runPaths(game: string, run: string, root = dataDir()): RunPaths {
+	const dir = join(root, "runs", game, run);
+	return { dir, records: join(dir, "records.jsonl"), session: join(dir, "session.jsonl") };
+}
