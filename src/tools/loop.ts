@@ -5,7 +5,7 @@ import { openArchive } from "../core/archive.ts";
 import { loadGame } from "../core/games.ts";
 import { spineLines, type Simulation } from "../core/sim.ts";
 import { flagStr, parseArgs, requireFlag, runMain, type ParsedArgs } from "./cli.ts";
-import { openRun, runPaths, type RunPaths } from "./runs.ts";
+import { openRun, runPaths, type RunPaths } from "../core/runs.ts";
 
 function appendTranscript(path: string, entry: unknown): void {
 	appendFileSync(path, JSON.stringify(entry) + "\n", "utf8");

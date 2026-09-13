@@ -2,10 +2,10 @@ import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, s
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel, SessionManager } from "@earendil-works/pi-coding-agent";
-import { openArchive } from "../core/archive.ts";
-import { Engine } from "../core/engine.ts";
-import { loadGame } from "../core/games.ts";
-import { errorText } from "../core/sim.ts";
+import { openArchive } from "./archive.ts";
+import { Engine } from "./engine.ts";
+import { loadGame } from "./games.ts";
+import { errorText } from "./sim.ts";
 
 /** 一次运行的全部落盘位置；终端与 shell 两宿主共用同一约定。root 即数据根：终端用 cwd，打包的 shell 用 userData。 */
 export interface RunPaths {

@@ -5,7 +5,7 @@ import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-ag
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame } from "../core/games.ts";
 import { errorText, spineLines, verbFace, type SlotDef } from "../core/sim.ts";
-import { configDir, listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun, runPaths } from "../tools/runs.ts";
+import { configDir, listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun, runPaths } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
 
 /** 引擎实例身份是 (game, run)：活实例进程内唯一（同一 run 双写者撕裂档案），界面只是附着者。 */
