@@ -72,49 +72,53 @@ function segment(v: unknown): v is string {
 interface UiSite {
 	name: string;
 	file: string;
-	/** 作用域由位置给出：games/<id>/ui 绑定 id，ui/<name> 恒通用。 */
+	/** 作用域由位置给出：games/<id>/ui 下绑定 id，ui/<name> 恒通用。 */
 	game: string | null;
 }
 
-/** 界面位置：全局在前，游戏自带在后；名称即目录名（游戏自带的即 game id）。 */
-function uiSite(name: string): UiSite | null {
-	if (!segment(name)) return null;
-	for (const root of UI_ROOTS) {
-		const file = join(root, name, "index.html");
-		if (existsSync(file)) return { name, file, game: null };
-	}
-	for (const root of CONTENT_ROOTS) {
-		const file = join(root, "games", name, "ui", "index.html");
-		if (existsSync(file)) return { name, file, game: name };
-	}
-	return null;
-}
+/** 界面 ref：`<name>`（通用）或 `<game>/<name>`（游戏作用域）；两段均由 segment 保证不含斜杠。 */
+const uiRef = (site: UiSite): string => (site.game === null ? site.name : `${site.game}/${site.name}`);
 
-/** 全部界面（遮蔽后的全集，遮蔽者优先）。 */
+/** 全部界面（ref 去重、先见者优先）：通用 ui/<name>；游戏自带 games/<id>/ui/<name>，根 index.html 为名即 id 的缺省界面。 */
 function uiSites(): UiSite[] {
 	const sites = new Map<string, UiSite>();
+	const add = (site: UiSite): void => {
+		const ref = uiRef(site);
+		if (!sites.has(ref)) sites.set(ref, site);
+	};
 	for (const root of UI_ROOTS) {
 		if (!existsSync(root)) continue;
 		for (const entry of readdirSync(root, { withFileTypes: true })) {
-			if (!entry.isDirectory() || sites.has(entry.name)) continue;
+			if (!entry.isDirectory()) continue;
 			const file = join(root, entry.name, "index.html");
-			if (existsSync(file)) sites.set(entry.name, { name: entry.name, file, game: null });
+			if (existsSync(file)) add({ name: entry.name, file, game: null });
 		}
 	}
 	for (const root of CONTENT_ROOTS) {
 		const dir = join(root, "games");
 		if (!existsSync(dir)) continue;
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			if (!entry.isDirectory() || sites.has(entry.name)) continue;
-			const file = join(dir, entry.name, "ui", "index.html");
-			if (existsSync(file)) sites.set(entry.name, { name: entry.name, file, game: entry.name });
+			if (!entry.isDirectory()) continue;
+			const game = entry.name;
+			const ui = join(dir, game, "ui");
+			if (!existsSync(ui)) continue;
+			const file = join(ui, "index.html");
+			if (existsSync(file)) add({ name: game, file, game });
+			for (const sub of readdirSync(ui, { withFileTypes: true })) {
+				if (!sub.isDirectory()) continue;
+				const subFile = join(ui, sub.name, "index.html");
+				if (existsSync(subFile)) add({ name: sub.name, file: subFile, game });
+			}
 		}
 	}
 	return [...sites.values()];
 }
 
-/** 界面名清单（诊断文案用）。 */
-const uiList = (): string => uiSites().map((s) => s.name).join(", ") || "无";
+/** 按 ref 找界面；未知即 null。 */
+const siteByRef = (ref: string): UiSite | null => uiSites().find((s) => uiRef(s) === ref) ?? null;
+
+/** 界面 ref 清单（诊断文案用）。 */
+const uiList = (): string => uiSites().map(uiRef).join(", ") || "无";
 
 /** 设置按文件优先级读取（高优先在前）；破损设置视同缺席。 */
 function loadSettings(): Record<string, unknown>[] {
@@ -148,13 +152,13 @@ function saveSettings(patch: Record<string, unknown>): void {
 function bootUi(): UiSite {
 	const named = settingString("ui");
 	if (named !== undefined) {
-		const site = uiSite(named);
+		const site = siteByRef(named);
 		if (site !== null) return site;
 	}
 	const sites = uiSites();
 	if (sites.length === 1) return sites[0]!;
-	if (sites.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置游戏自带界面`);
-	throw new Error(`未指定界面：可用 ${sites.map((s) => s.name).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<name>" }`);
+	if (sites.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置 index.html（缺省）或 <name>/index.html`);
+	throw new Error(`未指定界面：可用 ${sites.map(uiRef).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
 }
 
 let ui: UiSite | null = null;
@@ -168,10 +172,10 @@ try {
 
 /** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即壳内引导面。 */
 function settingsSite(): UiSite | null {
-	const name = settingString("settingsUi");
-	if (name === undefined) return null;
-	const site = uiSite(name);
-	if (site === null) throw new Error(`未知配置界面：${name}（可用：${uiList()}）`);
+	const ref = settingString("settingsUi");
+	if (ref === undefined) return null;
+	const site = siteByRef(ref);
+	if (site === null) throw new Error(`未知配置界面：${ref}（可用：${uiList()}）`);
 	return site;
 }
 
@@ -336,8 +340,9 @@ function slotFace(slots: Record<string, SlotDef> | undefined): SlotFace[] {
 	}));
 }
 
-const uiFace = (site: UiSite): { name: string; game?: string } => ({
+const uiFace = (site: UiSite): { name: string; ref: string; game?: string } => ({
 	name: site.name,
+	ref: uiRef(site),
 	...(site.game !== null && { game: site.game }),
 });
 
@@ -378,16 +383,16 @@ ipcMain.handle("cave:def", async (_event, req: { game?: unknown } | undefined) =
 ipcMain.handle("cave:uis", (_event, req: { game?: unknown } | undefined) => {
 	const game = gameId(req, "uis");
 	const compatible = uiSites().filter((s) => s.game === null || game === undefined || s.game === game);
-	compatible.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
 	return compatible.map(uiFace);
 });
 
 /** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动。 */
-ipcMain.handle("cave:use", (_event, req: { name?: unknown }) => {
-	if (!segment(req?.name)) throw new Error("use 需要界面名");
-	const site = uiSite(req.name);
-	if (site === null) throw new Error(`未知界面：${req.name}（可用：${uiList()}）`);
-	saveSettings({ ui: req.name });
+ipcMain.handle("cave:use", (_event, req: { ref?: unknown }) => {
+	if (typeof req?.ref !== "string" || req.ref === "") throw new Error("use 需要界面 ref");
+	const site = siteByRef(req.ref);
+	if (site === null) throw new Error(`未知界面：${req.ref}（可用：${uiList()}）`);
+	saveSettings({ ui: req.ref });
 	void win?.loadFile(site.file);
 });
 
@@ -399,8 +404,8 @@ ipcMain.handle("cave:settings:set", async (_event, req: { patch?: unknown }) => 
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	for (const key of ["ui", "settingsUi"] as const) {
-		const name = patch[key];
-		if (typeof name === "string" && uiSite(name) === null) throw new Error(`未知界面（${key}）：${name}（可用：${uiList()}）`);
+		const ref = patch[key];
+		if (typeof ref === "string" && siteByRef(ref) === null) throw new Error(`未知界面（${key}）：${ref}（可用：${uiList()}）`);
 	}
 	if (typeof patch.model === "string") {
 		const { model, error } = resolveCliModel({ cliModel: patch.model, modelRuntime: await modelRuntime() });

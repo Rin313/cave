@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld("cave", {
 	narrate: (game, run, instruction) => ipcRenderer.invoke("cave:narrate", { game, run, instruction }),
 	state: (game, run) => ipcRenderer.invoke("cave:state", { game, run }),
 	uis: (game) => ipcRenderer.invoke("cave:uis", { game }),
-	use: (name) => ipcRenderer.invoke("cave:use", { name }),
+	use: (ref) => ipcRenderer.invoke("cave:use", { ref }),
 	settings: () => ipcRenderer.invoke("cave:settings"),
 	env: () => ipcRenderer.invoke("cave:env"),
 	setSettings: (patch) => ipcRenderer.invoke("cave:settings:set", { patch }),

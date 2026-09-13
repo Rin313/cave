@@ -75,7 +75,7 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 		"ui.section": "界面",
 		"ui.current": "当前",
 		"ui.use": "使用",
-		"ui.none": "没有可用界面：在数据根 ui/<name>/index.html 或 games/<id>/ui 放置界面。",
+		"ui.none": "没有可用界面：在数据根 ui/<name>/index.html 或 games/<id>/ui/<name>/index.html 放置界面。",
 		"model.section": "模型与凭据",
 		"model.current": "当前模型",
 		"model.none": "未配置",
@@ -140,10 +140,10 @@ const link = (url, label) => { const a = el("a", label); a.href = url; a.target 
 		list.replaceChildren();
 		for (const u of uis) {
 			const li = document.createElement("li");
-			const scope = u.game ? `（${u.game}）` : "";
-			const current = u.name === settingsObj.ui ? ` · ${t("ui.current")}` : "";
+			const scope = u.game && u.game !== u.name ? `（${u.game}）` : "";
+			const current = u.ref === settingsObj.ui ? ` · ${t("ui.current")}` : "";
 			li.append(el("span", `${u.name}${scope}${current}`, "name"));
-			li.append(button(t("ui.use"), () => cave.use(u.name)));
+			li.append(button(t("ui.use"), () => cave.use(u.ref)));
 			list.append(li);
 		}
 	}
