@@ -26,7 +26,7 @@ export type Payload = Value | null;
 
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
-/** 状态视图的规范序列化：digest() 与 prompt kit 共用同一出口。 */
+/** 状态视图的规范序列化：prompt kit 与诊断共用同一出口。 */
 export function digestOf(view: ViewValue): string {
 	return JSON.stringify(view);
 }
@@ -549,7 +549,7 @@ function isScalarValue(v: unknown): v is Scalar {
 	return typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 类型挡不住 as 通道（存档恢复、场景 JSON、probe），存储形状运行时复核；空序列不是值（表示无只用缺席）。 */
+/** 类型挡不住 as 通道（存档恢复、探针），存储形状运行时复核；空序列不是值（表示无只用缺席）。 */
 function isValue(v: unknown): v is Value {
 	return isScalarValue(v) || (Array.isArray(v) && v.length > 0 && v.every(isScalarValue));
 }
@@ -715,7 +715,7 @@ function attemptAddr(at: number, trigger: Trigger, verb: string, ordinal: number
 	return tupleKey(["attempt", String(at), trigger, verb, String(ordinal)]);
 }
 
-/** 裁决点的呈现身份（场景断言与探针用）；分类看 kind，不看字符串。 */
+/** 裁决点的呈现身份（探针与诊断用）；分类看 kind，不看字符串。 */
 export function lawOf(point: Point): string {
 	switch (point.kind) {
 		case "rule": return point.law;
@@ -1463,11 +1463,6 @@ export class Simulation {
 		const out = this.def.view(w, base, field);
 		if (out === undefined) throw new Error("GameDef.view 须返回 JSON 值（undefined 是缺陷）");
 		return out;
-	}
-
-	/** 状态视图的规范序列化（digestOf(view())）：探针与日志的便捷出口。 */
-	digest(): string {
-		return digestOf(this.view());
 	}
 
 	/** 卡：属性过格名＋披露＋指称闭包（H），名字与值同一呈现轴。 */

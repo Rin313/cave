@@ -41,10 +41,6 @@ export function requireFlag(a: ParsedArgs, name: string, usage: string): string 
 	return v;
 }
 
-export function flagBool(a: ParsedArgs, name: string): boolean {
-	return a.flags.get(name) !== undefined;
-}
-
 export function runMain(main: () => Promise<void>): void {
 	main().catch((err) => {
 		console.error(err);

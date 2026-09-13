@@ -1,4 +1,4 @@
-// 编译通过、场景通过、e2e 映射与表达准确都是伪信号，不证明设计正确；验证靠阅读 e2e 会话与分析源码。e2e 的模型用 `opencode-go/mimo-v2.5`（`SEALS_MODEL`）。
+// 编译通过、机械测试通过、e2e 映射与表达准确都是伪信号，不证明设计正确；验证靠阅读 e2e 会话与分析源码。e2e 的模型经 <GAME>_MODEL 环境变量指定（缺省用 settings.json）。
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { type ActOutcome, type Engine, type TokenUsage } from "../core/engine.ts";
 import { openArchive } from "../core/archive.ts";

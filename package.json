@@ -4,8 +4,8 @@
 	"type": "module",
 	"main": "src/shell/main.ts",
 	"scripts": {
-		"verify": "node src/tools/sim.ts verify",
-		"dist": "electron-packager . --out=dist --overwrite --app-version=0.0.0 --download.mirrorOptions.mirror=https://npmmirror.com/mirrors/electron/ --ignore=\"^/(runs|scenarios|dist)(/|$)\" --ignore=\"^/((AGENTS|DESIGN)\\.md|tsconfig\\.json)$\" --ignore=\"^/src/tools(/|$)\""
+		"test": "node --test",
+		"dist": "electron-packager . --out=dist --overwrite --app-version=0.0.0 --download.mirrorOptions.mirror=https://npmmirror.com/mirrors/electron/ --ignore=\"^/(runs|test|dist)(/|$)\" --ignore=\"^/((AGENTS|DESIGN)\\.md|tsconfig\\.json)$\" --ignore=\"^/src/tools(/|$)\""
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "^0.85.1"
