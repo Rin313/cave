@@ -1,23 +1,12 @@
-// GUI e2e host：启动 Electron 壳（缺省 dev，--exe 指定打包产物），经 CDP 调 window.cave 的 IPC 面；数据根（--data-dir 或 CAVE_DATA_DIR，缺省用户数据目录）承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
+// GUI e2e host：经 CDP 调 window.cave 的 IPC 面；数据根承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { dataDir } from "../core/paths.ts";
-import { flagStr, parseArgs, runMain } from "./cli.ts";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
-const USAGE = `用法：gui <命令> [参数] [--exe <打包可执行文件>] [--data-dir <目录>] [--timeout <秒>]
-  games
-  def <game>
-  meta <game>
-  state <game> <run>
-  records <game> <run>
-  act <game> <run> <话语...>
-  batch <game> <run> <话语文件>     （每行一条，空行与 # 注释跳过）
-  narrate <game> <run> <指令...>
-缺省以 dev Electron 启动本仓库；--exe 驱动打包产物；数据根取 --data-dir，缺省 CAVE_DATA_DIR 或用户数据目录。`;
 
 interface Target {
 	type: string;
@@ -255,14 +244,57 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			return;
 		}
 		default:
-			throw new Error(`未知命令: ${cmd}\n${USAGE}`);
+			throw new Error(`未知命令: ${cmd}`);
 	}
+}
+
+interface ParsedArgs {
+	flags: Map<string, string | boolean>;
+	positionals: string[];
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
+	const flags = new Map<string, string | boolean>();
+	const positionals: string[] = [];
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i]!;
+		if (a.startsWith("--")) {
+			const key = a.slice(2);
+			const eq = key.indexOf("=");
+			if (eq >= 0) {
+				flags.set(key.slice(0, eq), key.slice(eq + 1));
+				continue;
+			}
+			const next = argv[i + 1];
+			if (next !== undefined && !next.startsWith("--")) {
+				flags.set(key, next);
+				i++;
+			} else {
+				flags.set(key, true);
+			}
+		} else {
+			positionals.push(a);
+		}
+	}
+	return { flags, positionals };
+}
+
+function flagStr(a: ParsedArgs, name: string): string | undefined {
+	const v = a.flags.get(name);
+	return typeof v === "string" ? v : undefined;
+}
+
+function runMain(main: () => Promise<void>): void {
+	main().catch((err) => {
+		console.error(err);
+		process.exit(1);
+	});
 }
 
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
 	const a = parseArgs(argv);
-	if (!cmd) throw new Error(USAGE);
+	if (!cmd) throw new Error("需要命令");
 	const exe = flagStr(a, "exe");
 	const dataRoot = flagStr(a, "data-dir") ?? dataDir();
 	const seconds = Number(flagStr(a, "timeout") ?? "");
