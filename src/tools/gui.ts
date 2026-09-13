@@ -1,4 +1,4 @@
-// GUI e2e host：经 CDP 调 window.cave 的 IPC 面；数据根承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
+// GUI e2e host：经 CDP 调 window.shell 的 IPC 面；数据根承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
 // 宿主 Electron 跨命令保活（窗口对开发者可见）：start/stop/restart 管宿主，close 释放单个运行；改 src 后 restart，改游戏定义后 close 再开。
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -61,7 +61,7 @@ interface NarrateFace {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const js = (v: unknown): string => JSON.stringify(v);
-const openExpr = (game: string, run: string): string => `window.cave.open(${js(game)},${js(run)})`;
+const openExpr = (game: string, run: string): string => `window.shell.open(${js(game)},${js(run)})`;
 
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
@@ -84,8 +84,8 @@ interface Host {
 }
 
 /** 单实例锁使全局至多一个宿主，故状态与日志全局唯一。 */
-const HOST_FILE = join(tmpdir(), "cave-gui-host.json");
-const HOST_LOG = join(tmpdir(), "cave-gui-host.log");
+const HOST_FILE = join(tmpdir(), "gui-host.json");
+const HOST_LOG = join(tmpdir(), "gui-host.log");
 
 function readHost(): Host | null {
 	let parsed: unknown;
@@ -302,16 +302,16 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 	};
 	switch (cmd) {
 		case "games":
-			console.log(JSON.stringify(await evaluate(target, "window.cave.games()", timeout), null, 1));
+			console.log(JSON.stringify(await evaluate(target, "window.shell.games()", timeout), null, 1));
 			return;
 		case "def": {
 			if (g === undefined) throw new Error("def 需要 <game>");
-			console.log(JSON.stringify(await evaluate(target, `window.cave.def(${js(g)})`, timeout), null, 1));
+			console.log(JSON.stringify(await evaluate(target, `window.shell.def(${js(g)})`, timeout), null, 1));
 			return;
 		}
 		case "meta": {
 			if (g === undefined) throw new Error("meta 需要 <game>");
-			console.log(JSON.stringify(await evaluate(target, `window.cave.meta(${js(g)})`, timeout), null, 1));
+			console.log(JSON.stringify(await evaluate(target, `window.shell.meta(${js(g)})`, timeout), null, 1));
 			return;
 		}
 		case "state": {
@@ -324,14 +324,14 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 		}
 		case "records": {
 			const [game, run] = requireRun();
-			const face = (await evaluate(target, `window.cave.records(${js(game)},${js(run)})`, timeout)) as unknown as RecordsFace;
+			const face = (await evaluate(target, `window.shell.records(${js(game)},${js(run)})`, timeout)) as unknown as RecordsFace;
 			console.log(`【${game}/${run}】${face.records.length} 回合${face.broken ? `，${face.broken} 条形状损坏` : ""}`);
 			console.log(JSON.stringify(face.records, null, 1));
 			return;
 		}
 		case "close": {
 			const [game, run] = requireRun();
-			await evaluate(target, `window.cave.close(${js(game)},${js(run)})`, timeout);
+			await evaluate(target, `window.shell.close(${js(game)},${js(run)})`, timeout);
 			console.log(`【${game}/${run}】已关闭`);
 			return;
 		}
@@ -339,7 +339,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const utterance = rest.join(" ").trim();
 			if (utterance === "") throw new Error("act 需要话语");
-			const expr = `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await window.cave.act(${js(game)},${js(run)},${js(utterance)})}})()`;
+			const expr = `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await window.shell.act(${js(game)},${js(run)},${js(utterance)})}})()`;
 			const { warnings, result } = (await evaluate(target, expr, timeout)) as unknown as { warnings: string[]; result: ActFace };
 			printWarnings(warnings);
 			printAct(utterance, result);
@@ -351,7 +351,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			if (file === undefined) throw new Error("batch 需要话语文件");
 			const lines = readFileSync(file, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 			if (!lines.length) throw new Error(`话语文件 ${file} 为空`);
-			const expr = `(async()=>{const o=await ${openExpr(game, run)};const results=[];for(const u of ${js(lines)})results.push(await window.cave.act(${js(game)},${js(run)},u));return {warnings:o.warnings??[],results}})()`;
+			const expr = `(async()=>{const o=await ${openExpr(game, run)};const results=[];for(const u of ${js(lines)})results.push(await window.shell.act(${js(game)},${js(run)},u));return {warnings:o.warnings??[],results}})()`;
 			const { warnings, results } = (await evaluate(target, expr, timeout)) as unknown as { warnings: string[]; results: ActFace[] };
 			printWarnings(warnings);
 			results.forEach((face, i) => printAct(lines[i] ?? "", face, true));
@@ -361,7 +361,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const instruction = rest.join(" ").trim();
 			if (instruction === "") throw new Error("narrate 需要指令");
-			const expr = `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await window.cave.narrate(${js(game)},${js(run)},${js(instruction)})}})()`;
+			const expr = `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await window.shell.narrate(${js(game)},${js(run)},${js(instruction)})}})()`;
 			const { warnings, result } = (await evaluate(target, expr, timeout)) as unknown as { warnings: string[]; result: NarrateFace };
 			console.log(`\n【${game}/${run} narrate】${instruction}`);
 			printWarnings(warnings);

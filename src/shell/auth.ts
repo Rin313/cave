@@ -115,9 +115,9 @@ export function installAuth(load: () => Promise<ModelRuntime>): void {
 		return [id, flow];
 	};
 
-	ipcMain.handle("cave:auth:providers", async (): Promise<ProviderInfo[]> => providerInfo(await load()));
+	ipcMain.handle("auth:providers", async (): Promise<ProviderInfo[]> => providerInfo(await load()));
 
-	ipcMain.handle("cave:models", async (): Promise<ModelRef[]> => {
+	ipcMain.handle("models", async (): Promise<ModelRef[]> => {
 		const runtime = await load();
 		const available = new Set((await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`));
 		return runtime.getModels().map((m) => {
@@ -126,7 +126,7 @@ export function installAuth(load: () => Promise<ModelRuntime>): void {
 		});
 	});
 
-	ipcMain.handle("cave:auth:login", async (event, req: { provider?: unknown; type?: unknown }) => {
+	ipcMain.handle("auth:login", async (event, req: { provider?: unknown; type?: unknown }) => {
 		const provider = typeof req?.provider === "string" && req.provider !== "" ? req.provider : null;
 		const type: LoginType | null = req?.type === "api_key" || req?.type === "oauth" ? req.type : null;
 		if (provider === null) throw new Error("login 需要 provider");
@@ -140,7 +140,7 @@ export function installAuth(load: () => Promise<ModelRuntime>): void {
 			await (await load()).login(provider, type, {
 				signal: flow.abort.signal,
 				notify: (notice) => {
-					if (!sender.isDestroyed()) sender.send("cave:auth:notify", { flow: id, notice: noticePayload(notice) });
+					if (!sender.isDestroyed()) sender.send("auth:notify", { flow: id, notice: noticePayload(notice) });
 				},
 				prompt: (prompt) =>
 					new Promise<string>((resolve, reject) => {
@@ -163,7 +163,7 @@ export function installAuth(load: () => Promise<ModelRuntime>): void {
 						flow.abort.signal.addEventListener("abort", onAbort, { once: true });
 						prompt.signal?.addEventListener("abort", onAbort, { once: true });
 						try {
-							sender.send("cave:auth:prompt", { flow: id, prompt: promptPayload(prompt) });
+							sender.send("auth:prompt", { flow: id, prompt: promptPayload(prompt) });
 						} catch {
 							onAbort();
 						}
@@ -175,19 +175,19 @@ export function installAuth(load: () => Promise<ModelRuntime>): void {
 		}
 	});
 
-	ipcMain.handle("cave:auth:answer", (event, req: { flow?: unknown; value?: unknown }) => {
+	ipcMain.handle("auth:answer", (event, req: { flow?: unknown; value?: unknown }) => {
 		const [, flow] = flowOf(event.sender, req?.flow);
 		if (typeof req?.value !== "string") throw new Error("answer 需要字符串 value");
 		if (flow.answer === null) throw new Error("该登录流程没有待答提示");
 		flow.answer(req.value);
 	});
 
-	ipcMain.handle("cave:auth:cancel", (event, req: { flow?: unknown }) => {
+	ipcMain.handle("auth:cancel", (event, req: { flow?: unknown }) => {
 		const [id] = flowOf(event.sender, req?.flow);
 		close(id);
 	});
 
-	ipcMain.handle("cave:auth:logout", async (_event, req: { provider?: unknown }) => {
+	ipcMain.handle("auth:logout", async (_event, req: { provider?: unknown }) => {
 		const provider = typeof req?.provider === "string" && req.provider !== "" ? req.provider : null;
 		if (provider === null) throw new Error("logout 需要 provider");
 		await (await load()).logout(provider);

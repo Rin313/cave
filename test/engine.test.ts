@@ -478,7 +478,7 @@ test("协议：未知动词、schema 不符、空序列与标量代序列都抛�
 test("档案：链断与损坏行截断、旧文移存 orphan、续写从完好前缀接续", () => {
 	const def = mkDef();
 	const rec = { seq: 1, time: 0, utterance: "u", steps: [new Simulation(def).apply({ verb: "write", params: { entity: "a", text: "改" } }).step] };
-	const dir = mkdtempSync(join(tmpdir(), "cave-test-"));
+	const dir = mkdtempSync(join(tmpdir(), "engine-test-"));
 	const path = join(dir, "records.jsonl");
 	writeFileSync(path, [JSON.stringify(rec), JSON.stringify({ ...rec, seq: 3 }), "{"].join("\n") + "\n");
 	const store = openArchive(path);

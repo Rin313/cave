@@ -118,7 +118,7 @@
 <script>
 (() => {
 "use strict";
-const cave = window.cave;
+const shell = window.shell;
 const $ = (id) => document.getElementById(id);
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls !== undefined) n.className = cls; return n; };
 const button = (label, onClick) => { const b = el("button", label); b.type = "button"; b.onclick = onClick; return b; };
@@ -129,7 +129,7 @@ const zh = (navigator.language || "en").toLowerCase().startsWith("zh");
 const text = {
 	"title": ["配置", "Settings"],
 	"close": ["完成", "Done"],
-	"bridge": ["window.cave 不可用", "window.cave unavailable"],
+	"bridge": ["window.shell 不可用", "window.shell unavailable"],
 	"boot": ["界面未能自动解析：{error}", "Could not resolve a user interface: {error}"],
 	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json（与 CLI 共用）。", "Advanced: edit settings.json and auth.json under {dir} directly (shared with the CLI)."],
 	"current": ["当前", "Current"],
@@ -161,14 +161,14 @@ const t = (key, args) => (text[key]?.[zh ? 0 : 1] ?? key).replace(/\{(\w+)\}/g, 
 document.documentElement.lang = zh ? "zh" : "en";
 
 (async () => {
-	if (!cave) {
+	if (!shell) {
 		$("boot").hidden = false;
 		$("boot").textContent = t("bridge");
 		return;
 	}
 	const params = new URLSearchParams(location.search);
-	const env = await cave.env();
-	let settings = await cave.settings();
+	const env = await shell.env();
+	let settings = await shell.settings();
 	let allModels = [];
 	let showAll = false;
 
@@ -207,7 +207,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 		none.textContent = t("ui.none");
 		let uis;
 		try {
-			uis = await cave.uis();
+			uis = await shell.uis();
 		} catch (e) {
 			none.hidden = false;
 			none.textContent = reason(e);
@@ -218,7 +218,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 			const scope = u.game && u.game !== u.name ? t("ui.scope", { game: u.game }) : "";
 			const mark = u.ref === settings.ui ? ` · ${t("current")}` : "";
 			const li = document.createElement("li");
-			li.append(el("span", `${u.name}${scope}${mark}`, "name"), button(t("use"), () => cave.use(u.ref)));
+			li.append(el("span", `${u.name}${scope}${mark}`, "name"), button(t("use"), () => shell.use(u.ref)));
 			return li;
 		}));
 	}
@@ -228,7 +228,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 		box.replaceChildren(el("p", t("model.loading"), "muted"));
 		let providers;
 		try {
-			providers = await cave.auth.providers();
+			providers = await shell.auth.providers();
 		} catch (e) {
 			box.replaceChildren(el("p", reason(e), "err"));
 			return;
@@ -240,14 +240,14 @@ document.documentElement.lang = zh ? "zh" : "en";
 			if (p.label) li.append(el("span", p.label, "tag"));
 			if (p.apiKey?.login) li.append(button(t("model.apiKey"), () => void startLogin(p.id, "api_key")));
 			if (p.oauth) li.append(button(p.oauth.label || t("model.login"), () => void startLogin(p.id, "oauth")));
-			if (p.configured) li.append(button(t("model.logout"), async () => { await cave.auth.logout(p.id); await refreshProvidersAndModels(); }));
+			if (p.configured) li.append(button(t("model.logout"), async () => { await shell.auth.logout(p.id); await refreshProvidersAndModels(); }));
 			list.append(li);
 		}
 		box.replaceChildren(list);
 	}
 
 	async function refreshProvidersAndModels() {
-		settings = await cave.settings();
+		settings = await shell.settings();
 		refreshCurrent();
 		await renderProviders();
 		await renderModels();
@@ -257,10 +257,10 @@ document.documentElement.lang = zh ? "zh" : "en";
 		$("flow").hidden = false;
 		$("notices").replaceChildren();
 		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
-		const offPrompt = cave.auth.onPrompt(({ flow, prompt }) => renderPrompt(flow, prompt));
-		const offNotice = cave.auth.onNotice(({ notice }) => renderNotice(notice));
+		const offPrompt = shell.auth.onPrompt(({ flow, prompt }) => renderPrompt(flow, prompt));
+		const offNotice = shell.auth.onNotice(({ notice }) => renderNotice(notice));
 		try {
-			await cave.auth.login(provider, type);
+			await shell.auth.login(provider, type);
 			$("promptArea").replaceChildren(el("p", t("login.done"), "muted"));
 		} catch (e) {
 			$("promptArea").replaceChildren(el("p", t("login.failed", { error: reason(e) }), "err"));
@@ -290,7 +290,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 	function answer(flow, value) {
 		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
-		void cave.auth.answer(flow, value).catch((e) => $("promptArea").replaceChildren(el("p", reason(e), "err")));
+		void shell.auth.answer(flow, value).catch((e) => $("promptArea").replaceChildren(el("p", reason(e), "err")));
 	}
 
 	function renderNotice(notice) {
@@ -312,7 +312,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 		const list = $("modelList");
 		list.replaceChildren(el("li", t("model.loading"), "muted"));
 		try {
-			allModels = await cave.models();
+			allModels = await shell.models();
 		} catch (e) {
 			list.replaceChildren(el("li", reason(e), "err"));
 			return;
@@ -336,7 +336,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 			if (!m.available) li.append(el("span", t("model.noCredentials"), "tag"));
 			li.append(button(t("use"), async () => {
 				try {
-					settings = await cave.setSettings({ model: m.ref });
+					settings = await shell.setSettings({ model: m.ref });
 					refreshCurrent();
 					drawModels();
 				} catch (e) {

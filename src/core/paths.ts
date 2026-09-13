@@ -3,11 +3,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { errorText } from "./sim.ts";
 
-/** 无宿主（CLI）时按平台约定复算 Electron userData。 */
+/** 无宿主（CLI）时按平台约定复算 Electron userData：目录名即应用名，须与 app.name（package.json 的 productName ?? name）一致。 */
 function platformUserData(): string {
-	if (process.platform === "win32") return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "cave");
-	if (process.platform === "darwin") return join(homedir(), "Library", "Application Support", "cave");
-	return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "cave");
+	const base = process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming")
+		: process.platform === "darwin" ? join(homedir(), "Library", "Application Support")
+		: process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+	return join(base, "cave");
 }
 
 /** 配置根：CAVE_CONFIG_DIR 覆盖；缺省取宿主的用户数据目录（Electron 传 app.getPath("userData")）。 */

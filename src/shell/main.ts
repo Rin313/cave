@@ -225,7 +225,7 @@ function openSettings(): void {
 async function createSession(game: string, run: string): Promise<Session> {
 	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, modelRuntime: await modelRuntime() });
 	const session: Session = { game, run, engine, unsubscribe: () => {}, busy: null };
-	session.unsubscribe = engine.subscribe((event) => win?.webContents.send("cave:event", { game, run, event }));
+	session.unsubscribe = engine.subscribe((event) => win?.webContents.send("event", { game, run, event }));
 	sessions.set(sessionKey(game, run), session);
 	return session;
 }
@@ -355,13 +355,13 @@ const uiFace = (site: UiSite): { name: string; ref: string; game?: string } => (
 	...(site.game !== null && { game: site.game }),
 });
 
-ipcMain.handle("cave:games", () => listGames(CONTENT_ROOTS));
+ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
-ipcMain.handle("cave:runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, gameId(req, "runs")));
+ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, gameId(req, "runs")));
 
 /** 回合记录原样读取（诊断面）：坏行计数显形；不装载 def、不重放、不改档案。 */
-ipcMain.handle("cave:records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
+ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
 	const { game, run } = pair(req);
 	const path = runPaths(game, run, DATA_ROOT).records;
 	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
@@ -371,10 +371,10 @@ ipcMain.handle("cave:records", (_event, req: { game?: unknown; run?: unknown } |
 });
 
 /** 活实例清单：界面换装/重载后据此附着回既有实例。 */
-ipcMain.handle("cave:sessions", () => [...sessions.values()].map((s) => ({ ...coords(s), busy: s.busy })));
+ipcMain.handle("sessions", () => [...sessions.values()].map((s) => ({ ...coords(s), busy: s.busy })));
 
 /** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
-ipcMain.handle("cave:meta", (_event, req: { game?: unknown } | undefined) => {
+ipcMain.handle("meta", (_event, req: { game?: unknown } | undefined) => {
 	const game = requiredGame(req, "meta");
 	const read = readGameMeta(game, CONTENT_ROOTS);
 	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(CONTENT_ROOTS).join(", ") || "无"}）`);
@@ -382,14 +382,14 @@ ipcMain.handle("cave:meta", (_event, req: { game?: unknown } | undefined) => {
 });
 
 /** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
-ipcMain.handle("cave:def", async (_event, req: { game?: unknown } | undefined) => {
+ipcMain.handle("def", async (_event, req: { game?: unknown } | undefined) => {
 	const game = requiredGame(req, "def");
 	const def = await loadGame(game, CONTENT_ROOTS);
 	return { game, verbs: verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
-ipcMain.handle("cave:uis", (_event, req: { game?: unknown } | undefined) => {
+ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
 	const game = gameId(req, "uis");
 	const compatible = uiSites().filter((s) => s.game === null || game === undefined || s.game === game);
 	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
@@ -397,7 +397,7 @@ ipcMain.handle("cave:uis", (_event, req: { game?: unknown } | undefined) => {
 });
 
 /** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动。 */
-ipcMain.handle("cave:use", (_event, req: { ref?: unknown }) => {
+ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 	if (typeof req?.ref !== "string" || req.ref === "") throw new Error("use 需要界面 ref");
 	const site = siteByRef(req.ref);
 	if (site === null) throw new Error(`未知界面：${req.ref}（可用：${uiList()}）`);
@@ -405,11 +405,11 @@ ipcMain.handle("cave:use", (_event, req: { ref?: unknown }) => {
 	void win?.loadFile(site.file);
 });
 
-ipcMain.handle("cave:settings", () => settings());
+ipcMain.handle("settings", () => settings());
 
-ipcMain.handle("cave:env", () => ({ configDir: CONFIG_DIR }));
+ipcMain.handle("env", () => ({ configDir: CONFIG_DIR }));
 
-ipcMain.handle("cave:settings:set", async (_event, req: { patch?: unknown }) => {
+ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	for (const key of ["ui", "settingsUi"] as const) {
@@ -424,21 +424,21 @@ ipcMain.handle("cave:settings:set", async (_event, req: { patch?: unknown }) => 
 	return settings();
 });
 
-ipcMain.handle("cave:settings:open", () => openSettings());
+ipcMain.handle("settings:open", () => openSettings());
 
-ipcMain.handle("cave:open", async (_event, req: { game?: unknown; run?: unknown }) => {
+ipcMain.handle("open", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	const session = await openSession(game, run);
 	return { ...snapshot(session), warnings: [...session.engine.loadWarnings] };
 });
 
 /** 显式释放：不关别人的实例，也不动档案。 */
-ipcMain.handle("cave:close", (_event, req: { game?: unknown; run?: unknown }) => {
+ipcMain.handle("close", (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	closeSession(game, run);
 });
 
-ipcMain.handle("cave:act", async (_event, req: { game?: unknown; run?: unknown; utterance?: unknown }) => {
+ipcMain.handle("act", async (_event, req: { game?: unknown; run?: unknown; utterance?: unknown }) => {
 	const { game, run } = pair(req);
 	if (typeof req?.utterance !== "string" || req.utterance.trim() === "") throw new Error("act 需要非空 utterance");
 	const utterance = req.utterance;
@@ -448,7 +448,7 @@ ipcMain.handle("cave:act", async (_event, req: { game?: unknown; run?: unknown; 
 	});
 });
 
-ipcMain.handle("cave:narrate", async (_event, req: { game?: unknown; run?: unknown; instruction?: unknown }) => {
+ipcMain.handle("narrate", async (_event, req: { game?: unknown; run?: unknown; instruction?: unknown }) => {
 	const { game, run } = pair(req);
 	if (typeof req?.instruction !== "string" || req.instruction.trim() === "") throw new Error("narrate 需要非空 instruction");
 	const instruction = req.instruction;
@@ -458,7 +458,7 @@ ipcMain.handle("cave:narrate", async (_event, req: { game?: unknown; run?: unkno
 	});
 });
 
-ipcMain.handle("cave:state", async (_event, req: { game?: unknown; run?: unknown }) => {
+ipcMain.handle("state", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
 	return snapshot(await attached(game, run));
 });
