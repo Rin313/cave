@@ -109,7 +109,7 @@ export type SlotDef =
 	| (SlotCommon & { type: LitType })
 	| (SlotCommon & { type: "ref"; strong: boolean });
 
-/** 裁决点。rule 的 law 只被呈现与探针消费；gate/closure/engine 无载荷，呈现身份由 lawOf 产生。 */
+/** 裁决点。rule 的 law 只被记录与断言消费；gate/closure/engine 无载荷，呈现身份由 lawOf 产生。 */
 export type Point =
 	| { kind: "rule"; law: string }
 	| { kind: "gate" }
@@ -166,7 +166,7 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 裁决结果；price 覆写缺省 cost（授予与否决同轴）；reply 只属 act（clock 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被呈现与探针消费。 */
+/** 裁决结果；price 覆写缺省 cost（授予与否决同轴）；reply 只属 act（clock 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被记录与断言消费。 */
 export type Verdict =
 	| { ok: true; deltas: Delta[]; law?: Text; reply?: Text; statements?: Text[]; price?: number }
 	| { ok: false; denial: RuleDenial; price?: number };
@@ -549,7 +549,7 @@ function isScalarValue(v: unknown): v is Scalar {
 	return typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 }
 
-/** 类型挡不住 as 通道（存档恢复、探针），存储形状运行时复核；空序列不是值（表示无只用缺席）。 */
+/** 类型挡不住 as 通道（存档恢复），存储形状运行时复核；空序列不是值（表示无只用缺席）。 */
 function isValue(v: unknown): v is Value {
 	return isScalarValue(v) || (Array.isArray(v) && v.length > 0 && v.every(isScalarValue));
 }
