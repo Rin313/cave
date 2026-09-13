@@ -2,6 +2,7 @@ node_modules/
 dist/
 runs/
 /games/
+/ui/
 *.log
 /settings.json
 /auth.json

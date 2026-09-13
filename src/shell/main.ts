@@ -26,17 +26,19 @@ let settingsWin: BrowserWindow | null = null;
 
 const APP_ROOT = app.getAppPath();
 const DATA_ROOT = app.isPackaged ? app.getPath("userData") : APP_ROOT;
-/** 游戏查找链：用户目录（可写、可覆盖）→ 包内；同名前者遮蔽后者。 */
-const GAME_ROOTS = [DATA_ROOT, APP_ROOT];
+/** 包外资源根：随安装分发，位于 asar 之外。 */
+const RESOURCE_ROOT = process.resourcesPath;
+/** 游戏查找链：用户目录（可写、可覆盖）→ 包外资源 → 包内；同名前者遮蔽后者。 */
+const GAME_ROOTS = app.isPackaged ? [DATA_ROOT, RESOURCE_ROOT, APP_ROOT] : [APP_ROOT];
 /** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按 DATA_ROOT。 */
 const CONFIG_DIR = configDir();
 /** 界面查序：全局 ui/<name>（用户 → 包外资源 → 包内），再游戏自带 games/<name>/ui；同名先见者遮蔽。 */
 const UI_ROOTS = app.isPackaged
-	? [join(DATA_ROOT, "ui"), join(process.resourcesPath, "ui"), join(APP_ROOT, "ui")]
+	? [join(DATA_ROOT, "ui"), join(RESOURCE_ROOT, "ui"), join(APP_ROOT, "ui")]
 	: [join(APP_ROOT, "ui")];
 const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged
-	? [SETTINGS_FILE, join(process.resourcesPath, "settings.json"), join(APP_ROOT, "settings.json")]
+	? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json"), join(APP_ROOT, "settings.json")]
 	: [SETTINGS_FILE, join(APP_ROOT, "settings.json")];
 
 let runtime: Promise<ModelRuntime> | null = null;
