@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, shell, type BrowserWindowConstructorOptions } from "electron";
+import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -51,8 +51,6 @@ const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
-/** 引导面底色：与 setup.html 页底一致（随系统深浅），避免加载期闪色。 */
-const setupBackground = (): string => (nativeTheme.shouldUseDarkColors ? "#1a1a1a" : "#f5f0e1");
 
 let runtime: Promise<ModelRuntime> | null = null;
 /** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效；失败即弃，下次重试。 */
@@ -183,6 +181,7 @@ function settingsSite(): UiSite | null {
 
 function windowOptions(): BrowserWindowConstructorOptions {
 	return {
+		show: false,
 		backgroundColor: "#14161a",
 		// 菜单隐藏但保留默认角色：重载/DevTools/缩放快捷键仍有效，Alt 可唤出，常驻视觉噪音消失。
 		autoHideMenuBar: true,
@@ -192,6 +191,11 @@ function windowOptions(): BrowserWindowConstructorOptions {
 			sandbox: true,
 		},
 	};
+}
+
+/** 首帧渲染完成后再显示：加载期不闪底色，窗口底色因此不必与页面样式耦合。 */
+function present(w: BrowserWindow): void {
+	w.once("ready-to-show", () => w.show());
 }
 
 /** 外链一律交系统浏览器：配置面的 OAuth 链接不开 Electron 子窗口；只放行 http(s)。 */
@@ -208,7 +212,8 @@ function openSettings(): void {
 		return;
 	}
 	const file = settingsSite()?.file ?? SETUP_FILE;
-	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640, ...(file === SETUP_FILE && { backgroundColor: setupBackground() }) });
+	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640 });
+	present(settingsWin);
 	externalLinks(settingsWin);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
@@ -461,16 +466,14 @@ ipcMain.handle("cave:state", async (_event, req: { game?: unknown; run?: unknown
 app.whenReady().then(() => {
 	installAuth(modelRuntime);
 	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
+	present(win);
 	externalLinks(win);
 	win.on("closed", () => {
 		win = null;
 		closeAll();
 	});
 	if (ui !== null) void win.loadFile(ui.file);
-	else {
-		win.setBackgroundColor(setupBackground());
-		void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
-	}
+	else void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
 });
 
 app.on("window-all-closed", () => app.quit());
