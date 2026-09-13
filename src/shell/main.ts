@@ -1,10 +1,10 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Engine } from "../core/engine.ts";
 import { errorText, spineLines } from "../core/sim.ts";
 import { GAMES } from "../games/registry.ts";
-import { openRun, runPaths } from "../tools/runs.ts";
+import { configDir, openRun, runPaths } from "../tools/runs.ts";
 
 interface Current {
 	game: string;
@@ -18,13 +18,16 @@ let current: Current | null = null;
 
 const APP_ROOT = app.getAppPath();
 const DATA_ROOT = app.isPackaged ? app.getPath("userData") : APP_ROOT;
+/** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按 DATA_ROOT。 */
+const CONFIG_DIR = configDir();
 /** 界面查序：用户目录（可写、可覆盖）→ 包外资源 → 包内；同名前者遮蔽后者。 */
 const UI_ROOTS = app.isPackaged
 	? [join(DATA_ROOT, "ui"), join(process.resourcesPath, "ui"), join(APP_ROOT, "ui")]
 	: [join(APP_ROOT, "ui")];
+const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged
-	? [join(DATA_ROOT, "settings.json"), join(process.resourcesPath, "settings.json"), join(APP_ROOT, "settings.json")]
-	: [join(APP_ROOT, "settings.json")];
+	? [SETTINGS_FILE, join(process.resourcesPath, "settings.json"), join(APP_ROOT, "settings.json")]
+	: [SETTINGS_FILE, join(APP_ROOT, "settings.json")];
 
 /** 界面名即目录名，只认 <root>/<name>/index.html；名字不做路径。 */
 function uiFile(name: string): string | null {
@@ -47,16 +50,23 @@ function uis(): string[] {
 	return [...names].sort();
 }
 
-function readUiSetting(): string | undefined {
+/** 设置按文件优先级读取（高优先在前）；破损设置视同缺席，启动失败信息会列出可用界面。 */
+function loadSettings(): Record<string, unknown>[] {
+	const files: Record<string, unknown>[] = [];
 	for (const file of SETTINGS_FILES) {
 		if (!existsSync(file)) continue;
 		try {
-			const parsed = JSON.parse(readFileSync(file, "utf8")) as { ui?: unknown };
-			if (typeof parsed?.ui === "string") return parsed.ui;
+			const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+			if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) files.push(parsed as Record<string, unknown>);
 		} catch {
-			// 破损设置视同缺席；启动失败信息会列出可用界面
+			// 破损设置视同缺席
 		}
 	}
+	return files;
+}
+
+function readUiSetting(): string | undefined {
+	for (const parsed of loadSettings()) if (typeof parsed.ui === "string") return parsed.ui;
 	return undefined;
 }
 
@@ -67,7 +77,7 @@ function bootUi(): string {
 	const names = uis();
 	if (names.length === 1) return names[0]!;
 	if (names.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html`);
-	throw new Error(`未指定界面：可用 ${names.join(", ")}；在 ${SETTINGS_FILES[0]} 写入 { "ui": "<name>" }`);
+	throw new Error(`未指定界面：可用 ${names.join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<name>" }`);
 }
 
 let ui: string;
@@ -112,7 +122,8 @@ ipcMain.handle("cave:use", (_event, req: { name?: unknown }) => {
 	if (typeof req?.name !== "string") throw new Error("use 需要界面名");
 	const file = uiFile(req.name);
 	if (file === null) throw new Error(`未知界面：${req.name}（可用：${uis().join(", ") || "无"}）`);
-	writeFileSync(SETTINGS_FILES[0]!, `${JSON.stringify({ ui: req.name }, null, "\t")}\n`, "utf8");
+	mkdirSync(CONFIG_DIR, { recursive: true });
+	writeFileSync(SETTINGS_FILE, `${JSON.stringify(Object.assign({}, ...loadSettings().reverse(), { ui: req.name }), null, "\t")}\n`, "utf8");
 	void win?.loadFile(file);
 });
 

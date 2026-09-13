@@ -2,21 +2,21 @@ import {
 	createAgentSession,
 	DefaultResourceLoader,
 	defineTool,
-	getAgentDir,
-	ModelRuntime,
 	SessionManager,
 	SettingsManager,
 	type CreateAgentSessionOptions,
 	type InlineExtension,
+	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { recentEntries, pruneContext, verbatim } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type ChronicleEntry, type Commit, type GameDef, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface EngineOptions {
-	modelRuntime?: ModelRuntime;
-	provider: string;
-	model: string;
+	model: NonNullable<CreateAgentSessionOptions["model"]>;
+	modelRuntime: ModelRuntime;
+	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
+	agentDir: string;
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 	/** pi 运行时会话（原始 trace）；缺省 inMemory（不落盘），不入装载。 */
 	sessionManager?: SessionManager;
@@ -129,10 +129,6 @@ export class Engine {
 		const sim = loaded?.sim ?? new Simulation(def);
 		const loadWarnings = loaded?.warnings ?? [];
 
-		const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create());
-		const modelDef = modelRuntime.getModel(options.provider, options.model);
-		if (!modelDef) throw new Error(`模型 ${options.provider}/${options.model} 不可用`);
-
 		const thinkingLevel = options.thinkingLevel ?? "high";
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", messageStart: 0, entryStart: 0, steps: [], warnings: [] };
@@ -144,7 +140,8 @@ export class Engine {
 		const recent: RecentEntry[] = [];
 		const loader = new DefaultResourceLoader({
 			cwd: process.cwd(),
-			agentDir: getAgentDir(),
+			agentDir: options.agentDir,
+			appendSystemPrompt: [],
 			settingsManager,
 			systemPrompt: def.prompt.system,
 			extensionFactories: [buildContextExtension(def, () => recent)],
@@ -159,8 +156,8 @@ export class Engine {
 		const customTools = [buildActTool(def, sim, run, ledger, options.archive)];
 
 		const sessionOptions: CreateAgentSessionOptions = {
-			model: modelDef,
-			modelRuntime,
+			model: options.model,
+			modelRuntime: options.modelRuntime,
 			thinkingLevel,
 			resourceLoader: loader,
 			settingsManager,

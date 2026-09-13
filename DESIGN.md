@@ -166,7 +166,8 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 ## 架构决策
 
-- 进程内集成 pi coding agent（`node_modules/@earendil-works/pi-coding-agent/docs/`）。
+- 进程内集成 pi agent SDK（`node_modules/@earendil-works/pi-coding-agent/docs/`）。
+- **模型与凭据自持（用户级）**：配置根（`CAVE_CONFIG_DIR` 覆盖；缺省 Windows `%APPDATA%\cave`、macOS `~/Library/Application Support/cave`、Linux `$XDG_CONFIG_HOME/cave`，即 Electron userData）持有 `auth.json`／`models.json`／`models-store.json`／`settings.json`，不读 pi agent 的 `~/.pi/agent`；运行数据（`runs/`）仍按数据根。模型选择是单一引用 `provider/model[:thinking]`（`settings.json` 缺省、`${GAME}_MODEL` 覆盖），凭据取 provider 环境变量或该 `auth.json`——无需安装 pi agent 或 `/login`；壳内凭据由壳界面经 SDK 的 login 编排写入同一存储（GUI 启动不继承 shell 环境变量）。
 - **上下文裁剪**：每次调用经 `context` 扩展裁剪为最后一条 user 消息起的后缀（工具结果存为独立 toolResult 角色、不并入 user 消息，回合内该锚恒为回合提示，叙述续行因此保住裁决前缀；context 事件的消息是深拷贝，就地改写不写入会话文件）。
 - **持久化**：唯一证据是回合记录，近况是其纯函数投影（作者选择×引擎投影），只在装载与回合边界整体重算，进程重启由记录按序重放重建（不重裁决、不掷骰、逐变更 prev 校验，终态过 admit）。档案是单一追加日志（`records.jsonl`），条目只有回合（证据，每回合恰一，定稿写点）；pi 会话是原始 trace。装载遇序位不接续或变更不可应用即截断至断点前的完好前缀并告警显形：截断以重写落地——续写前档案重写为完好前缀，旧全文移存 `records.jsonl.orphan`，不再进入装载；投影失败是呈现缺陷，在消费时降级，不算装载损坏。
 - **缓存稳定性**：[tools+system] 放置于开头，系统提示与工具数组字节级稳定，不做 setActiveTools 相位切换；回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变）。
