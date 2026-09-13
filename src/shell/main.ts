@@ -51,6 +51,8 @@ const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
 const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
+/** 引导面底色：与 setup.html 页底一致，避免加载期闪暗。 */
+const SETUP_BACKGROUND = "#f5f0e1";
 
 let runtime: Promise<ModelRuntime> | null = null;
 /** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效；失败即弃，下次重试。 */
@@ -204,7 +206,7 @@ function openSettings(): void {
 		return;
 	}
 	const file = settingsSite()?.file ?? SETUP_FILE;
-	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640 });
+	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640, ...(file === SETUP_FILE && { backgroundColor: SETUP_BACKGROUND }) });
 	externalLinks(settingsWin);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
@@ -463,7 +465,10 @@ app.whenReady().then(() => {
 		closeAll();
 	});
 	if (ui !== null) void win.loadFile(ui.file);
-	else void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
+	else {
+		win.setBackgroundColor(SETUP_BACKGROUND);
+		void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
+	}
 });
 
 app.on("window-all-closed", () => app.quit());
