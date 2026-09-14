@@ -29,12 +29,11 @@ const isSession = (slot: Session | Promise<Session>): slot is Session => !(slot 
 let win: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
 
-/** 第二实例聚焦已有窗口；写者唯一由单实例锁保证。 */
+/** 第二实例聚焦主窗（主窗缺席即应用正在收束）；写者唯一由单实例锁保证。 */
 app.on("second-instance", () => {
-	const target = win ?? settingsWin;
-	if (target === null || target.isDestroyed()) return;
-	if (target.isMinimized()) target.restore();
-	target.focus();
+	if (win === null || win.isDestroyed()) return;
+	if (win.isMinimized()) win.restore();
+	win.focus();
 });
 
 const USER_DATA = app.getPath("userData");
@@ -192,13 +191,9 @@ function windowOptions(): BrowserWindowConstructorOptions {
 	};
 }
 
-/** 首帧渲染完成后再显示：加载期不闪底色，窗口底色因此不必与页面样式耦合。 */
-function present(w: BrowserWindow): void {
+/** 窗口共同纪律：首帧渲染完成后再显示（不闪底色）；外链一律交系统浏览器（远程页不得继承 preload 桥，只放行 http(s)）；内容不得否决关闭。 */
+function bindWindow(w: BrowserWindow): void {
 	w.once("ready-to-show", () => w.show());
-}
-
-/** 外链一律交系统浏览器（新窗口与主导航同制）：远程页不得继承 preload 桥；只放行 http(s)。 */
-function externalLinks(w: BrowserWindow): void {
 	w.webContents.setWindowOpenHandler(({ url }) => {
 		if (/^https?:\/\//.test(url)) void shell.openExternal(url);
 		return { action: "deny" };
@@ -208,6 +203,7 @@ function externalLinks(w: BrowserWindow): void {
 		event.preventDefault();
 		if (/^https?:\/\//.test(event.url)) void shell.openExternal(event.url);
 	});
+	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
 function openSettings(): void {
@@ -217,8 +213,7 @@ function openSettings(): void {
 	}
 	const file = settingsSite()?.file ?? SETUP_FILE;
 	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640 });
-	present(settingsWin);
-	externalLinks(settingsWin);
+	bindWindow(settingsWin);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
 	});
@@ -294,21 +289,6 @@ async function configured<T>(run: () => Promise<T>): Promise<T> {
 			}
 		}
 		throw e;
-	}
-}
-
-/** 窗口关闭即释放全部实例（含开启中的）；回合进行中的未竟调用随进程收束。 */
-function closeAll(): void {
-	const all = [...sessions.values()];
-	sessions.clear();
-	for (const slot of all) {
-		void Promise.resolve(slot).then(
-			(session) => {
-				session.unsubscribe();
-				session.engine.dispose();
-			},
-			() => {},
-		);
 	}
 }
 
@@ -492,14 +472,12 @@ ipcMain.handle("state", async (_event, req: { game?: unknown; run?: unknown }) =
 app.whenReady().then(() => {
 	installAuth(modelRuntime);
 	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
-	present(win);
-	externalLinks(win);
+	bindWindow(win);
+	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
 	win.on("closed", () => {
 		win = null;
-		closeAll();
+		app.quit();
 	});
 	if (ui !== null) void win.loadFile(ui.file);
 	else void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
 });
-
-app.on("window-all-closed", () => app.quit());

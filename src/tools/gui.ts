@@ -113,15 +113,20 @@ function pidAlive(pid: number): boolean {
 	}
 }
 
-/** 宿主的页面目标；不可达（未起／已死／界面已关）即 null。 */
-async function targetOf(port: number): Promise<Target | null> {
+/** 宿主的全部页面目标（窗口可不止一个）；不可达（未起／已死／界面已关）即空。 */
+async function targetsOf(port: number): Promise<Target[]> {
 	try {
 		const list = (await (await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(1500) })).json()) as unknown;
-		if (!Array.isArray(list)) return null;
-		return (list as Target[]).find((t) => t.type === "page" && typeof t.webSocketDebuggerUrl === "string") ?? null;
+		if (!Array.isArray(list)) return [];
+		return (list as Target[]).filter((t) => t.type === "page" && typeof t.webSocketDebuggerUrl === "string");
 	} catch {
-		return null;
+		return [];
 	}
+}
+
+/** 命令求值面：任一页面等价（同一 preload）；不可达即 null。 */
+async function targetOf(port: number): Promise<Target | null> {
+	return (await targetsOf(port))[0] ?? null;
 }
 
 /** 宿主日志尾：启动与崩溃诊断。 */
@@ -224,8 +229,8 @@ async function stopHost(): Promise<void> {
 		console.log("宿主：无运行记录");
 		return;
 	}
-	const target = await targetOf(host.port);
-	if (target !== null) await requestClose(target);
+	const targets = await targetsOf(host.port);
+	await Promise.all(targets.map((t) => requestClose(t)));
 	const deadline = Date.now() + 5000;
 	while (Date.now() < deadline && pidAlive(host.pid)) await sleep(150);
 	if (pidAlive(host.pid)) {
@@ -236,7 +241,7 @@ async function stopHost(): Promise<void> {
 		}
 	}
 	discardHost();
-	console.log(`宿主已停止（pid ${host.pid}${target === null ? "，界面本不可达" : ""}）`);
+	console.log(`宿主已停止（pid ${host.pid}${targets.length === 0 ? "，界面本不可达" : ""}）`);
 }
 
 async function evaluate(target: Target, expression: string, timeoutMs: number): Promise<unknown> {
