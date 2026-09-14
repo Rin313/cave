@@ -1,7 +1,7 @@
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
-import { openArchive, parseArchiveLine } from "./archive.ts";
+import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
 import { configDir, dataDir, recordsPath, runsDir } from "./paths.ts";
@@ -11,30 +11,7 @@ import { readSettings, settingsPath, stringSetting, type Settings } from "./sett
 export interface RunFace {
 	game: string;
 	run: string;
-	time?: number;
 	mtime: number;
-}
-
-/** 尾部读最后一条完好的回合记录（表达行、半行与损坏向更早回退；窗口按块向文件头扩）。 */
-function tailRecord(path: string, size: number): { time: number } | null {
-	const fd = openSync(path, "r");
-	try {
-		let span = 64 * 1024;
-		for (;;) {
-			const start = Math.max(0, size - span);
-			const buf = Buffer.alloc(size - start);
-			const got = readSync(fd, buf, 0, buf.length, start);
-			const lines = buf.subarray(0, got).toString("utf8").split("\n");
-			for (let i = lines.length - 1; i >= 0; i--) {
-				const parsed = parseArchiveLine(lines[i]!);
-				if (parsed?.kind === "record") return { time: parsed.record.time };
-			}
-			if (start === 0) return null;
-			span *= 4;
-		}
-	} finally {
-		closeSync(fd);
-	}
 }
 
 /** 枚举存档（按记录文件 mtime 降序）；game 缺席即扫全部游戏目录。 */
@@ -52,8 +29,7 @@ export function listRuns(root: string, game?: string): RunFace[] {
 			const records = recordsPath(g, entry.name, root);
 			if (!existsSync(records)) continue;
 			const stat = statSync(records);
-			const tail = tailRecord(records, stat.size);
-			out.push({ game: g, run: entry.name, ...(tail !== null && { time: tail.time }), mtime: stat.mtimeMs });
+			out.push({ game: g, run: entry.name, mtime: stat.mtimeMs });
 		}
 	}
 	out.sort((a, b) => b.mtime - a.mtime);
