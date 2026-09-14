@@ -7,7 +7,7 @@ import type { ActOutcome, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir, isSegment, recordsPath } from "../core/paths.ts";
-import { listRuns, ModelConfigError, openModelRuntime, openRun, resolveModelRef } from "../core/runs.ts";
+import { listRuns, ModelConfigError, openModelRuntime, openRun } from "../core/runs.ts";
 import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "../core/settings.ts";
 import { installModel } from "./model.ts";
 
@@ -374,20 +374,11 @@ ipcMain.handle("settings", () => settings());
 
 ipcMain.handle("env", () => ({ configDir: CONFIG_DIR }));
 
-ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
+/** 写入是哑的：patch 原样落用户层，宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话的 ModelConfigError）；ui 归 use（写+导航）。 */
+ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
-	if (patch.settingsUi !== undefined) {
-		const ref = strIn(patch.settingsUi, "settings:set", "settingsUi");
-		const sites = uiRegistry();
-		if (!sites.has(ref)) throw new Error(`未知界面（settingsUi）：${ref}（可用：${uiList(sites)}）`);
-	}
-	if (patch.model !== undefined) {
-		const ref = strIn(patch.model, "settings:set", "model");
-		const resolved = resolveModelRef(ref, await modelRuntime());
-		if (!resolved.ok) throw new Error(`模型 "${ref}" 不可用：${resolved.reason}`);
-	}
 	return saveSettings(patch);
 });
 
