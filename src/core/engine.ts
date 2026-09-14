@@ -12,7 +12,6 @@ import { recentEntries, pruneContext, verbatim } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
-/** 会话材料：只在会话按需建立时解析；装载与浏览不需要模型。 */
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
 	modelRuntime: ModelRuntime;
@@ -20,7 +19,6 @@ export interface AgentSpec {
 }
 
 export interface EngineOptions {
-	/** 解析模型与凭据并给建会话材料；首次 act/narrate 才调用。 */
 	agent: () => Promise<AgentSpec>;
 	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
 	agentDir: string;

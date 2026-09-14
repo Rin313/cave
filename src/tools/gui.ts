@@ -1,4 +1,4 @@
-// GUI e2e host：经 CDP 调 window.shell 的 IPC 面；数据根承载游戏、界面与回合记录，验证靠阅读记录。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
+// GUI e2e host：经 CDP 调 window.shell 的 IPC 面
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
