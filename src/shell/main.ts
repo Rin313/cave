@@ -6,7 +6,7 @@ import { parseRecordLines } from "../core/archive.ts";
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
-import { configDir, dataDir, readJsonObject, runPaths, writeJson } from "../core/paths.ts";
+import { configDir, dataDir, readJsonObject, recordsPath, writeJson } from "../core/paths.ts";
 import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
 
@@ -363,7 +363,7 @@ ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns
 /** 回合记录原样读取（诊断面）：坏行计数显形；不装载 def、不重放、不改档案。 */
 ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
 	const { game, run } = pair(req);
-	const path = runPaths(game, run, DATA_ROOT).records;
+	const path = recordsPath(game, run, DATA_ROOT);
 	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
 	const lines = parseRecordLines(readFileSync(path, "utf8"));
 	const records = lines.flatMap((l) => (l.kind === "record" ? [l.record] : []));

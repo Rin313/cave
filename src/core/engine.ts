@@ -24,7 +24,7 @@ export interface EngineOptions {
 	agent: () => Promise<AgentSpec>;
 	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
 	agentDir: string;
-	/** pi 运行时会话（原始 trace）；缺省 inMemory（不落盘），不入装载。 */
+	/** pi 运行时会话（进程内调试缝）；缺省 inMemory，不落盘、不入装载。 */
 	sessionManager?: SessionManager;
 	/** 回合记录档案；缺省只留进程内存。 */
 	archive?: ArchiveStore;
@@ -131,7 +131,7 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	/** 装载即重放（archive.load）：引擎自回合记录档案组装世界；pi 会话只作运行时与原始 trace。 */
+	/** 装载即重放（archive.load）：引擎自回合记录档案组装世界；pi 会话只作进程内运行时。 */
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
 		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一：近况是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
@@ -206,10 +206,6 @@ export class Engine {
 			}
 		});
 		return session;
-	}
-
-	get sessionFile(): string | undefined {
-		return this.session?.sessionFile;
 	}
 
 	/** 已定稿回合数；档案链截断后等于存活回合数。 */

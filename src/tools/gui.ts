@@ -1,4 +1,4 @@
-// GUI e2e host：经 CDP 调 window.shell 的 IPC 面；数据根承载游戏、界面与会话证据，验证靠阅读会话。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
+// GUI e2e host：经 CDP 调 window.shell 的 IPC 面；数据根承载游戏、界面与回合记录，验证靠阅读记录。e2e 模型经 <GAME>_MODEL 或 settings.json 指定。
 // 宿主 Electron 跨命令保活（窗口对开发者可见）：start/stop/restart 管宿主，close 释放单个运行；改 src 后 restart，改游戏定义后 close 再开。
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";

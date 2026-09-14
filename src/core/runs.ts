@@ -1,10 +1,10 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { getDocsPath, ModelRuntime, resolveCliModel, SessionManager } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
-import { configDir, dataDir, runPaths } from "./paths.ts";
+import { configDir, dataDir, recordsPath } from "./paths.ts";
 
 /** 存档目录的派生清单：runs/<game>/<run>/records.jsonl；无记录的目录不是存档。 */
 export interface RunFace {
@@ -106,11 +106,10 @@ export interface OpenRunOptions {
 	modelRuntime?: ModelRuntime;
 }
 
-/** 装载（或新建）一次运行：records 是证据、pi 会话是原始 trace，都按同一 run 位置续写；模型与凭据只在 act/narrate 建会话时解析。 */
+/** 装载（或新建）一次运行：唯一档案是回合记录；pi 会话只作进程内运行时（缺省不落盘）。模型与凭据只在 act/narrate 建会话时解析。 */
 export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
 	const root = options.root ?? dataDir();
 	const gameRoots = options.gameRoots ?? [root];
-	const paths = runPaths(game, run, root);
 	const config = configDir();
 	const agent = async () => {
 		const { ref, source } = modelReference(game, config);
@@ -126,7 +125,6 @@ export async function openRun(game: string, run: string, options: OpenRunOptions
 	return Engine.create(await loadGame(game, gameRoots), {
 		agent,
 		agentDir: config,
-		archive: openArchive(paths.records),
-		sessionManager: SessionManager.open(paths.session),
+		archive: openArchive(recordsPath(game, run, root)),
 	});
 }
