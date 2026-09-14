@@ -236,7 +236,7 @@ export class Engine {
 			const session = await this.ensureSession();
 			this.beginRun(session, "mapping", action.utterance);
 			const view = this.sim.view();
-			const kit: TurnKit = { view, digest: JSON.stringify(view), utterance: JSON.stringify(action.utterance), recent: this.recent };
+			const kit: TurnKit = { view, utterance: JSON.stringify(action.utterance), recent: this.recent };
 			try {
 				const prompt = this.sim.def.prompt;
 				await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
@@ -290,7 +290,7 @@ export class Engine {
 			const session = await this.ensureSession();
 			this.beginRun(session, "narration");
 			const view = this.sim.view();
-			const kit: NarrateKit = { view, digest: JSON.stringify(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
+			const kit: NarrateKit = { view, events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 			const prompt = this.sim.def.prompt;
 			await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
 			return { narration: this.settleNarration(session, steps), warnings: this.run.warnings };

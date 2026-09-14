@@ -433,20 +433,15 @@ export interface PromptKit {
 	recent: RecentEntry[];
 }
 
-/** 状态视图的两种消费形态：本体与规范序列化由同一次求值产生，本体按只读约定消费。 */
-export interface ViewKit {
-	view: ViewValue;
-	/** view 的规范序列化：字节直用与默认排版的出口。 */
-	digest: string;
-}
-
 /** act 回合提示数据：状态视图 + 话语 + 近况。 */
-export interface TurnKit extends PromptKit, ViewKit {
+export interface TurnKit extends PromptKit {
+	view: ViewValue;
 	utterance: string;
 }
 
 /** 渲染调用提示数据：状态视图 + 事件骨架 + 指令 + 近况。 */
-export interface NarrateKit extends PromptKit, ViewKit {
+export interface NarrateKit extends PromptKit {
+	view: ViewValue;
 	/** 事件骨架行 */
 	events: string[];
 	/** 渲染指令 */
@@ -470,7 +465,7 @@ export function defaultTurnPrompt(kit: TurnKit): string {
 	const blocks: string[] = [];
 	const recent = recentBlock(kit.recent);
 	if (recent !== "") blocks.push(recent);
-	blocks.push(`[World state]\n${kit.digest}`);
+	blocks.push(`[World state]\n${JSON.stringify(kit.view)}`);
 	blocks.push(`Player says: ${kit.utterance}`);
 	return blocks.join("\n\n");
 }
@@ -480,7 +475,7 @@ export function defaultNarratePrompt(kit: NarrateKit): string {
 	const blocks: string[] = ["[Rendering service] This call has no action window; do not call act; write the prose text directly."];
 	const recent = recentBlock(kit.recent);
 	if (recent !== "") blocks.push(recent);
-	blocks.push(`[World state]\n${kit.digest}`);
+	blocks.push(`[World state]\n${JSON.stringify(kit.view)}`);
 	if (kit.events.length > 0) blocks.push(`[Recent adjudication]\n${kit.events.join("\n")}`);
 	blocks.push(kit.instruction);
 	return blocks.join("\n\n");
