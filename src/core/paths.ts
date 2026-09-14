@@ -20,7 +20,6 @@ export function dataDir(userData?: string): string {
 	return process.env.ENGINE_DATA_DIR ?? configDir(userData);
 }
 
-/** 一次运行的回合记录档案位置；root 即数据根。 */
 export function recordsPath(game: string, run: string, root = dataDir()): string {
 	return join(root, "runs", game, run, "records.jsonl");
 }

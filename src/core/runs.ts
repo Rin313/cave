@@ -106,7 +106,7 @@ export interface OpenRunOptions {
 	modelRuntime?: ModelRuntime;
 }
 
-/** 装载（或新建）一次运行：唯一档案是回合记录；pi 会话只作进程内运行时（缺省不落盘）。模型与凭据只在 act/narrate 建会话时解析。 */
+/** 装载（或新建）一次运行。模型与凭据只在 act/narrate 建会话时解析。 */
 export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
 	const root = options.root ?? dataDir();
 	const gameRoots = options.gameRoots ?? [root];

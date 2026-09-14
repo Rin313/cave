@@ -24,7 +24,6 @@ export interface EngineOptions {
 	agent: () => Promise<AgentSpec>;
 	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
 	agentDir: string;
-	/** pi 运行时会话（进程内调试缝）；缺省 inMemory，不落盘、不入装载。 */
 	sessionManager?: SessionManager;
 	/** 回合记录档案；缺省只留进程内存。 */
 	archive?: ArchiveStore;
