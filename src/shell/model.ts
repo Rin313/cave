@@ -60,7 +60,7 @@ function providerInfo(runtime: ModelRuntime): ProviderInfo[] {
 }
 
 /** 登录流程的应答通道：prompt/notice 只发往发起窗口，answer/cancel 只接受同一窗口；窗口销毁即取消。 */
-export function installAuth(load: () => Promise<ModelRuntime>): void {
+export function installModel(load: () => Promise<ModelRuntime>): void {
 	const flows = new Map<number, Flow>();
 	let next = 1;
 

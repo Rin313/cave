@@ -102,8 +102,8 @@ export interface OpenRunOptions {
 	gameRoots?: readonly string[];
 	/** 设置缺省层（靠前者优先，如随包分发的 settings.json）；与用户层合并后供模型引用读取。 */
 	settingLayers?: readonly string[];
-	/** 宿主共享的模型运行时（配置协议与引擎同源）；缺省新建。 */
-	modelRuntime?: ModelRuntime;
+	/** 宿主共享的模型运行时工厂（配置协议与引擎同源）；缺省按配置根新建；装载不建运行时，解析推迟到会话建立。 */
+	modelRuntime?: () => Promise<ModelRuntime>;
 }
 
 /** 装载（或新建）一次运行。模型与凭据只在 act/narrate 建会话时解析，设置每次都重读。 */
@@ -115,7 +115,8 @@ export async function openRun(game: string, run: string, options: OpenRunOptions
 	const agent = async () => {
 		const layers = options.settingLayers ?? [];
 		const { ref, source } = modelReference(game, readSettings(config, layers), file, layers.length > 0);
-		const modelRuntime = options.modelRuntime ?? (await openModelRuntime(config));
+		const loadRuntime = options.modelRuntime ?? (() => openModelRuntime(config));
+		const modelRuntime = await loadRuntime();
 		const resolved = resolveModelRef(ref, modelRuntime);
 		if (!resolved.ok) throw new ModelConfigError(`模型 "${ref}"（${source}）不可用：${resolved.reason}`);
 		if (resolved.warning) console.warn(`⚠ ${resolved.warning}`);

@@ -1,6 +1,12 @@
 // window.shell 为不可配置全局属性：界面脚本顶层不得再声明同名 const/let shell（SyntaxError），须置于 IIFE 内或改名。
 const { contextBridge, ipcRenderer } = require("electron");
 
+const on = (channel) => (listener) => {
+	const handler = (_event, payload) => listener(payload);
+	ipcRenderer.on(channel, handler);
+	return () => ipcRenderer.removeListener(channel, handler);
+};
+
 contextBridge.exposeInMainWorld("shell", {
 	games: () => ipcRenderer.invoke("games"),
 	runs: (game) => ipcRenderer.invoke("runs", { game }),
@@ -26,20 +32,8 @@ contextBridge.exposeInMainWorld("shell", {
 		answer: (flow, value) => ipcRenderer.invoke("auth:answer", { flow, value }),
 		cancel: (flow) => ipcRenderer.invoke("auth:cancel", { flow }),
 		logout: (provider) => ipcRenderer.invoke("auth:logout", { provider }),
-		onPrompt: (listener) => {
-			const handler = (_event, payload) => listener(payload);
-			ipcRenderer.on("auth:prompt", handler);
-			return () => ipcRenderer.removeListener("auth:prompt", handler);
-		},
-		onNotice: (listener) => {
-			const handler = (_event, payload) => listener(payload);
-			ipcRenderer.on("auth:notify", handler);
-			return () => ipcRenderer.removeListener("auth:notify", handler);
-		},
+		onPrompt: on("auth:prompt"),
+		onNotice: on("auth:notify"),
 	},
-	onEvent: (listener) => {
-		const handler = (_event, payload) => listener(payload);
-		ipcRenderer.on("event", handler);
-		return () => ipcRenderer.removeListener("event", handler);
-	},
+	onEvent: on("event"),
 });

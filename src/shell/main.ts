@@ -9,7 +9,7 @@ import { verbFace, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir, isSegment, recordsPath } from "../core/paths.ts";
 import { listRuns, ModelConfigError, openModelRuntime, openRun, resolveModelRef } from "../core/runs.ts";
 import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "../core/settings.ts";
-import { installAuth } from "./auth.ts";
+import { installModel } from "./model.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
 
@@ -55,12 +55,12 @@ const SETTINGS_DEFAULTS = app.isPackaged && existsSync(SETTINGS_DEFAULT) ? [SETT
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
 let runtime: Promise<ModelRuntime> | null = null;
-/** 壳与所有引擎共享同一模型运行时：配置协议写入的凭据对所有后续 open 立即生效；失败即弃，下次重试。 */
+/** 壳与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败归配置错误（引向配置面）并弃置，下次重试。 */
 function modelRuntime(): Promise<ModelRuntime> {
 	if (runtime === null) {
 		runtime = openModelRuntime(CONFIG_DIR).catch((e: unknown) => {
 			runtime = null;
-			throw e;
+			throw new ModelConfigError(`模型运行时不可用：${String(e)}`);
 		});
 	}
 	return runtime;
@@ -204,7 +204,7 @@ function openSettings(): void {
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime: await modelRuntime() });
+	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime });
 	const session: Session = { game, run, engine, unsubscribe: () => {}, busy: null };
 	session.unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
@@ -213,10 +213,10 @@ async function createSession(game: string, run: string): Promise<Session> {
 }
 
 /** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）。 */
-function openSession(game: string, run: string): Promise<Session> {
+async function openSession(game: string, run: string): Promise<Session> {
 	const key = sessionKey(game, run);
 	const found = sessions.get(key);
-	if (found !== undefined) return Promise.resolve(found);
+	if (found !== undefined) return found;
 	const started = createSession(game, run);
 	sessions.set(key, started);
 	// 表项被 close 除名时不复活；成功替换为实例，失败释放位置
@@ -383,13 +383,12 @@ ipcMain.handle("env", () => ({ configDir: CONFIG_DIR }));
 ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
-	let sites: UiSite[] | null = null;
-	for (const key of ["ui", "settingsUi"] as const) {
-		const ref = patch[key];
-		if (ref === undefined) continue;
-		if (typeof ref !== "string" || ref === "") throw new Error(`${key} 须为非空字符串`);
-		sites ??= uiSites();
-		if (siteByRef(sites, ref) === null) throw new Error(`未知界面（${key}）：${ref}（可用：${uiList(sites)}）`);
+	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
+	const settingsUi = patch.settingsUi;
+	if (settingsUi !== undefined) {
+		if (typeof settingsUi !== "string" || settingsUi === "") throw new Error("settingsUi 须为非空字符串");
+		const sites = uiSites();
+		if (siteByRef(sites, settingsUi) === null) throw new Error(`未知界面（settingsUi）：${settingsUi}（可用：${uiList(sites)}）`);
 	}
 	if (patch.model !== undefined) {
 		if (typeof patch.model !== "string" || patch.model.trim() === "") throw new Error("model 须为非空字符串");
@@ -439,7 +438,7 @@ ipcMain.handle("state", async (_event, req: { game?: unknown; run?: unknown }) =
 });
 
 app.whenReady().then(() => {
-	installAuth(modelRuntime);
+	installModel(modelRuntime);
 	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
 	bindWindow(win);
 	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
