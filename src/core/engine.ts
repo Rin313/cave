@@ -435,13 +435,8 @@ function hostParametersSchema(face: readonly VerbFace[]): JsonSchema {
 	};
 }
 
-/** act 工具描述缺省：协议约束 + 派生动词目录；作者经 prompt.tool 从 base 委托或覆盖。 */
-function baseToolDescription(def: GameDef): string {
-	return `Propose actions to the world; the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; one call opens this turn's adjudication window; an empty actions array is a refusal.\nAvailable verbs:\n${catalog(def.verbs)}`;
-}
-
 function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledger, store: ArchiveStore | undefined) {
-	const base = baseToolDescription(def);
+	const base = `Propose actions to the world; the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; one call opens this turn's adjudication window; an empty actions array is a refusal.\nAvailable verbs:\n${catalog(def.verbs)}`;
 	const description = def.prompt.tool?.(base) ?? base;
 	if (typeof description !== "string" || description.trim() === "") throw new Error("prompt.tool 须返回非空字符串（act 工具描述）");
 	return defineTool({

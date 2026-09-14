@@ -34,7 +34,6 @@ export function recordsPath(game: string, run: string, root = dataDir()): string
 	return join(runsDir(root, game), run, "records.jsonl");
 }
 
-/** JSON 对象文件：缺席返回 null；坏内容与非对象返回 value=null 与错误文本（自带位置）。 */
 export function readJsonObject(file: string): { value: Record<string, unknown> | null; error?: string } | null {
 	if (!existsSync(file)) return null;
 	let parsed: unknown;

@@ -283,12 +283,9 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	};
 }
 
-/** 规则链：动词与常驻规则同构的规则序列；两者身份都是 (trigger, id)，链内 id 唯一，校验共用。 */
-export type RuleChain = Rule[];
-
 /** 规则链注册项的共同面：动词与常驻规则同制。 */
 interface RuleDecl {
-	rules: RuleChain;
+	rules: Rule[];
 }
 
 /** 外部动词 */
