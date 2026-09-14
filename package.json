@@ -5,7 +5,6 @@
 	"type": "module",
 	"main": "src/shell/main.ts",
 	"scripts": {
-		"test": "node --test",
 		"dist": "electron-packager . --out=dist --overwrite --app-version=0.0.0 --download.mirrorOptions.mirror=https://npmmirror.com/mirrors/electron/ --ignore=\"^(?!$)(?!/(package\\.json$|(src|node_modules)(/|$)))\" --ignore=\"^/src/tools(/|$)\" --ignore=\"\\.map$\" --ignore=\"\\.d\\.ts$\""
 	},
 	"dependencies": {
