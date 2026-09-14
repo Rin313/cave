@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
-import { openArchive } from "./archive.ts";
+import { openArchive, parseRecordLine } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
 import { configDir, dataDir, recordsPath, runsDir } from "./paths.ts";
@@ -24,14 +24,8 @@ function tailRecord(path: string, size: number): { turn: number; time: number } 
 		const got = readSync(fd, buf, 0, buf.length, start);
 		const lines = buf.subarray(0, got).toString("utf8").split("\n");
 		for (let i = lines.length - 1; i >= 0; i--) {
-			const line = lines[i]!.trim();
-			if (line === "") continue;
-			try {
-				const v = JSON.parse(line) as { seq?: unknown; time?: unknown };
-				if (Number.isInteger(v.seq) && typeof v.time === "number") return { turn: v.seq as number, time: v.time };
-			} catch {
-				// 半行或损坏：向更早回退
-			}
+			const parsed = parseRecordLine(lines[i]!);
+			if (parsed?.kind === "record") return { turn: parsed.record.seq, time: parsed.record.time };
 		}
 	} finally {
 		closeSync(fd);

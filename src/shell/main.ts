@@ -3,7 +3,7 @@ import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { parseRecordLine } from "../core/archive.ts";
-import type { Engine } from "../core/engine.ts";
+import type { ActOutcome, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type ChronicleEntry, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir, readJsonObject, recordsPath, writeJson } from "../core/paths.ts";
@@ -300,33 +300,29 @@ async function configured<T>(run: () => Promise<T>): Promise<T> {
 	}
 }
 
-/** 实例坐标：snapshot 与会话清单共用。 */
+/** 实例坐标：快照与会话清单共用。 */
 function coords(session: Session): { game: string; run: string; turn: number; time: number } {
 	return { game: session.game, run: session.run, turn: session.engine.turn, time: session.engine.sim.world.time };
 }
 
-/** 状态快照：视图与坐标由同一读态求值，与 act 结果同形。 */
-function snapshot(session: Session): { game: string; run: string; turn: number; time: number; view: unknown } {
-	return { ...coords(session), view: session.engine.sim.view() };
-}
-
-function pair(req: { game?: unknown; run?: unknown } | undefined): { game: string; run: string } {
-	if (!segment(req?.game) || !segment(req?.run)) throw new Error("需要非空 game 与 run（路径段，不含分隔符）");
-	return { game: req.game, run: req.run };
+/** 状态快照：视图与坐标由同一读态求值；act/narrate 结果以此为基础附加。 */
+function face<T extends object>(session: Session, outcome: T = {} as T): { game: string; run: string; turn: number; time: number; view: unknown } & T {
+	return { ...coords(session), view: session.engine.sim.view(), ...outcome };
 }
 
 /** 可缺席的 game 字段：缺席即 undefined，非路径段即拒。 */
-function gameId(req: { game?: unknown } | undefined, cmd: string): string | undefined {
+function idIn(req: { game?: unknown } | undefined, cmd: string): string | undefined {
 	if (req?.game === undefined) return undefined;
 	if (!segment(req.game)) throw new Error(`${cmd} 的 game 须为游戏 id`);
 	return req.game;
 }
 
-/** 必填的 game 字段。 */
-function requiredGame(req: { game?: unknown } | undefined, cmd: string): string {
-	const game = gameId(req, cmd);
+/** 必填的 game 与 run 字段。 */
+function idsIn(req: { game?: unknown; run?: unknown } | undefined, cmd: string): { game: string; run: string } {
+	const game = idIn(req, cmd);
 	if (game === undefined) throw new Error(`${cmd} 需要游戏 id`);
-	return game;
+	if (!segment(req?.run)) throw new Error(`${cmd} 的 run 须为存档 id（路径段，不含分隔符）`);
+	return { game, run: req.run };
 }
 
 /** 回合门：同一实例同时只容一个 act/narrate；校验归调用方。 */
@@ -341,23 +337,11 @@ async function turn<T>(game: string, run: string, kind: "act" | "narrate", body:
 	}
 }
 
-interface SlotFace {
-	key: string;
-	type: SlotDef["type"];
-	many: boolean;
-	strong?: boolean;
-	label?: string | null;
-}
+/** 注册槽静态面：核心 SlotDef 加内部键；界面据此生成控件。 */
+type SlotFace = SlotDef & { key: string };
 
-/** 注册槽静态面：键、值域、重数、ref 生命周期与呈现名（label 缺席即该格类缺省）。 */
 function slotFace(slots: Record<string, SlotDef> | undefined): SlotFace[] {
-	return Object.entries(slots ?? {}).map(([key, d]) => ({
-		key,
-		type: d.type,
-		many: d.many === true,
-		...(d.type === "ref" && { strong: d.strong }),
-		...(d.label !== undefined && { label: d.label }),
-	}));
+	return Object.entries(slots ?? {}).map(([key, d]) => ({ key, ...d }));
 }
 
 const uiFace = (site: UiSite): { name: string; ref: string; game?: string } => ({
@@ -369,11 +353,11 @@ const uiFace = (site: UiSite): { name: string; ref: string; game?: string } => (
 ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
-ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, gameId(req, "runs")));
+ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, idIn(req, "runs")));
 
 /** 回合记录原样读取（诊断面）：行式流读，不在主进程整读；坏行计数显形；不装载 def、不重放、不改档案。 */
 ipcMain.handle("records", async (_event, req: { game?: unknown; run?: unknown } | undefined) => {
-	const { game, run } = pair(req);
+	const { game, run } = idsIn(req, "records");
 	const path = recordsPath(game, run, DATA_ROOT);
 	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
 	const records: ChronicleEntry[] = [];
@@ -400,7 +384,8 @@ ipcMain.handle("sessions", () => [...sessions.values()].filter(isSession).map((s
 
 /** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
 ipcMain.handle("meta", (_event, req: { game?: unknown } | undefined) => {
-	const game = requiredGame(req, "meta");
+	const game = idIn(req, "meta");
+	if (game === undefined) throw new Error("meta 需要游戏 id");
 	const read = readGameMeta(game, CONTENT_ROOTS);
 	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(CONTENT_ROOTS).join(", ") || "无"}）`);
 	return { game, meta: read.meta, ...(read.error !== undefined && { error: read.error }) };
@@ -408,14 +393,15 @@ ipcMain.handle("meta", (_event, req: { game?: unknown } | undefined) => {
 
 /** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
 ipcMain.handle("def", async (_event, req: { game?: unknown } | undefined) => {
-	const game = requiredGame(req, "def");
+	const game = idIn(req, "def");
+	if (game === undefined) throw new Error("def 需要游戏 id");
 	const def = await loadGame(game, CONTENT_ROOTS);
 	return { game, verbs: verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
 ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
-	const game = gameId(req, "uis");
+	const game = idIn(req, "uis");
 	const compatible = uiSites().filter((s) => s.game === null || game === undefined || s.game === game);
 	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
 	return compatible.map(uiFace);
@@ -457,40 +443,40 @@ ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 ipcMain.handle("settings:open", () => openSettings());
 
 ipcMain.handle("open", async (_event, req: { game?: unknown; run?: unknown }) => {
-	const { game, run } = pair(req);
+	const { game, run } = idsIn(req, "open");
 	const session = await openSession(game, run);
-	return { ...snapshot(session), warnings: [...session.engine.loadWarnings] };
+	return face(session, { warnings: [...session.engine.loadWarnings] });
 });
 
 /** 显式释放：不关别人的实例，也不动档案。 */
 ipcMain.handle("close", (_event, req: { game?: unknown; run?: unknown }) => {
-	const { game, run } = pair(req);
+	const { game, run } = idsIn(req, "close");
 	return closeSession(game, run);
 });
 
 ipcMain.handle("act", async (_event, req: { game?: unknown; run?: unknown; utterance?: unknown }) => {
-	const { game, run } = pair(req);
+	const { game, run } = idsIn(req, "act");
 	if (typeof req?.utterance !== "string" || req.utterance.trim() === "") throw new Error("act 需要非空 utterance");
 	const utterance = req.utterance;
 	return turn(game, run, "act", async (session) => {
-		const outcome = await configured(() => session.engine.act({ utterance }));
-		return { ...snapshot(session), steps: outcome.steps, lines: outcome.lines, reveals: outcome.reveals, narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
+		const outcome: ActOutcome = await configured(() => session.engine.act({ utterance }));
+		return face(session, outcome);
 	});
 });
 
 ipcMain.handle("narrate", async (_event, req: { game?: unknown; run?: unknown; instruction?: unknown }) => {
-	const { game, run } = pair(req);
+	const { game, run } = idsIn(req, "narrate");
 	if (typeof req?.instruction !== "string" || req.instruction.trim() === "") throw new Error("narrate 需要非空 instruction");
 	const instruction = req.instruction;
 	return turn(game, run, "narrate", async (session) => {
-		const outcome = await configured(() => session.engine.narrate(instruction));
+		const outcome: NarrationOutcome = await configured(() => session.engine.narrate(instruction));
 		return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
 	});
 });
 
 ipcMain.handle("state", async (_event, req: { game?: unknown; run?: unknown }) => {
-	const { game, run } = pair(req);
-	return snapshot(await attached(game, run));
+	const { game, run } = idsIn(req, "state");
+	return face(await attached(game, run));
 });
 
 app.whenReady().then(() => {
