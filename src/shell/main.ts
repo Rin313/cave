@@ -24,7 +24,8 @@ interface Session {
 
 /** 两态单表：开启中的 promise 或已开启的实例；关闭对两者同样权威。 */
 const sessions = new Map<string, Session | Promise<Session>>();
-const sessionKey = (game: string, run: string): string => `${game}\u0000${run}`;
+/** 两段均为路径段（isSegment，不含 /）：首个 / 即切分点。 */
+const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 const isSession = (slot: Session | Promise<Session>): slot is Session => !(slot instanceof Promise);
 
 let win: BrowserWindow | null = null;
@@ -77,45 +78,37 @@ interface UiSite {
 const uiRef = (site: UiSite): string => (site.game === null ? site.name : `${site.game}/${site.name}`);
 
 /** 全部界面（ref 去重、先见者优先）：通用 ui/<name>；游戏自带 games/<id>/ui/<name>，根 index.html 为名即 id 的缺省界面。 */
-function uiSites(): UiSite[] {
+function uiRegistry(): ReadonlyMap<string, UiSite> {
 	const sites = new Map<string, UiSite>();
 	const add = (site: UiSite): void => {
 		const ref = uiRef(site);
 		if (!sites.has(ref)) sites.set(ref, site);
 	};
-	for (const root of UI_ROOTS) {
-		if (!existsSync(root)) continue;
-		for (const entry of readdirSync(root, { withFileTypes: true })) {
+	const scan = (base: string, game: string | null): void => {
+		if (!existsSync(base)) return;
+		for (const entry of readdirSync(base, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
-			const file = join(root, entry.name, "index.html");
-			if (existsSync(file)) add({ name: entry.name, file, game: null });
+			const file = join(base, entry.name, "index.html");
+			if (existsSync(file)) add({ name: entry.name, file, game });
 		}
-	}
+	};
+	for (const root of UI_ROOTS) scan(root, null);
 	for (const root of CONTENT_ROOTS) {
 		const dir = join(root, "games");
 		if (!existsSync(dir)) continue;
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
-			const game = entry.name;
-			const ui = join(dir, game, "ui");
-			if (!existsSync(ui)) continue;
+			const ui = join(dir, entry.name, "ui");
 			const file = join(ui, "index.html");
-			if (existsSync(file)) add({ name: game, file, game });
-			for (const sub of readdirSync(ui, { withFileTypes: true })) {
-				if (!sub.isDirectory()) continue;
-				const subFile = join(ui, sub.name, "index.html");
-				if (existsSync(subFile)) add({ name: sub.name, file: subFile, game });
-			}
+			if (existsSync(file)) add({ name: entry.name, file, game: entry.name });
+			scan(ui, entry.name);
 		}
 	}
-	return [...sites.values()];
+	return sites;
 }
 
-/** 按 ref 找界面；未知即 null。 */
-const siteByRef = (sites: readonly UiSite[], ref: string): UiSite | null => sites.find((s) => uiRef(s) === ref) ?? null;
-
 /** 界面 ref 清单（诊断文案用）。 */
-const uiList = (sites: readonly UiSite[]): string => sites.map(uiRef).join(", ") || "无";
+const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
 const settings = (): Settings => readSettings(CONFIG_DIR, SETTINGS_DEFAULTS);
 
@@ -127,14 +120,15 @@ function saveSettings(patch: Settings): Settings {
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
 function bootUi(): UiSite {
 	const named = stringSetting(settings(), "ui");
-	const sites = uiSites();
+	const sites = uiRegistry();
 	if (named !== undefined) {
-		const site = siteByRef(sites, named);
-		if (site !== null) return site;
+		const site = sites.get(named);
+		if (site !== undefined) return site;
 	}
-	if (sites.length === 1) return sites[0]!;
-	if (sites.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置 index.html（缺省）或 <name>/index.html`);
-	throw new Error(`未指定界面：可用 ${sites.map(uiRef).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
+	const all = [...sites.values()];
+	if (all.length === 1) return all[0]!;
+	if (all.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置 index.html（缺省）或 <name>/index.html`);
+	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
 }
 
 let ui: UiSite | null = null;
@@ -150,9 +144,9 @@ try {
 function settingsSite(): UiSite | null {
 	const ref = stringSetting(settings(), "settingsUi");
 	if (ref === undefined) return null;
-	const sites = uiSites();
-	const site = siteByRef(sites, ref);
-	if (site === null) {
+	const sites = uiRegistry();
+	const site = sites.get(ref);
+	if (site === undefined) {
 		console.error(`未知配置界面：${ref}（可用：${uiList(sites)}）：回落壳内引导面`);
 		return null;
 	}
@@ -173,17 +167,21 @@ function windowOptions(): BrowserWindowConstructorOptions {
 	};
 }
 
-/** 窗口共同纪律：首帧渲染完成后再显示（不闪底色）；外链一律交系统浏览器（远程页不得继承 preload 桥，只放行 http(s)）；内容不得否决关闭。 */
+/** 窗口共同纪律：首帧渲染完成后再显示（不闪底色）；页面不得自行导航（同址重载除外），http(s) 交系统浏览器；内容不得否决关闭。 */
 function bindWindow(w: BrowserWindow): void {
 	w.once("ready-to-show", () => w.show());
-	w.webContents.setWindowOpenHandler(({ url }) => {
+	const external = (url: string): void => {
 		if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+	};
+	w.webContents.setWindowOpenHandler(({ url }) => {
+		external(url);
 		return { action: "deny" };
 	});
+	// location.reload() 同走 will-navigate：同址放行（重载），其余一律拒绝；换界面由主进程 loadFile（不触发本事件）。
 	w.webContents.on("will-navigate", (event) => {
-		if (event.url.startsWith("file:")) return;
+		if (event.url === w.webContents.getURL()) return;
 		event.preventDefault();
-		if (/^https?:\/\//.test(event.url)) void shell.openExternal(event.url);
+		external(event.url);
 	});
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
@@ -361,7 +359,7 @@ ipcMain.handle("def", async (_event, req: { game?: unknown } | undefined) => {
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
 ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
 	const game = idIn(req, "uis");
-	const compatible = uiSites().filter((s) => s.game === null || game === undefined || s.game === game);
+	const compatible = [...uiRegistry().values()].filter((s) => s.game === null || game === undefined || s.game === game);
 	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
 	return compatible.map(uiFace);
 });
@@ -369,9 +367,9 @@ ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
 /** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动。 */
 ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 	if (typeof req?.ref !== "string" || req.ref === "") throw new Error("use 需要界面 ref");
-	const sites = uiSites();
-	const site = siteByRef(sites, req.ref);
-	if (site === null) throw new Error(`未知界面：${req.ref}（可用：${uiList(sites)}）`);
+	const sites = uiRegistry();
+	const site = sites.get(req.ref);
+	if (site === undefined) throw new Error(`未知界面：${req.ref}（可用：${uiList(sites)}）`);
 	saveSettings({ ui: req.ref });
 	void win?.loadFile(site.file);
 });
@@ -387,8 +385,8 @@ ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	const settingsUi = patch.settingsUi;
 	if (settingsUi !== undefined) {
 		if (typeof settingsUi !== "string" || settingsUi === "") throw new Error("settingsUi 须为非空字符串");
-		const sites = uiSites();
-		if (siteByRef(sites, settingsUi) === null) throw new Error(`未知界面（settingsUi）：${settingsUi}（可用：${uiList(sites)}）`);
+		const sites = uiRegistry();
+		if (!sites.has(settingsUi)) throw new Error(`未知界面（settingsUi）：${settingsUi}（可用：${uiList(sites)}）`);
 	}
 	if (patch.model !== undefined) {
 		if (typeof patch.model !== "string" || patch.model.trim() === "") throw new Error("model 须为非空字符串");

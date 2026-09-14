@@ -25,9 +25,9 @@ interface ModelRef {
 	available: boolean;
 }
 
-/** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄。 */
-type Payload<T> = T extends unknown ? Omit<T, "signal"> : never;
-type PromptPayload = Payload<Prompt>;
+/** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄（AuthPrompt 是 union，直接 Omit 会塌成公共键）。 */
+type StripSignal<T> = T extends unknown ? Omit<T, "signal"> : never;
+type PromptPayload = StripSignal<Prompt>;
 
 interface Flow {
 	sender: WebContents;
@@ -112,6 +112,11 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 							reject(new Error("登录已取消"));
 							return;
 						}
+						// 单槽待答：SDK 串行提示，重叠即契约破坏，显式拒绝而非静默顶掉
+						if (flow.answer !== null) {
+							reject(new Error("登录流程已有待答提示"));
+							return;
+						}
 						let settled = false;
 						const finish = (done: () => void): void => {
 							if (settled) return;
@@ -133,7 +138,6 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 						}
 					}),
 			});
-			return { provider, type };
 		} finally {
 			close(id);
 		}
