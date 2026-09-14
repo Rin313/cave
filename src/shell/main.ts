@@ -21,9 +21,10 @@ interface Session {
 	busy: "act" | "narrate" | null;
 }
 
-const sessions = new Map<string, Session>();
-const opening = new Map<string, Promise<Session>>();
+/** 两态单表：开启中的 promise 或已开启的实例；关闭对两者同样权威。 */
+const sessions = new Map<string, Session | Promise<Session>>();
 const sessionKey = (game: string, run: string): string => `${game}\u0000${run}`;
+const isSession = (slot: Session | Promise<Session>): slot is Session => !(slot instanceof Promise);
 
 let win: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
@@ -120,27 +121,25 @@ const siteByRef = (ref: string): UiSite | null => uiSites().find((s) => uiRef(s)
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (): string => uiSites().map(uiRef).join(", ") || "无";
 
-/** 设置按文件优先级读取（高优先在前）；破损设置视同缺席。 */
-function loadSettings(): Record<string, unknown>[] {
-	const files: Record<string, unknown>[] = [];
-	for (const file of SETTINGS_FILES) {
-		const read = readJsonObject(file);
-		if (read !== null && read.value !== null) files.push(read.value);
-	}
-	return files;
-}
-
-/** 设置字符串键：按文件优先级，先见者胜。 */
-function settingString(key: string): string | undefined {
-	for (const parsed of loadSettings()) {
-		const v = parsed[key];
-		if (typeof v === "string") return v;
-	}
-	return undefined;
-}
-
+/** 设置合并：SETTINGS_FILES 高优先在前，低者先合并；破损文件视同缺席并显形于控制台。 */
 function settings(): Record<string, unknown> {
-	return Object.assign({}, ...loadSettings().reverse());
+	const merged: Record<string, unknown> = {};
+	for (let i = SETTINGS_FILES.length - 1; i >= 0; i--) {
+		const read = readJsonObject(SETTINGS_FILES[i]!);
+		if (read === null) continue;
+		if (read.value === null) {
+			console.error(`设置文件不可读（按缺席处理）：${read.error}`);
+			continue;
+		}
+		Object.assign(merged, read.value);
+	}
+	return merged;
+}
+
+/** 设置字符串键：合并态中非字符串即未定（显式写入的错型值遮蔽缺省，不做回退）。 */
+function settingString(key: string): string | undefined {
+	const v = settings()[key];
+	return typeof v === "string" ? v : undefined;
 }
 
 /** 写入用户级设置文件：当前合并态 + patch；分发缺省因此固化到用户文件。 */
@@ -198,11 +197,16 @@ function present(w: BrowserWindow): void {
 	w.once("ready-to-show", () => w.show());
 }
 
-/** 外链一律交系统浏览器：配置面的 OAuth 链接不开 Electron 子窗口；只放行 http(s)。 */
+/** 外链一律交系统浏览器（新窗口与主导航同制）：远程页不得继承 preload 桥；只放行 http(s)。 */
 function externalLinks(w: BrowserWindow): void {
 	w.webContents.setWindowOpenHandler(({ url }) => {
 		if (/^https?:\/\//.test(url)) void shell.openExternal(url);
 		return { action: "deny" };
+	});
+	w.webContents.on("will-navigate", (event) => {
+		if (event.url.startsWith("file:")) return;
+		event.preventDefault();
+		if (/^https?:\/\//.test(event.url)) void shell.openExternal(event.url);
 	});
 }
 
@@ -225,40 +229,54 @@ function openSettings(): void {
 async function createSession(game: string, run: string): Promise<Session> {
 	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, modelRuntime: await modelRuntime() });
 	const session: Session = { game, run, engine, unsubscribe: () => {}, busy: null };
-	session.unsubscribe = engine.subscribe((event) => win?.webContents.send("event", { game, run, event }));
-	sessions.set(sessionKey(game, run), session);
+	session.unsubscribe = engine.subscribe((event) => {
+		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
+	});
 	return session;
-}
-
-/** 活实例或开启中的实例；未开即 undefined。 */
-function active(game: string, run: string): Session | Promise<Session> | undefined {
-	const key = sessionKey(game, run);
-	return sessions.get(key) ?? opening.get(key);
 }
 
 /** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）。 */
 function openSession(game: string, run: string): Promise<Session> {
-	const found = active(game, run);
-	if (found !== undefined) return Promise.resolve(found);
 	const key = sessionKey(game, run);
-	const started = createSession(game, run).finally(() => opening.delete(key));
-	opening.set(key, started);
+	const found = sessions.get(key);
+	if (found !== undefined) return Promise.resolve(found);
+	const started = createSession(game, run);
+	sessions.set(key, started);
+	// 表项被 close 除名时不复活；成功替换为实例，失败释放位置
+	started.then(
+		(session) => {
+			if (sessions.get(key) === started) sessions.set(key, session);
+		},
+		() => {
+			if (sessions.get(key) === started) sessions.delete(key);
+		},
+	);
 	return started;
 }
 
-/** state/act 只附着已打开的实例（附着中的 open 一并等）；未打开即拒绝，不隐式创建。 */
+/** state/act 只附着已打开的实例（附着中的 open 一并等）；未打开或被关闭即拒绝，不隐式创建。 */
 async function attached(game: string, run: string): Promise<Session> {
-	const found = active(game, run);
-	if (found !== undefined) return found;
-	throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
+	const key = sessionKey(game, run);
+	const found = sessions.get(key);
+	if (found === undefined) throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
+	const session = await found;
+	if (sessions.get(key) !== session) throw new Error(`运行 ${game}/${run} 已关闭：重新 open 后再附着`);
+	return session;
 }
 
-function closeSession(game: string, run: string): void {
+/** 关闭对开启中的 open 同样权威：先除名，待落定后释放；open 失败已由其调用点报告。 */
+async function closeSession(game: string, run: string): Promise<void> {
 	const key = sessionKey(game, run);
-	const session = sessions.get(key);
-	if (session === undefined) return;
-	if (session.busy !== null) throw new Error(`回合进行中（${session.busy}）：${game}/${run} 不能关闭`);
+	const found = sessions.get(key);
+	if (found === undefined) return;
+	if (isSession(found) && found.busy !== null) throw new Error(`回合进行中（${found.busy}）：${game}/${run} 不能关闭`);
 	sessions.delete(key);
+	let session: Session;
+	try {
+		session = await found;
+	} catch {
+		return; // open 失败已由其调用点报告
+	}
 	session.unsubscribe();
 	session.engine.dispose();
 }
@@ -279,13 +297,18 @@ async function configured<T>(run: () => Promise<T>): Promise<T> {
 	}
 }
 
-/** 窗口关闭即释放全部实例；回合进行中的未竟调用随进程收束。 */
+/** 窗口关闭即释放全部实例（含开启中的）；回合进行中的未竟调用随进程收束。 */
 function closeAll(): void {
 	const all = [...sessions.values()];
 	sessions.clear();
-	for (const session of all) {
-		session.unsubscribe();
-		session.engine.dispose();
+	for (const slot of all) {
+		void Promise.resolve(slot).then(
+			(session) => {
+				session.unsubscribe();
+				session.engine.dispose();
+			},
+			() => {},
+		);
 	}
 }
 
@@ -371,7 +394,7 @@ ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | unde
 });
 
 /** 活实例清单：界面换装/重载后据此附着回既有实例。 */
-ipcMain.handle("sessions", () => [...sessions.values()].map((s) => ({ ...coords(s), busy: s.busy })));
+ipcMain.handle("sessions", () => [...sessions.values()].filter(isSession).map((s) => ({ ...coords(s), busy: s.busy })));
 
 /** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
 ipcMain.handle("meta", (_event, req: { game?: unknown } | undefined) => {
@@ -414,9 +437,12 @@ ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	for (const key of ["ui", "settingsUi"] as const) {
 		const ref = patch[key];
-		if (typeof ref === "string" && siteByRef(ref) === null) throw new Error(`未知界面（${key}）：${ref}（可用：${uiList()}）`);
+		if (ref === undefined) continue;
+		if (typeof ref !== "string" || ref === "") throw new Error(`${key} 须为非空字符串`);
+		if (siteByRef(ref) === null) throw new Error(`未知界面（${key}）：${ref}（可用：${uiList()}）`);
 	}
-	if (typeof patch.model === "string") {
+	if (patch.model !== undefined) {
+		if (typeof patch.model !== "string" || patch.model.trim() === "") throw new Error("model 须为非空字符串");
 		const { model, error } = resolveCliModel({ cliModel: patch.model, modelRuntime: await modelRuntime() });
 		if (!model || error) throw new Error(`模型 "${patch.model}" 不可用：${modelErrorReason(error)}`);
 	}
@@ -435,7 +461,7 @@ ipcMain.handle("open", async (_event, req: { game?: unknown; run?: unknown }) =>
 /** 显式释放：不关别人的实例，也不动档案。 */
 ipcMain.handle("close", (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = pair(req);
-	closeSession(game, run);
+	return closeSession(game, run);
 });
 
 ipcMain.handle("act", async (_event, req: { game?: unknown; run?: unknown; utterance?: unknown }) => {
