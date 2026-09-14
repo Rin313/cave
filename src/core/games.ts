@@ -5,9 +5,6 @@ import { isSegment, readJsonObject } from "./paths.ts";
 import * as core from "./sim.ts";
 import type { GameDef } from "./sim.ts";
 
-/** 游戏实例的宿主 API：注入给装载模块的运行时本体，模块命名空间即契约。 */
-export type Core = typeof core;
-
 /** 条目名按此序查找；id 即 <root>/games 下的目录名。 */
 const ENTRIES = ["index.ts", "index.js", "index.mjs"];
 
@@ -59,7 +56,7 @@ export async function loadGame(id: string, roots: readonly string[]): Promise<Ga
 	} catch (e) {
 		throw new Error(`游戏 ${id} 装载失败（${file}）：${String(e)}`);
 	}
-	const def = typeof mod.default === "function" ? (mod.default as (core: Core) => GameDef)(core) : mod.default;
+	const def = typeof mod.default === "function" ? (mod.default as (sim: typeof core) => GameDef)(core) : mod.default;
 	if (def === null || typeof def !== "object") throw new Error(`游戏 ${id} 未导出 GameDef（${file}）`);
 	return def as GameDef;
 }
