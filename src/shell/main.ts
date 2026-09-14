@@ -408,7 +408,7 @@ ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unkno
 	const instruction = strIn(req?.instruction, "narrate", "instruction");
 	const session = await attached(game, run);
 	const outcome: NarrationOutcome = await session.engine.narrate(instruction);
-	return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
+	return outcome;
 });
 
 ipcMain.handle("state", async (_event, req: RunRequest) => {

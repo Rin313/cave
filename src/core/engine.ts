@@ -36,20 +36,11 @@ export interface ActOutcome {
 	reveals: (Card | Handle)[];
 	narration: string;
 	warnings: string[];
-	usage: TokenUsage[];
 }
 
 export interface NarrationOutcome {
 	narration: string;
 	warnings: string[];
-	usage: TokenUsage[];
-}
-
-export interface TokenUsage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
 }
 
 /** 只承载叙述相位的实时正文；narration_reset 镜像 pi 的重试作废语义。 */
@@ -62,7 +53,6 @@ interface RunState {
 	phase: "mapping" | "narration";
 	utterance?: string | undefined;
 	messageStart: number;
-	entryStart: number;
 	steps: Commit[];
 	lines: string[];
 	reveals: (Card | Handle)[];
@@ -144,7 +134,7 @@ export class Engine {
 		const loadWarnings = loaded?.warnings ?? [];
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", messageStart: 0, entryStart: 0, steps: [], lines: [], reveals: [], warnings: [] };
+		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [], warnings: [] };
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
 			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
@@ -227,7 +217,6 @@ export class Engine {
 		r.phase = phase;
 		r.utterance = utterance;
 		r.messageStart = session.messages.length;
-		r.entryStart = session.sessionManager.getEntries().length;
 		r.warnings = [];
 		r.steps = [];
 		r.lines = [];
@@ -273,7 +262,6 @@ export class Engine {
 				reveals: this.run.reveals,
 				narration,
 				warnings: this.run.warnings,
-				usage: this.collectUsage(session),
 			};
 		} finally {
 			this.running = null;
@@ -305,7 +293,7 @@ export class Engine {
 			const kit: NarrateKit = { view, digest: digestOf(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 			const prompt = this.sim.def.prompt;
 			await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
-			return { narration: this.settleNarration(session, steps), warnings: this.run.warnings, usage: this.collectUsage(session) };
+			return { narration: this.settleNarration(session, steps), warnings: this.run.warnings };
 		} finally {
 			this.running = null;
 		}
@@ -330,19 +318,6 @@ export class Engine {
 			for (const c of m.content) if (c.type === "text") text += c.text;
 		}
 		return text;
-	}
-
-	/** 用量按档案新增条目重读；被重试作废的尝试已计费且已入档，仍计入。 */
-	private collectUsage(session: SessionHandle): TokenUsage[] {
-		const out: TokenUsage[] = [];
-		for (const e of session.sessionManager.getEntries().slice(this.run.entryStart)) {
-			if (e.type !== "message") continue;
-			const m = e.message;
-			if (m.role !== "assistant") continue;
-			const u = m.usage;
-			if (u) out.push({ input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 });
-		}
-		return out;
 	}
 
 	private fallbackSummary(steps: Commit[]): string {

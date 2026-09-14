@@ -23,13 +23,6 @@ interface CdpReply {
 	};
 }
 
-interface Usage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-}
-
 interface RunFace {
 	game: string;
 	run: string;
@@ -50,13 +43,11 @@ interface ActFace extends RunFace {
 	reveals: unknown[];
 	narration: string;
 	warnings: string[];
-	usage: Usage[];
 }
 
 interface NarrateFace {
 	narration: string;
 	warnings: string[];
-	usage: Usage[];
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -274,15 +265,6 @@ async function evaluate(target: Target, expression: string, timeoutMs: number): 
 	}
 }
 
-const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-
-function usageLine(rows: Usage[]): string {
-	if (!rows.length) return "";
-	let i = 0, o = 0, cr = 0, cw = 0;
-	for (const r of rows) { i += r.input; o += r.output; cr += r.cacheRead; cw += r.cacheWrite; }
-	return `  tok ×${rows.length}：入 ${k(i)}（缓读 ${k(cr)}／缓写 ${k(cw)}）出 ${k(o)}`;
-}
-
 function printWarnings(warnings: string[]): void {
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 }
@@ -292,8 +274,6 @@ function printAct(utterance: string, r: ActFace, brief = false): void {
 	for (const line of r.lines) console.log(`  ${line}`);
 	for (const item of r.reveals) console.log(`  + ${js(item)}`);
 	printWarnings(r.warnings);
-	const tok = usageLine(r.usage);
-	if (tok) console.log(tok);
 	const text = brief ? (r.narration.split(/\n/).find((l) => l.trim()) ?? "") : r.narration;
 	const shown = brief && text.length > 100 ? `${text.slice(0, 100)}…` : text;
 	console.log(`  ┈ ${shown.replace(/\n/g, "\n  ")}`);
@@ -371,8 +351,6 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			console.log(`\n【${game}/${run} narrate】${instruction}`);
 			printWarnings(warnings);
 			printWarnings(result.warnings);
-			const tok = usageLine(result.usage);
-			if (tok) console.log(tok);
 			console.log(result.narration);
 			return;
 		}
