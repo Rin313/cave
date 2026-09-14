@@ -4,7 +4,7 @@ import { getDocsPath, ModelRuntime, resolveCliModel } from "@earendil-works/pi-c
 import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
-import { configDir, dataDir, recordsPath } from "./paths.ts";
+import { configDir, dataDir, recordsPath, runsDir } from "./paths.ts";
 
 /** 存档目录的派生清单：runs/<game>/<run>/records.jsonl；无记录的目录不是存档。 */
 export interface RunFace {
@@ -41,17 +41,17 @@ function tailRecord(path: string, size: number): { turn: number; time: number } 
 
 /** 枚举存档（按记录文件 mtime 降序）；game 缺席即扫全部游戏目录。 */
 export function listRuns(root: string, game?: string): RunFace[] {
-	const base = join(root, "runs");
+	const base = runsDir(root);
 	const games = game !== undefined
 		? [game]
 		: existsSync(base) ? readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : [];
 	const out: RunFace[] = [];
 	for (const g of games) {
-		const dir = join(base, g);
+		const dir = runsDir(root, g);
 		if (!existsSync(dir)) continue;
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
-			const records = join(dir, entry.name, "records.jsonl");
+			const records = recordsPath(g, entry.name, root);
 			if (!existsSync(records)) continue;
 			const stat = statSync(records);
 			const tail = tailRecord(records, stat.size);

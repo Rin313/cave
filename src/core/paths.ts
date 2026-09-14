@@ -20,8 +20,13 @@ export function dataDir(userData?: string): string {
 	return process.env.ENGINE_DATA_DIR ?? configDir(userData);
 }
 
+export function runsDir(root = dataDir(), game?: string): string {
+	const base = join(root, "runs");
+	return game === undefined ? base : join(base, game);
+}
+
 export function recordsPath(game: string, run: string, root = dataDir()): string {
-	return join(root, "runs", game, run, "records.jsonl");
+	return join(runsDir(root, game), run, "records.jsonl");
 }
 
 /** JSON 对象文件：缺席返回 null；坏内容与非对象返回 value=null 与错误文本（自带位置）。 */
