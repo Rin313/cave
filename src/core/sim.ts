@@ -73,9 +73,6 @@ export interface Messages {
 	timePassed: string;
 }
 
-/** 世界腔文本：答复与陈述。 */
-export type Text = string;
-
 /** 字面类型：边值的值域；边值是字面载荷，端点已是引用。 */
 export type LitType = "string" | "number" | "boolean";
 
@@ -119,17 +116,17 @@ export function audienceOf(point: Point): "world" | "engine" {
 
 /** invariant 结果：受众与文本；落到记录时受众进点、文本单存。 */
 export type Reason =
-	| { fault: "world"; reply?: Text }
+	| { fault: "world"; reply?: string }
 	| { fault: "engine"; debug: string };
 
 /** 否决的公共记录形状；engine 受众必携文本。 */
 export interface Denial {
 	point: Point;
-	text?: Text;
+	text?: string;
 }
 
 /** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse）。引擎违约走抛出。 */
-export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: Text };
+export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: string };
 
 /** 引擎合成读者侧文本的场合：记录点的 (point, verb) 与两种边界情形。 */
 export type Speech =
@@ -159,7 +156,7 @@ export interface Q<P = Record<string, Value>> {
 
 /** 裁决结果；price 覆写缺省 cost（授予与否决同轴）；reply 只属 act（clock 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被记录与断言消费。 */
 export type Verdict =
-	| { ok: true; deltas: Delta[]; law?: Text; reply?: Text; statements?: Text[]; price?: number }
+	| { ok: true; deltas: Delta[]; law?: string; reply?: string; statements?: string[]; price?: number }
 	| { ok: false; denial: RuleDenial; price?: number };
 
 export interface Rule {
@@ -167,7 +164,7 @@ export interface Rule {
 	judge: (q: Q) => Verdict | null;
 }
 
-export function grant(deltas: Delta[], opts: { law?: Text; reply?: Text; statements?: Text[]; price?: number } = {}): Verdict {
+export function grant(deltas: Delta[], opts: { law?: string; reply?: string; statements?: string[]; price?: number } = {}): Verdict {
 	return {
 		ok: true,
 		deltas,
@@ -178,7 +175,7 @@ export function grant(deltas: Delta[], opts: { law?: Text; reply?: Text; stateme
 	};
 }
 
-export function deny(law: string, text?: Text, price?: number): Verdict {
+export function deny(law: string, text?: string, price?: number): Verdict {
 	return { ok: false, denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(price !== undefined && { price }) };
 }
 
@@ -713,7 +710,7 @@ export function lawOf(point: Point): string {
 
 /** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：价 = trigger=clock ? 0 : (price ?? cost)；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
-	| { at: number; trigger: Trigger; action: Action; price: number; ok: true; rule: string; law: Text; changes: Change[]; reply?: Text; statements?: Text[] }
+	| { at: number; trigger: Trigger; action: Action; price: number; ok: true; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[] }
 	| { at: number; trigger: Trigger; action: Action; price: number; ok: false; rule?: string; denial: Denial };
 
 export interface Resolution {
@@ -989,7 +986,7 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	};
 	const msgs = sim.def.messages;
 	const lines: string[] = [];
-	const said = new Map<number, { changes: string[]; statements: Text[]; denials: string[] }>();
+	const said = new Map<number, { changes: string[]; statements: string[]; denials: string[] }>();
 	let granted = 0;
 	const flush = (): void => {
 		for (const { changes, statements, denials } of said.values()) {
@@ -1038,7 +1035,7 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 
 /** 门内裁决的表态；授予记守卫与法则，否决自带裁决点与守卫。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; rule: string; law: Text; reply?: Text; statements?: Text[]; price?: number }
+	| { ok: true; deltas: Delta[]; rule: string; law: string; reply?: string; statements?: string[]; price?: number }
 	| { ok: false; denial: Denial; rule?: string; price?: number };
 
 export class Simulation {
