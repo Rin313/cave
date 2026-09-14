@@ -7,7 +7,7 @@ import { loadGame } from "./games.ts";
 import { configDir, dataDir, recordsPath, runsDir } from "./paths.ts";
 import { readSettings, settingsPath, stringSetting, type Settings } from "./settings.ts";
 
-/** 存档目录的派生清单：runs/<game>/<run>/records.jsonl；无记录的目录不是存档。 */
+/** 存档目录的派生清单：runs/<game>/<run>/records.jsonl。 */
 export interface RunFace {
 	game: string;
 	run: string;

@@ -52,16 +52,12 @@ function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], sele
 		}
 		if (need > 0) rewind(w, r.steps);
 	}
-	return selected.map((r, i) => ({ time: r.time, utterance: verbatim(r.utterance), moves: moves[i]! }));
+	return selected.map((r, i) => ({ time: r.time, utterance: JSON.stringify(r.utterance), moves: moves[i]! }));
 }
 
 /** 近况：选择（作者）× 投影（引擎）；AI 的跨回合记忆只经此一条路。 */
 export function recentEntries(sim: Simulation, records: readonly ChronicleEntry[], warnings: string[]): RecentEntry[] {
 	return projectRecent(sim, records, selectRecent(sim.def, records, warnings));
-}
-
-export function verbatim(s: string): string {
-	return JSON.stringify(s);
 }
 
 /** 只保留最后一条 user 消息起的后缀 */

@@ -447,7 +447,6 @@ export interface ViewKit {
 
 /** act 回合提示数据：状态视图 + 话语 + 近况。 */
 export interface TurnKit extends PromptKit, ViewKit {
-	/** 玩家话语（verbatim） */
 	utterance: string;
 }
 

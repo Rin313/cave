@@ -8,7 +8,7 @@ import {
 	type InlineExtension,
 	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { recentEntries, pruneContext, verbatim } from "./context.ts";
+import { recentEntries, pruneContext } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
@@ -236,7 +236,7 @@ export class Engine {
 			const session = await this.ensureSession();
 			this.beginRun(session, "mapping", action.utterance);
 			const view = this.sim.view();
-			const kit: TurnKit = { view, digest: digestOf(view), utterance: verbatim(action.utterance), recent: this.recent };
+			const kit: TurnKit = { view, digest: digestOf(view), utterance: JSON.stringify(action.utterance), recent: this.recent };
 			try {
 				const prompt = this.sim.def.prompt;
 				await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
