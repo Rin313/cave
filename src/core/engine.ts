@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { recentEntries, pruneContext } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
@@ -236,7 +236,7 @@ export class Engine {
 			const session = await this.ensureSession();
 			this.beginRun(session, "mapping", action.utterance);
 			const view = this.sim.view();
-			const kit: TurnKit = { view, digest: digestOf(view), utterance: JSON.stringify(action.utterance), recent: this.recent };
+			const kit: TurnKit = { view, digest: JSON.stringify(view), utterance: JSON.stringify(action.utterance), recent: this.recent };
 			try {
 				const prompt = this.sim.def.prompt;
 				await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
@@ -290,7 +290,7 @@ export class Engine {
 			const session = await this.ensureSession();
 			this.beginRun(session, "narration");
 			const view = this.sim.view();
-			const kit: NarrateKit = { view, digest: digestOf(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
+			const kit: NarrateKit = { view, digest: JSON.stringify(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 			const prompt = this.sim.def.prompt;
 			await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
 			return { narration: this.settleNarration(session, steps), warnings: this.run.warnings };

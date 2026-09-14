@@ -22,11 +22,6 @@ export type Payload = Value | null;
 
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
-/** 状态视图的规范序列化：prompt kit 与诊断共用同一出口。 */
-export function digestOf(view: ViewValue): string {
-	return JSON.stringify(view);
-}
-
 export interface Entity {
 	id: string;
 	props: Record<string, Value>;
@@ -441,7 +436,7 @@ export interface PromptKit {
 /** 状态视图的两种消费形态：本体与规范序列化由同一次求值产生，本体按只读约定消费。 */
 export interface ViewKit {
 	view: ViewValue;
-	/** view 的规范序列化（digestOf(view)）：字节直用与默认排版的出口。 */
+	/** view 的规范序列化：字节直用与默认排版的出口。 */
 	digest: string;
 }
 
