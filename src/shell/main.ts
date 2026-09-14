@@ -5,7 +5,7 @@ import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-ag
 import { parseRecordLines } from "../core/archive.ts";
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
-import { errorText, verbFace, type SlotDef } from "../core/sim.ts";
+import { verbFace, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir, readJsonObject, runPaths, writeJson } from "../core/paths.ts";
 import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
@@ -166,7 +166,7 @@ let bootError: string | null = null;
 try {
 	ui = bootUi();
 } catch (e) {
-	bootError = errorText(e);
+	bootError = String(e);
 	console.error(bootError);
 }
 

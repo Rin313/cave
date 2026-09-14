@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { recentEntries, pruneContext, verbatim } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, errorText, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, digestOf, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 /** 会话材料：只在会话按需建立时解析；装载与浏览不需要模型。 */
 export interface AgentSpec {
@@ -241,7 +241,7 @@ export class Engine {
 		} catch (e) {
 			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
 			if (this.run.phase === "mapping") throw e;
-			this.run.warnings.push(`表达中断（回合已定稿，呈现回落）：${errorText(e)}`);
+			this.run.warnings.push(`表达中断（回合已定稿，呈现回落）：${String(e)}`);
 		}
 
 		let narration: string;
@@ -275,7 +275,7 @@ export class Engine {
 			this.recent.push(...next);
 		} catch (e) {
 			// 呈现缺陷不得丢弃已定稿的账目：保留上一版近况并显形
-			this.run.warnings.push(`近况投影抛错（保留上一版）：${errorText(e)}`);
+			this.run.warnings.push(`近况投影抛错（保留上一版）：${String(e)}`);
 		}
 	}
 
@@ -360,7 +360,7 @@ function skeletonSummary(sim: Simulation, steps: Commit[]): { text: string; warn
 		const lines = spineLines(sim, steps, sim.snapshot());
 		return { text: lines.length ? lines.join("\n") : speak(sim.def, { kind: "noProposal" }) };
 	} catch (e) {
-		return { text: interruptedText(sim.def), warning: `骨架渲染失败：${errorText(e)}` };
+		return { text: interruptedText(sim.def), warning: `骨架渲染失败：${String(e)}` };
 	}
 }
 
@@ -465,7 +465,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledg
 				applyBatch(sim, proposed, steps);
 			} catch (e) {
 				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛，已裁决步照常入账
-				crashed = errorText(e);
+				crashed = String(e);
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}
 			run.steps = steps;
@@ -473,7 +473,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledg
 			try {
 				finalizeTurn(sim, run, ledger, store);
 			} catch (e) {
-				ledger.dead = `定稿落盘失败：${errorText(e)}`;
+				ledger.dead = `定稿落盘失败：${String(e)}`;
 				run.warnings.push(ledger.dead);
 			}
 			// 事件行与新增呈现分相投影：任一相失灵只降级该相，账目已在定稿；结果即回合呈现，不重算
@@ -482,13 +482,13 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledg
 				run.lines = spineLines(sim, steps, sim.snapshot());
 				projected = true;
 			} catch (e) {
-				run.warnings.push(`事件投影抛错：${errorText(e)}`);
+				run.warnings.push(`事件投影抛错：${String(e)}`);
 				run.lines = [];
 			}
 			try {
 				run.reveals = sim.reveals(steps);
 			} catch (e) {
-				run.warnings.push(`新见段投影抛错：${errorText(e)}`);
+				run.warnings.push(`新见段投影抛错：${String(e)}`);
 				run.reveals = [];
 			}
 			const lines = projected ? [...run.lines] : [interruptedText(def)];
@@ -498,7 +498,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledg
 				try {
 					return speak(def, speech);
 				} catch (e) {
-					run.warnings.push(`引擎文本抛错：${errorText(e)}`);
+					run.warnings.push(`引擎文本抛错：${String(e)}`);
 					return def.messages.noResponse;
 				}
 			};

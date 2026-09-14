@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { errorText } from "./sim.ts";
 
 /** 无宿主（CLI）时按平台约定复算 Electron userData：目录名即应用名，须与 app.name（package.json 的 productName ?? name）一致。 */
 function platformUserData(): string {
@@ -40,7 +39,7 @@ export function readJsonObject(file: string): { value: Record<string, unknown> |
 	try {
 		parsed = JSON.parse(readFileSync(file, "utf8"));
 	} catch (e) {
-		return { value: null, error: `解析失败（${file}）：${errorText(e)}` };
+		return { value: null, error: `解析失败（${file}）：${String(e)}` };
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: null, error: `须为 JSON 对象（${file}）` };
 	return { value: parsed as Record<string, unknown> };

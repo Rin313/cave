@@ -1,5 +1,5 @@
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
-import { Simulation, errorText, rewind, spineLines, type ChronicleEntry, type GameDef, type RecentEntry } from "./sim.ts";
+import { Simulation, rewind, spineLines, type ChronicleEntry, type GameDef, type RecentEntry } from "./sim.ts";
 
 export type CtxMessages = ContextEvent["messages"];
 
@@ -17,7 +17,7 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings
 	try {
 		picked = def.recent(records, base);
 	} catch (e) {
-		warnings.push(`近况选择抛错（回落缺省窗口）：${errorText(e)}`);
+		warnings.push(`近况选择抛错（回落缺省窗口）：${String(e)}`);
 		return base;
 	}
 	const index = new Map(records.map((r, i) => [r.seq, i]));

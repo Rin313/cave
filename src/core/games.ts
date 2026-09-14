@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readJsonObject } from "./paths.ts";
 import * as core from "./sim.ts";
-import { errorText, type GameDef } from "./sim.ts";
+import type { GameDef } from "./sim.ts";
 
 /** 游戏实例的宿主 API：注入给装载模块的运行时本体，模块命名空间即契约。 */
 export type Core = typeof core;
@@ -57,7 +57,7 @@ export async function loadGame(id: string, roots: readonly string[]): Promise<Ga
 	try {
 		mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
 	} catch (e) {
-		throw new Error(`游戏 ${id} 装载失败（${file}）：${errorText(e)}`);
+		throw new Error(`游戏 ${id} 装载失败（${file}）：${String(e)}`);
 	}
 	const def = typeof mod.default === "function" ? (mod.default as (core: Core) => GameDef)(core) : mod.default;
 	if (def === null || typeof def !== "object") throw new Error(`游戏 ${id} 未导出 GameDef（${file}）`);

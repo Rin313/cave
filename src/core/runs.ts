@@ -5,7 +5,6 @@ import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
 import { configDir, dataDir, runPaths } from "./paths.ts";
-import { errorText } from "./sim.ts";
 
 /** 存档目录的派生清单：runs/<game>/<run>/records.jsonl；无记录的目录不是存档。 */
 export interface RunFace {
@@ -78,7 +77,7 @@ function modelReference(game: string, config: string): { ref: string; source: st
 			const model = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { model?: unknown }).model : undefined;
 			if (typeof model === "string" && model.trim() !== "") return { ref: model, source: file };
 		} catch (e) {
-			throw new Error(`settings.json 解析失败（${file}）：${errorText(e)}`);
+			throw new Error(`settings.json 解析失败（${file}）：${String(e)}`);
 		}
 	}
 	throw new ModelConfigError(`模型未配置：在 ${file} 写入 { "model": "provider/model[:thinking]" }，或设置 ${name} 环境变量`);

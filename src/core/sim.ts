@@ -8,10 +8,6 @@ export function deepFreeze<T>(value: T): T {
 	return value;
 }
 
-export function errorText(e: unknown): string {
-	return e instanceof Error ? e.message : String(e);
-}
-
 export function clone<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -1206,7 +1202,7 @@ export class Simulation {
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${e instanceof Error ? e.message : String(e)}` } };
+				return { ok: false, rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${String(e)}` } };
 			}
 			if (!v) continue;
 			const problems = verdictProblems(v, clock);
@@ -1249,7 +1245,7 @@ export class Simulation {
 			return { ok: true, changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
-			const debug = `commit/invariant threw: ${e instanceof Error ? e.message : String(e)}`;
+			const debug = `commit/invariant threw: ${String(e)}`;
 			return { ok: false, denial: { point: { kind: "engine" }, text: debug } };
 		}
 	}
@@ -1404,7 +1400,7 @@ export class Simulation {
 			this.pruneAttempts();
 			return null;
 		} catch (e) {
-			return fail(errorText(e));
+			return fail(String(e));
 		}
 	}
 
