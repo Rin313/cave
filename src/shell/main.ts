@@ -277,22 +277,6 @@ async function closeSession(game: string, run: string): Promise<void> {
 	session.engine.dispose();
 }
 
-/** 配置不齐（模型/凭据）：自动唤起配置面（若有）；失败文本自身给出文件与配置出口。 */
-async function configured<T>(run: () => Promise<T>): Promise<T> {
-	try {
-		return await run();
-	} catch (e) {
-		if (e instanceof ModelConfigError) {
-			try {
-				openSettings();
-			} catch (err) {
-				console.error(`配置面不可用：${String(err)}`);
-			}
-		}
-		throw e;
-	}
-}
-
 /** 实例坐标：快照与会话清单共用。 */
 function coords(session: Session): { game: string; run: string; turn: number; time: number } {
 	return { game: session.game, run: session.run, turn: session.engine.turn, time: session.engine.sim.world.time };
@@ -447,7 +431,7 @@ ipcMain.handle("act", async (_event, req: RunRequest & { utterance?: unknown }) 
 	const { game, run } = idsIn(req, "act");
 	const utterance = strIn(req?.utterance, "act", "utterance");
 	return turn(game, run, "act", async (session) => {
-		const outcome: ActOutcome = await configured(() => session.engine.act({ utterance }));
+		const outcome: ActOutcome = await session.engine.act({ utterance });
 		return { ...face(session), ...outcome };
 	});
 });
@@ -456,7 +440,7 @@ ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unkno
 	const { game, run } = idsIn(req, "narrate");
 	const instruction = strIn(req?.instruction, "narrate", "instruction");
 	return turn(game, run, "narrate", async (session) => {
-		const outcome: NarrationOutcome = await configured(() => session.engine.narrate(instruction));
+		const outcome: NarrationOutcome = await session.engine.narrate(instruction);
 		return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
 	});
 });
