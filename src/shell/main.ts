@@ -19,10 +19,9 @@ interface Session {
 	run: string;
 	engine: Engine;
 	unsubscribe: () => void;
-	busy: "act" | "narrate" | null;
 }
 
-/** 会话槽：opened 恒为本次打开的结果；session 落定后可用；关闭即除名，落定不复活。 */
+/** 会话槽：opened 恒为本次打开的结果；session 落定后可用；关闭即除名。 */
 interface SessionSlot {
 	readonly game: string;
 	readonly run: string;
@@ -30,7 +29,7 @@ interface SessionSlot {
 	session: Session | null;
 }
 
-/** 会话单表：键为 (game, run)；两段均为路径段（isSegment），首个 / 即切分点。 */
+/** 会话单表：键为 (game, run)；两段均为路径段（isSegment），拼接无歧义。 */
 const sessions = new Map<string, SessionSlot>();
 const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 
@@ -218,14 +217,13 @@ function openSettings(): void {
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
 	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime });
-	const session: Session = { game, run, engine, unsubscribe: () => {}, busy: null };
-	session.unsubscribe = engine.subscribe((event) => {
+	const unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
 	});
-	return session;
+	return { game, run, engine, unsubscribe };
 }
 
-/** 建槽：并发首调只建一次；落定即置入实例，表项被 close 除名时不复活，失败释放位置。 */
+/** 建槽：并发首调只建一次；失败释放位置（打开中不可关闭，故释放无需复核表项身份）。 */
 function slotOf(game: string, run: string): SessionSlot {
 	const key = sessionKey(game, run);
 	const found = sessions.get(key);
@@ -235,10 +233,10 @@ function slotOf(game: string, run: string): SessionSlot {
 	sessions.set(key, slot);
 	opened.then(
 		(session) => {
-			if (sessions.get(key) === slot) slot.session = session;
+			slot.session = session;
 		},
 		() => {
-			if (sessions.get(key) === slot) sessions.delete(key);
+			sessions.delete(key);
 		},
 	);
 	return slot;
@@ -250,31 +248,23 @@ async function openSession(game: string, run: string): Promise<Session> {
 	return attached(game, run);
 }
 
-/** state/act 只附着已打开的实例（附着中的 open 一并等）；未打开或被关闭即拒绝，不隐式创建。 */
+/** state/act 只附着已打开的实例（打开中一并等）；未打开即拒绝，不隐式创建。 */
 async function attached(game: string, run: string): Promise<Session> {
-	const key = sessionKey(game, run);
-	const slot = sessions.get(key);
+	const slot = sessions.get(sessionKey(game, run));
 	if (slot === undefined) throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
-	const session = slot.session ?? await slot.opened;
-	if (sessions.get(key) !== slot) throw new Error(`运行 ${game}/${run} 已关闭：重新 open 后再附着`);
-	return session;
+	return slot.session ?? await slot.opened;
 }
 
-/** 关闭对开启中的 open 同样权威：先除名，待落定后释放；open 失败已由其调用点报告。 */
-async function closeSession(game: string, run: string): Promise<void> {
+/** 关闭是显式的：打开中与回合进行中都拒绝；成功即除名释放（引擎自持回合互斥）。 */
+function closeSession(game: string, run: string): void {
 	const key = sessionKey(game, run);
 	const slot = sessions.get(key);
 	if (slot === undefined) return;
-	if (slot.session !== null && slot.session.busy !== null) throw new Error(`回合进行中（${slot.session.busy}）：${game}/${run} 不能关闭`);
-	sessions.delete(key);
-	let session: Session;
-	try {
-		session = await slot.opened;
-	} catch {
-		return; // open 失败已由其调用点报告
-	}
-	session.unsubscribe();
+	const session = slot.session;
+	if (session === null) throw new Error(`运行 ${game}/${run} 正在打开：待落定后再关闭`);
 	session.engine.dispose();
+	sessions.delete(key);
+	session.unsubscribe();
 }
 
 /** 实例坐标：快照与会话清单共用。 */
@@ -312,18 +302,6 @@ function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: s
 	return { game, run: req.run };
 }
 
-/** 回合门：同一实例同时只容一个 act/narrate；校验归调用方。 */
-async function turn<T>(game: string, run: string, kind: "act" | "narrate", body: (session: Session) => Promise<T>): Promise<T> {
-	const session = await attached(game, run);
-	if (session.busy !== null) throw new Error(`回合进行中（${session.busy}）：${game}/${run}`);
-	session.busy = kind;
-	try {
-		return await body(session);
-	} finally {
-		session.busy = null;
-	}
-}
-
 /** 注册槽静态面：核心 SlotDef 加内部键；界面据此生成控件。 */
 type SlotFace = SlotDef & { key: string };
 
@@ -354,7 +332,7 @@ ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 /** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */
 ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
 	const { session } = slot;
-	return session === null ? { game: slot.game, run: slot.run, opening: true } : { ...coords(session), busy: session.busy };
+	return session === null ? { game: slot.game, run: slot.run, opening: true } : { ...coords(session), busy: session.engine.busy };
 }));
 
 /** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
@@ -421,7 +399,7 @@ ipcMain.handle("open", async (_event, req: RunRequest) => {
 	return { ...face(session), warnings: [...session.engine.loadWarnings] };
 });
 
-/** 显式释放：不关别人的实例，也不动档案。 */
+/** 显式释放：不动档案。 */
 ipcMain.handle("close", (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "close");
 	return closeSession(game, run);
@@ -430,19 +408,17 @@ ipcMain.handle("close", (_event, req: RunRequest) => {
 ipcMain.handle("act", async (_event, req: RunRequest & { utterance?: unknown }) => {
 	const { game, run } = idsIn(req, "act");
 	const utterance = strIn(req?.utterance, "act", "utterance");
-	return turn(game, run, "act", async (session) => {
-		const outcome: ActOutcome = await session.engine.act({ utterance });
-		return { ...face(session), ...outcome };
-	});
+	const session = await attached(game, run);
+	const outcome: ActOutcome = await session.engine.act({ utterance });
+	return { ...face(session), ...outcome };
 });
 
 ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unknown }) => {
 	const { game, run } = idsIn(req, "narrate");
 	const instruction = strIn(req?.instruction, "narrate", "instruction");
-	return turn(game, run, "narrate", async (session) => {
-		const outcome: NarrationOutcome = await session.engine.narrate(instruction);
-		return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
-	});
+	const session = await attached(game, run);
+	const outcome: NarrationOutcome = await session.engine.narrate(instruction);
+	return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
 });
 
 ipcMain.handle("state", async (_event, req: RunRequest) => {

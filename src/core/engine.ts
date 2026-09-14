@@ -95,6 +95,8 @@ export class Engine {
 	readonly loadWarnings: readonly string[];
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
+	/** 单飞窗口：act/narrate 共享同一 run 槽，入口即占；dispose 同受此拒。 */
+	private running: "act" | "narrate" | null = null;
 
 	private constructor(
 		sim: Simulation,
@@ -212,6 +214,10 @@ export class Engine {
 		return this.ledger.lastSeq;
 	}
 
+	get busy(): "act" | "narrate" | null {
+		return this.running;
+	}
+
 	private beginRun(session: SessionHandle, phase: "mapping" | "narration", utterance?: string): void {
 		const r = this.run;
 		r.phase = phase;
@@ -224,38 +230,49 @@ export class Engine {
 		r.reveals = [];
 	}
 
-	async act(action: { utterance: string }): Promise<ActOutcome> {
+	/** 回合入口：先占后跑；已占用即拒（壳的并发调用与关闭路径同受此门）。 */
+	private enter(kind: "act" | "narrate"): void {
 		this.assertLive();
-		const session = await this.ensureSession();
-		this.beginRun(session, "mapping", action.utterance);
-		const view = this.sim.view();
-		const kit: TurnKit = { view, digest: digestOf(view), utterance: verbatim(action.utterance), recent: this.recent };
-		try {
-			const prompt = this.sim.def.prompt;
-			await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
-		} catch (e) {
-			// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
-			if (this.run.phase === "mapping") throw e;
-			this.run.warnings.push(`表达中断（回合已定稿，呈现回落）：${String(e)}`);
-		}
+		if (this.running !== null) throw new Error(`回合进行中（${this.running}）：不能开始新回合`);
+		this.running = kind;
+	}
 
-		let narration: string;
-		if (this.run.phase === "mapping") {
-			// 未调 act 的文本未经裁决，回落确定性摘要
-			this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
-			narration = this.fallbackSummary([]);
-		} else {
-			narration = this.settleNarration(session, this.run.steps);
+	async act(action: { utterance: string }): Promise<ActOutcome> {
+		this.enter("act");
+		try {
+			const session = await this.ensureSession();
+			this.beginRun(session, "mapping", action.utterance);
+			const view = this.sim.view();
+			const kit: TurnKit = { view, digest: digestOf(view), utterance: verbatim(action.utterance), recent: this.recent };
+			try {
+				const prompt = this.sim.def.prompt;
+				await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
+			} catch (e) {
+				// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
+				if (this.run.phase === "mapping") throw e;
+				this.run.warnings.push(`表达中断（回合已定稿，呈现回落）：${String(e)}`);
+			}
+
+			let narration: string;
+			if (this.run.phase === "mapping") {
+				// 未调 act 的文本未经裁决，回落确定性摘要
+				this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
+				narration = this.fallbackSummary([]);
+			} else {
+				narration = this.settleNarration(session, this.run.steps);
+			}
+			this.updateRecent();
+			return {
+				steps: this.run.steps,
+				lines: this.run.lines,
+				reveals: this.run.reveals,
+				narration,
+				warnings: this.run.warnings,
+				usage: this.collectUsage(session),
+			};
+		} finally {
+			this.running = null;
 		}
-		this.updateRecent();
-		return {
-			steps: this.run.steps,
-			lines: this.run.lines,
-			reveals: this.run.reveals,
-			narration,
-			warnings: this.run.warnings,
-			usage: this.collectUsage(session),
-		};
 	}
 
 	private assertLive(): void {
@@ -275,14 +292,18 @@ export class Engine {
 	}
 
 	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
-		this.assertLive();
-		const session = await this.ensureSession();
-		this.beginRun(session, "narration");
-		const view = this.sim.view();
-		const kit: NarrateKit = { view, digest: digestOf(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
-		const prompt = this.sim.def.prompt;
-		await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
-		return { narration: this.settleNarration(session, steps), warnings: this.run.warnings, usage: this.collectUsage(session) };
+		this.enter("narrate");
+		try {
+			const session = await this.ensureSession();
+			this.beginRun(session, "narration");
+			const view = this.sim.view();
+			const kit: NarrateKit = { view, digest: digestOf(view), events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
+			const prompt = this.sim.def.prompt;
+			await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
+			return { narration: this.settleNarration(session, steps), warnings: this.run.warnings, usage: this.collectUsage(session) };
+		} finally {
+			this.running = null;
+		}
 	}
 
 	private settleNarration(session: SessionHandle, steps: Commit[]): string {
@@ -326,6 +347,7 @@ export class Engine {
 	}
 
 	dispose(): void {
+		if (this.running !== null) throw new Error(`回合进行中（${this.running}）：引擎不能关闭`);
 		this.session?.dispose();
 	}
 }
