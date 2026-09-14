@@ -198,11 +198,6 @@ export class Engine {
 		return session;
 	}
 
-	/** 已定稿回合数；档案链截断后等于存活回合数。 */
-	get turn(): number {
-		return this.ledger.lastSeq;
-	}
-
 	/** 装载读入与本次会话产生的表达；缺席即该回合无表达。 */
 	get narrations(): ReadonlyMap<number, string> {
 		return this.ledger.narrations;

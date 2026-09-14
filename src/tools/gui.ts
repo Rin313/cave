@@ -26,7 +26,6 @@ interface CdpReply {
 interface RunFace {
 	game: string;
 	run: string;
-	turn: number;
 	time: number;
 	view: unknown;
 	warnings?: string[];
@@ -270,7 +269,7 @@ function printWarnings(warnings: string[]): void {
 }
 
 function printAct(utterance: string, r: ActFace, brief = false): void {
-	console.log(`\n【${r.game}/${r.run} #${r.turn} t=${r.time} act】${utterance}`);
+	console.log(`\n【${r.game}/${r.run} t=${r.time} act】${utterance}`);
 	for (const line of r.lines) console.log(`  ${line}`);
 	for (const item of r.reveals) console.log(`  + ${js(item)}`);
 	printWarnings(r.warnings);
@@ -302,7 +301,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 		case "state": {
 			const [game, run] = requireRun();
 			const face = (await evaluate(target, openExpr(game, run), timeout)) as unknown as RunFace;
-			console.log(`【${game}/${run}】已进行 ${face.turn} 回合（t=${face.time}）`);
+			console.log(`【${game}/${run}】t=${face.time}`);
 			printWarnings(face.warnings ?? []);
 			console.log(JSON.stringify(face.view, null, 1));
 			return;

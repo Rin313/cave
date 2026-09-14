@@ -266,12 +266,12 @@ function closeSession(game: string, run: string): void {
 }
 
 /** 实例坐标：快照与会话清单共用。 */
-function coords(session: Session): { game: string; run: string; turn: number; time: number } {
-	return { game: session.game, run: session.run, turn: session.engine.turn, time: session.engine.sim.world.time };
+function coords(session: Session): { game: string; run: string; time: number } {
+	return { game: session.game, run: session.run, time: session.engine.sim.world.time };
 }
 
 /** 状态快照：视图与坐标由同一读态求值。 */
-function face(session: Session): { game: string; run: string; turn: number; time: number; view: unknown } {
+function face(session: Session): { game: string; run: string; time: number; view: unknown } {
 	return { ...coords(session), view: session.engine.sim.view() };
 }
 

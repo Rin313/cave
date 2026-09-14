@@ -11,13 +11,12 @@ import { readSettings, settingsPath, stringSetting, type Settings } from "./sett
 export interface RunFace {
 	game: string;
 	run: string;
-	turn?: number;
 	time?: number;
 	mtime: number;
 }
 
 /** 尾部读最后一条完好的回合记录（表达行、半行与损坏向更早回退；窗口按块向文件头扩）。 */
-function tailRecord(path: string, size: number): { turn: number; time: number } | null {
+function tailRecord(path: string, size: number): { time: number } | null {
 	const fd = openSync(path, "r");
 	try {
 		let span = 64 * 1024;
@@ -28,7 +27,7 @@ function tailRecord(path: string, size: number): { turn: number; time: number } 
 			const lines = buf.subarray(0, got).toString("utf8").split("\n");
 			for (let i = lines.length - 1; i >= 0; i--) {
 				const parsed = parseArchiveLine(lines[i]!);
-				if (parsed?.kind === "record") return { turn: parsed.record.seq, time: parsed.record.time };
+				if (parsed?.kind === "record") return { time: parsed.record.time };
 			}
 			if (start === 0) return null;
 			span *= 4;
@@ -54,7 +53,7 @@ export function listRuns(root: string, game?: string): RunFace[] {
 			if (!existsSync(records)) continue;
 			const stat = statSync(records);
 			const tail = tailRecord(records, stat.size);
-			out.push({ game: g, run: entry.name, ...(tail !== null && { turn: tail.turn, time: tail.time }), mtime: stat.mtimeMs });
+			out.push({ game: g, run: entry.name, ...(tail !== null && { time: tail.time }), mtime: stat.mtimeMs });
 		}
 	}
 	out.sort((a, b) => b.mtime - a.mtime);
