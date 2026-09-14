@@ -13,7 +13,6 @@ import { installModel } from "./model.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
 
-/** 引擎实例身份是 (game, run)：活实例进程内唯一（同一 run 双写者撕裂档案），界面只是附着者。 */
 interface Session {
 	game: string;
 	run: string;

@@ -291,7 +291,7 @@ interface RuleDecl {
 	rules: RuleChain;
 }
 
-/** 外部动词：唯一调用通道是 act（AI 经动词面）。 */
+/** 外部动词 */
 export interface VerbDef extends RuleDecl {
 	label: string;
 	description: string;
@@ -306,7 +306,7 @@ export interface TickDef extends RuleDecl {
 	id: string;
 }
 
-/** 面向 AI 的动词派生面 */
+/** 动词派生面 */
 export interface VerbFace {
 	id: string;
 	label: string;
@@ -491,7 +491,7 @@ export interface GameDef {
 	perspective?: (world: World) => Partial<Access>;
 	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第二参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
-	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回要注入 AI 的记录子序列（须严格递增 seq 且取自传入记录）。此钩子只做选择，投影与言默判据归引擎。 */
+	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回记录子序列（须严格递增 seq 且取自传入记录）。此钩子只做选择，投影与言默判据归引擎。 */
 	recent?: (records: readonly ChronicleEntry[], base: readonly ChronicleEntry[]) => readonly ChronicleEntry[];
 	/** 缺省近况选择的窗口大小（回合记录数）；recent 缺席时必填，recent 在时作为 base 的参数（缺省即 base = 全量记录）。 */
 	recentWindow?: number;
