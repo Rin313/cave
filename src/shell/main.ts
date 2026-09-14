@@ -1,13 +1,14 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { createReadStream, existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { parseRecordLine } from "../core/archive.ts";
+import { type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { readRecords } from "../core/archive.ts";
 import type { ActOutcome, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
-import { verbFace, type ChronicleEntry, type SlotDef } from "../core/sim.ts";
-import { configDir, dataDir, readJsonObject, recordsPath, writeJson } from "../core/paths.ts";
-import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
+import { verbFace, type SlotDef } from "../core/sim.ts";
+import { configDir, dataDir, isSegment, recordsPath } from "../core/paths.ts";
+import { listRuns, ModelConfigError, openModelRuntime, openRun, resolveModelRef } from "../core/runs.ts";
+import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "../core/settings.ts";
 import { installAuth } from "./auth.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -46,9 +47,10 @@ const CONTENT_ROOTS = app.isPackaged ? [DATA_ROOT, RESOURCE_ROOT] : [DATA_ROOT];
 const UI_ROOTS = CONTENT_ROOTS.map((root) => join(root, "ui"));
 /** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按数据根。 */
 const CONFIG_DIR = configDir(USER_DATA);
-const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
-/** 分发缺省（仅打包）：位于资源根、只读；用户文件只存覆盖，故缺省可随包更新。 */
-const SETTINGS_DEFAULTS = app.isPackaged ? [join(RESOURCE_ROOT, "settings.json")] : [];
+const SETTINGS_FILE = settingsPath(CONFIG_DIR);
+/** 分发缺省（仅打包）：位于资源根、只读；用户文件只存覆盖，故缺省可随包更新；文件缺席即无此层。 */
+const SETTINGS_DEFAULT = join(RESOURCE_ROOT, "settings.json");
+const SETTINGS_DEFAULTS = app.isPackaged && existsSync(SETTINGS_DEFAULT) ? [SETTINGS_DEFAULT] : [];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
@@ -64,11 +66,6 @@ function modelRuntime(): Promise<ModelRuntime> {
 	return runtime;
 }
 
-/** 路径段：id 不做路径解析。 */
-function segment(v: unknown): v is string {
-	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/]/.test(v);
-}
-
 interface UiSite {
 	name: string;
 	file: string;
@@ -76,7 +73,7 @@ interface UiSite {
 	game: string | null;
 }
 
-/** 界面 ref：`<name>`（通用）或 `<game>/<name>`（游戏作用域）；两段均由 segment 保证不含斜杠。 */
+/** 界面 ref：`<name>`（通用）或 `<game>/<name>`（游戏作用域）；两段均来自目录名，不含斜杠。 */
 const uiRef = (site: UiSite): string => (site.game === null ? site.name : `${site.game}/${site.name}`);
 
 /** 全部界面（ref 去重、先见者优先）：通用 ui/<name>；游戏自带 games/<id>/ui/<name>，根 index.html 为名即 id 的缺省界面。 */
@@ -120,37 +117,11 @@ const siteByRef = (sites: readonly UiSite[], ref: string): UiSite | null => site
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: readonly UiSite[]): string => sites.map(uiRef).join(", ") || "无";
 
-/** 单文件读取：缺席与破损都按空对象；破损显形于控制台。 */
-function readSettings(file: string): Record<string, unknown> {
-	const read = readJsonObject(file);
-	if (read === null) return {};
-	if (read.value !== null) return read.value;
-	console.error(`设置文件不可读（按缺席处理）：${read.error}`);
-	return {};
-}
-
-/** 设置查序：用户配置 → 分发缺省；用户层覆盖缺省层。 */
-function mergedSettings(user: Record<string, unknown>): Record<string, unknown> {
-	const merged: Record<string, unknown> = {};
-	for (let i = SETTINGS_DEFAULTS.length - 1; i >= 0; i--) Object.assign(merged, readSettings(SETTINGS_DEFAULTS[i]!));
-	return Object.assign(merged, user);
-}
-
-function settings(): Record<string, unknown> {
-	return mergedSettings(readSettings(SETTINGS_FILE));
-}
-
-/** 设置字符串键：合并态中非字符串即未定（显式写入的错型值遮蔽缺省，不做回退）。 */
-function stringSetting(merged: Record<string, unknown>, key: string): string | undefined {
-	const v = merged[key];
-	return typeof v === "string" ? v : undefined;
-}
+const settings = (): Settings => readSettings(CONFIG_DIR, SETTINGS_DEFAULTS);
 
 /** 写入用户层（只存覆盖，分发缺省不固化）；返回写入后的合并态。 */
-function saveSettings(patch: Record<string, unknown>): Record<string, unknown> {
-	const user = Object.assign(readSettings(SETTINGS_FILE), patch);
-	writeJson(SETTINGS_FILE, user);
-	return mergedSettings(user);
+function saveSettings(patch: Settings): Settings {
+	return patchSettings(CONFIG_DIR, patch, SETTINGS_DEFAULTS);
 }
 
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
@@ -175,13 +146,16 @@ try {
 	console.error(bootError);
 }
 
-/** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即壳内引导面。 */
+/** 配置面：settingsUi 指定的内容界面为皮肤层；缺席或失效即壳内引导面（配置面是兜底，不因设置失效而锁死）。 */
 function settingsSite(): UiSite | null {
 	const ref = stringSetting(settings(), "settingsUi");
 	if (ref === undefined) return null;
 	const sites = uiSites();
 	const site = siteByRef(sites, ref);
-	if (site === null) throw new Error(`未知配置界面：${ref}（可用：${uiList(sites)}）`);
+	if (site === null) {
+		console.error(`未知配置界面：${ref}（可用：${uiList(sites)}）：回落壳内引导面`);
+		return null;
+	}
 	return site;
 }
 
@@ -230,7 +204,7 @@ function openSettings(): void {
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, modelRuntime: await modelRuntime() });
+	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime: await modelRuntime() });
 	const session: Session = { game, run, engine, unsubscribe: () => {}, busy: null };
 	session.unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
@@ -292,8 +266,8 @@ async function configured<T>(run: () => Promise<T>): Promise<T> {
 		if (e instanceof ModelConfigError) {
 			try {
 				openSettings();
-			} catch {
-				// 无配置面可用
+			} catch (err) {
+				console.error(`配置面不可用：${String(err)}`);
 			}
 		}
 		throw e;
@@ -305,15 +279,15 @@ function coords(session: Session): { game: string; run: string; turn: number; ti
 	return { game: session.game, run: session.run, turn: session.engine.turn, time: session.engine.sim.world.time };
 }
 
-/** 状态快照：视图与坐标由同一读态求值；act/narrate 结果以此为基础附加。 */
-function face<T extends object>(session: Session, outcome: T = {} as T): { game: string; run: string; turn: number; time: number; view: unknown } & T {
-	return { ...coords(session), view: session.engine.sim.view(), ...outcome };
+/** 状态快照：视图与坐标由同一读态求值。 */
+function face(session: Session): { game: string; run: string; turn: number; time: number; view: unknown } {
+	return { ...coords(session), view: session.engine.sim.view() };
 }
 
 /** 可缺席的 game 字段：缺席即 undefined，非路径段即拒。 */
 function idIn(req: { game?: unknown } | undefined, cmd: string): string | undefined {
 	if (req?.game === undefined) return undefined;
-	if (!segment(req.game)) throw new Error(`${cmd} 的 game 须为游戏 id`);
+	if (!isSegment(req.game)) throw new Error(`${cmd} 的 game 须为游戏 id`);
 	return req.game;
 }
 
@@ -321,7 +295,7 @@ function idIn(req: { game?: unknown } | undefined, cmd: string): string | undefi
 function idsIn(req: { game?: unknown; run?: unknown } | undefined, cmd: string): { game: string; run: string } {
 	const game = idIn(req, cmd);
 	if (game === undefined) throw new Error(`${cmd} 需要游戏 id`);
-	if (!segment(req?.run)) throw new Error(`${cmd} 的 run 须为存档 id（路径段，不含分隔符）`);
+	if (!isSegment(req?.run)) throw new Error(`${cmd} 的 run 须为存档 id（路径段，不含分隔符）`);
 	return { game, run: req.run };
 }
 
@@ -355,28 +329,13 @@ ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
 ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, idIn(req, "runs")));
 
-/** 回合记录原样读取（诊断面）：行式流读，不在主进程整读；坏行计数显形；不装载 def、不重放、不改档案。 */
-ipcMain.handle("records", async (_event, req: { game?: unknown; run?: unknown } | undefined) => {
+/** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
+ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
 	const { game, run } = idsIn(req, "records");
 	const path = recordsPath(game, run, DATA_ROOT);
-	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
-	const records: ChronicleEntry[] = [];
-	let broken = 0;
-	let tail = "";
-	const take = (line: string): void => {
-		const parsed = parseRecordLine(line);
-		if (parsed === null) return;
-		if (parsed.kind === "broken") broken += 1;
-		else records.push(parsed.record);
-	};
-	for await (const chunk of createReadStream(path, "utf8")) {
-		tail += chunk;
-		const lines = tail.split("\n");
-		tail = lines.pop()!;
-		for (const line of lines) take(line);
-	}
-	take(tail);
-	return { game, run, broken, records };
+	const read = readRecords(path);
+	if (read === null) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
+	return { game, run, ...read };
 });
 
 /** 活实例清单：界面换装/重载后据此附着回既有实例。 */
@@ -434,8 +393,8 @@ ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	}
 	if (patch.model !== undefined) {
 		if (typeof patch.model !== "string" || patch.model.trim() === "") throw new Error("model 须为非空字符串");
-		const { model, error } = resolveCliModel({ cliModel: patch.model, modelRuntime: await modelRuntime() });
-		if (!model || error) throw new Error(`模型 "${patch.model}" 不可用：${modelErrorReason(error)}`);
+		const resolved = resolveModelRef(patch.model, await modelRuntime());
+		if (!resolved.ok) throw new Error(`模型 "${patch.model}" 不可用：${resolved.reason}`);
 	}
 	return saveSettings(patch);
 });
@@ -445,7 +404,7 @@ ipcMain.handle("settings:open", () => openSettings());
 ipcMain.handle("open", async (_event, req: { game?: unknown; run?: unknown }) => {
 	const { game, run } = idsIn(req, "open");
 	const session = await openSession(game, run);
-	return face(session, { warnings: [...session.engine.loadWarnings] });
+	return { ...face(session), warnings: [...session.engine.loadWarnings] };
 });
 
 /** 显式释放：不关别人的实例，也不动档案。 */
@@ -460,7 +419,7 @@ ipcMain.handle("act", async (_event, req: { game?: unknown; run?: unknown; utter
 	const utterance = req.utterance;
 	return turn(game, run, "act", async (session) => {
 		const outcome: ActOutcome = await configured(() => session.engine.act({ utterance }));
-		return face(session, outcome);
+		return { ...face(session), ...outcome };
 	});
 });
 

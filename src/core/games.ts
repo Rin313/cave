@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readJsonObject } from "./paths.ts";
+import { isSegment, readJsonObject } from "./paths.ts";
 import * as core from "./sim.ts";
 import type { GameDef } from "./sim.ts";
 
@@ -13,7 +13,7 @@ const ENTRIES = ["index.ts", "index.js", "index.mjs"];
 
 /** id 是路径段：不做路径解析。 */
 function gameFile(id: string, roots: readonly string[]): string | null {
-	if (id === "" || id === "." || id === ".." || /[\\/]/.test(id)) return null;
+	if (!isSegment(id)) return null;
 	for (const root of roots) {
 		for (const name of ENTRIES) {
 			const file = join(root, "games", id, name);

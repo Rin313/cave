@@ -20,6 +20,11 @@ export function dataDir(userData?: string): string {
 	return process.env.ENGINE_DATA_DIR ?? configDir(userData);
 }
 
+/** 路径段：id 不做路径解析。 */
+export function isSegment(v: unknown): v is string {
+	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/]/.test(v);
+}
+
 export function runsDir(root = dataDir(), game?: string): string {
 	const base = join(root, "runs");
 	return game === undefined ? base : join(base, game);

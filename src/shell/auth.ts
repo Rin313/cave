@@ -4,7 +4,6 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 type Interaction = Parameters<ModelRuntime["login"]>[2];
 type LoginType = Parameters<ModelRuntime["login"]>[1];
 type Prompt = Parameters<Interaction["prompt"]>[0];
-type Notice = Parameters<Interaction["notify"]>[0];
 
 /** 配置协议：只转发 SDK 的目录与交互，不自产文案；配置面是内容。 */
 interface ProviderInfo {
@@ -26,15 +25,9 @@ interface ModelRef {
 	available: boolean;
 }
 
-type PromptPayload =
-	| { type: "text" | "secret" | "manual_code"; message: string; placeholder?: string }
-	| { type: "select"; message: string; options: readonly { id: string; label: string; description?: string }[] };
-
-type NoticePayload =
-	| { type: "info"; message: string; links?: readonly { url: string; label?: string }[] }
-	| { type: "auth_url"; url: string; instructions?: string }
-	| { type: "device_code"; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
-	| { type: "progress"; message: string };
+/** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄。 */
+type Payload<T> = T extends unknown ? Omit<T, "signal"> : never;
+type PromptPayload = Payload<Prompt>;
 
 interface Flow {
 	sender: WebContents;
@@ -44,37 +37,8 @@ interface Flow {
 }
 
 function promptPayload(prompt: Prompt): PromptPayload {
-	if (prompt.type === "select") {
-		return {
-			type: "select",
-			message: prompt.message,
-			options: prompt.options.map((o) => ({ id: o.id, label: o.label, ...(o.description !== undefined && { description: o.description }) })),
-		};
-	}
-	return { type: prompt.type, message: prompt.message, ...(prompt.placeholder !== undefined && { placeholder: prompt.placeholder }) };
-}
-
-function noticePayload(notice: Notice): NoticePayload {
-	switch (notice.type) {
-		case "info":
-			return {
-				type: "info",
-				message: notice.message,
-				...(notice.links !== undefined && { links: notice.links.map((l) => ({ url: l.url, ...(l.label !== undefined && { label: l.label }) })) }),
-			};
-		case "auth_url":
-			return { type: "auth_url", url: notice.url, ...(notice.instructions !== undefined && { instructions: notice.instructions }) };
-		case "device_code":
-			return {
-				type: "device_code",
-				userCode: notice.userCode,
-				verificationUri: notice.verificationUri,
-				...(notice.intervalSeconds !== undefined && { intervalSeconds: notice.intervalSeconds }),
-				...(notice.expiresInSeconds !== undefined && { expiresInSeconds: notice.expiresInSeconds }),
-			};
-		case "progress":
-			return { type: "progress", message: notice.message };
-	}
+	const { signal, ...rest } = prompt;
+	return rest;
 }
 
 function providerInfo(runtime: ModelRuntime): ProviderInfo[] {
@@ -140,7 +104,7 @@ export function installAuth(load: () => Promise<ModelRuntime>): void {
 			await (await load()).login(provider, type, {
 				signal: flow.abort.signal,
 				notify: (notice) => {
-					if (!sender.isDestroyed()) sender.send("auth:notify", { flow: id, notice: noticePayload(notice) });
+					if (!sender.isDestroyed()) sender.send("auth:notify", { flow: id, notice });
 				},
 				prompt: (prompt) =>
 					new Promise<string>((resolve, reject) => {

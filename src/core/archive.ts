@@ -44,6 +44,18 @@ export function parseRecordLines(text: string): ArchiveLine[] {
 	return out;
 }
 
+/** 档案全读：缺席即 null；坏行计数与记录一并返回，装载与诊断共用同一读法。 */
+export function readRecords(path: string): { records: ChronicleEntry[]; broken: number } | null {
+	if (!existsSync(path)) return null;
+	const records: ChronicleEntry[] = [];
+	let broken = 0;
+	for (const line of parseRecordLines(readFileSync(path, "utf8"))) {
+		if (line.kind === "broken") broken += 1;
+		else records.push(line.record);
+	}
+	return { records, broken };
+}
+
 function writeRecords(path: string, records: readonly ChronicleEntry[]): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const tmp = `${path}.tmp`;
@@ -58,28 +70,27 @@ export function openArchive(path: string): ArchiveStore {
 	return {
 		load(def) {
 			const warnings: string[] = [];
-			const lines = existsSync(path) ? parseRecordLines(readFileSync(path, "utf8")) : [];
-			const broken = lines.filter((l) => l.kind === "broken").length;
-			if (broken) warnings.push(`回合条目 ${broken} 条形状损坏`);
+			const read = readRecords(path) ?? { records: [], broken: 0 };
+			if (read.broken) warnings.push(`回合条目 ${read.broken} 条形状损坏`);
 			const sim = new Simulation(def);
 			const records: ChronicleEntry[] = [];
 			let lastSeq = 0;
 			let truncated = false;
-			for (const l of lines) {
-				if (l.kind !== "record" || truncated) continue;
-				if (l.record.seq !== lastSeq + 1) {
-					warnings.push(`档案链断于 seq${lastSeq + 1}（得到 seq${l.record.seq}）：世界与近况同界截断`);
+			for (const record of read.records) {
+				if (truncated) continue;
+				if (record.seq !== lastSeq + 1) {
+					warnings.push(`档案链断于 seq${lastSeq + 1}（得到 seq${record.seq}）：世界与近况同界截断`);
 					truncated = true;
 					continue;
 				}
-				const reason = sim.replayRecord(l.record);
+				const reason = sim.replayRecord(record);
 				if (reason) {
 					warnings.push(`档案链断（${reason}）：世界与近况同界截断`);
 					truncated = true;
 					continue;
 				}
-				records.push(l.record);
-				lastSeq = l.record.seq;
+				records.push(record);
+				lastSeq = record.seq;
 			}
 			repair = truncated ? records : null;
 			expected = lastSeq + 1;
