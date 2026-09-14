@@ -18,24 +18,28 @@ export interface ArchiveStore {
 /** 档案行：形状损坏计为 broken（装载与工具共用同一判据）。 */
 export type ArchiveLine = { kind: "record"; record: ChronicleEntry } | { kind: "broken" };
 
+/** 单行解析：空行即 null（不计入）。 */
+export function parseRecordLine(raw: string): ArchiveLine | null {
+	const line = raw.trim();
+	if (line === "") return null;
+	let v: unknown;
+	try {
+		v = JSON.parse(line);
+	} catch {
+		return { kind: "broken" };
+	}
+	const r = v !== null && typeof v === "object" ? (v as { seq?: unknown; time?: unknown; utterance?: unknown; steps?: unknown }) : {};
+	if (Number.isInteger(r.seq) && (r.seq as number) >= 1 && typeof r.time === "number" && typeof r.utterance === "string" && Array.isArray(r.steps) && r.steps.every(isCommit)) {
+		return { kind: "record", record: deepFreeze({ seq: r.seq as number, time: r.time as number, utterance: r.utterance as string, steps: r.steps as Commit[] }) };
+	}
+	return { kind: "broken" };
+}
+
 export function parseRecordLines(text: string): ArchiveLine[] {
 	const out: ArchiveLine[] = [];
 	for (const raw of text.split("\n")) {
-		const line = raw.trim();
-		if (line === "") continue;
-		let v: unknown;
-		try {
-			v = JSON.parse(line);
-		} catch {
-			out.push({ kind: "broken" });
-			continue;
-		}
-		const r = v !== null && typeof v === "object" ? (v as { seq?: unknown; time?: unknown; utterance?: unknown; steps?: unknown }) : {};
-		if (Number.isInteger(r.seq) && (r.seq as number) >= 1 && typeof r.time === "number" && typeof r.utterance === "string" && Array.isArray(r.steps) && r.steps.every(isCommit)) {
-			out.push({ kind: "record", record: deepFreeze({ seq: r.seq as number, time: r.time as number, utterance: r.utterance as string, steps: r.steps as Commit[] }) });
-			continue;
-		}
-		out.push({ kind: "broken" });
+		const parsed = parseRecordLine(raw);
+		if (parsed !== null) out.push(parsed);
 	}
 	return out;
 }

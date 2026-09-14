@@ -1,11 +1,11 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { parseRecordLines } from "../core/archive.ts";
+import { parseRecordLine } from "../core/archive.ts";
 import type { Engine } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
-import { verbFace, type SlotDef } from "../core/sim.ts";
+import { verbFace, type ChronicleEntry, type SlotDef } from "../core/sim.ts";
 import { configDir, dataDir, readJsonObject, recordsPath, writeJson } from "../core/paths.ts";
 import { listRuns, ModelConfigError, modelErrorReason, openModelRuntime, openRun } from "../core/runs.ts";
 import { installAuth } from "./auth.ts";
@@ -47,8 +47,8 @@ const UI_ROOTS = CONTENT_ROOTS.map((root) => join(root, "ui"));
 /** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按数据根。 */
 const CONFIG_DIR = configDir(USER_DATA);
 const SETTINGS_FILE = join(CONFIG_DIR, "settings.json");
-/** 设置查序：用户配置 → 分发缺省（仅打包）。 */
-const SETTINGS_FILES = app.isPackaged ? [SETTINGS_FILE, join(RESOURCE_ROOT, "settings.json")] : [SETTINGS_FILE];
+/** 分发缺省（仅打包）：位于资源根、只读；用户文件只存覆盖，故缺省可随包更新。 */
+const SETTINGS_DEFAULTS = app.isPackaged ? [join(RESOURCE_ROOT, "settings.json")] : [];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
@@ -115,45 +115,52 @@ function uiSites(): UiSite[] {
 }
 
 /** 按 ref 找界面；未知即 null。 */
-const siteByRef = (ref: string): UiSite | null => uiSites().find((s) => uiRef(s) === ref) ?? null;
+const siteByRef = (sites: readonly UiSite[], ref: string): UiSite | null => sites.find((s) => uiRef(s) === ref) ?? null;
 
 /** 界面 ref 清单（诊断文案用）。 */
-const uiList = (): string => uiSites().map(uiRef).join(", ") || "无";
+const uiList = (sites: readonly UiSite[]): string => sites.map(uiRef).join(", ") || "无";
 
-/** 设置合并：SETTINGS_FILES 高优先在前，低者先合并；破损文件视同缺席并显形于控制台。 */
-function settings(): Record<string, unknown> {
+/** 单文件读取：缺席与破损都按空对象；破损显形于控制台。 */
+function readSettings(file: string): Record<string, unknown> {
+	const read = readJsonObject(file);
+	if (read === null) return {};
+	if (read.value !== null) return read.value;
+	console.error(`设置文件不可读（按缺席处理）：${read.error}`);
+	return {};
+}
+
+/** 设置查序：用户配置 → 分发缺省；用户层覆盖缺省层。 */
+function mergedSettings(user: Record<string, unknown>): Record<string, unknown> {
 	const merged: Record<string, unknown> = {};
-	for (let i = SETTINGS_FILES.length - 1; i >= 0; i--) {
-		const read = readJsonObject(SETTINGS_FILES[i]!);
-		if (read === null) continue;
-		if (read.value === null) {
-			console.error(`设置文件不可读（按缺席处理）：${read.error}`);
-			continue;
-		}
-		Object.assign(merged, read.value);
-	}
-	return merged;
+	for (let i = SETTINGS_DEFAULTS.length - 1; i >= 0; i--) Object.assign(merged, readSettings(SETTINGS_DEFAULTS[i]!));
+	return Object.assign(merged, user);
+}
+
+function settings(): Record<string, unknown> {
+	return mergedSettings(readSettings(SETTINGS_FILE));
 }
 
 /** 设置字符串键：合并态中非字符串即未定（显式写入的错型值遮蔽缺省，不做回退）。 */
-function settingString(key: string): string | undefined {
-	const v = settings()[key];
+function stringSetting(merged: Record<string, unknown>, key: string): string | undefined {
+	const v = merged[key];
 	return typeof v === "string" ? v : undefined;
 }
 
-/** 写入用户级设置文件：当前合并态 + patch；分发缺省因此固化到用户文件。 */
-function saveSettings(patch: Record<string, unknown>): void {
-	writeJson(SETTINGS_FILE, Object.assign(settings(), patch));
+/** 写入用户层（只存覆盖，分发缺省不固化）；返回写入后的合并态。 */
+function saveSettings(patch: Record<string, unknown>): Record<string, unknown> {
+	const user = Object.assign(readSettings(SETTINGS_FILE), patch);
+	writeJson(SETTINGS_FILE, user);
+	return mergedSettings(user);
 }
 
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
 function bootUi(): UiSite {
-	const named = settingString("ui");
+	const named = stringSetting(settings(), "ui");
+	const sites = uiSites();
 	if (named !== undefined) {
-		const site = siteByRef(named);
+		const site = siteByRef(sites, named);
 		if (site !== null) return site;
 	}
-	const sites = uiSites();
 	if (sites.length === 1) return sites[0]!;
 	if (sites.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置 index.html（缺省）或 <name>/index.html`);
 	throw new Error(`未指定界面：可用 ${sites.map(uiRef).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
@@ -170,10 +177,11 @@ try {
 
 /** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即壳内引导面。 */
 function settingsSite(): UiSite | null {
-	const ref = settingString("settingsUi");
+	const ref = stringSetting(settings(), "settingsUi");
 	if (ref === undefined) return null;
-	const site = siteByRef(ref);
-	if (site === null) throw new Error(`未知配置界面：${ref}（可用：${uiList()}）`);
+	const sites = uiSites();
+	const site = siteByRef(sites, ref);
+	if (site === null) throw new Error(`未知配置界面：${ref}（可用：${uiList(sites)}）`);
 	return site;
 }
 
@@ -363,14 +371,28 @@ ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
 ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, gameId(req, "runs")));
 
-/** 回合记录原样读取（诊断面）：坏行计数显形；不装载 def、不重放、不改档案。 */
-ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
+/** 回合记录原样读取（诊断面）：行式流读，不在主进程整读；坏行计数显形；不装载 def、不重放、不改档案。 */
+ipcMain.handle("records", async (_event, req: { game?: unknown; run?: unknown } | undefined) => {
 	const { game, run } = pair(req);
 	const path = recordsPath(game, run, DATA_ROOT);
 	if (!existsSync(path)) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
-	const lines = parseRecordLines(readFileSync(path, "utf8"));
-	const records = lines.flatMap((l) => (l.kind === "record" ? [l.record] : []));
-	return { game, run, broken: lines.length - records.length, records };
+	const records: ChronicleEntry[] = [];
+	let broken = 0;
+	let tail = "";
+	const take = (line: string): void => {
+		const parsed = parseRecordLine(line);
+		if (parsed === null) return;
+		if (parsed.kind === "broken") broken += 1;
+		else records.push(parsed.record);
+	};
+	for await (const chunk of createReadStream(path, "utf8")) {
+		tail += chunk;
+		const lines = tail.split("\n");
+		tail = lines.pop()!;
+		for (const line of lines) take(line);
+	}
+	take(tail);
+	return { game, run, broken, records };
 });
 
 /** 活实例清单：界面换装/重载后据此附着回既有实例。 */
@@ -402,8 +424,9 @@ ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
 /** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动。 */
 ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 	if (typeof req?.ref !== "string" || req.ref === "") throw new Error("use 需要界面 ref");
-	const site = siteByRef(req.ref);
-	if (site === null) throw new Error(`未知界面：${req.ref}（可用：${uiList()}）`);
+	const sites = uiSites();
+	const site = siteByRef(sites, req.ref);
+	if (site === null) throw new Error(`未知界面：${req.ref}（可用：${uiList(sites)}）`);
 	saveSettings({ ui: req.ref });
 	void win?.loadFile(site.file);
 });
@@ -415,19 +438,20 @@ ipcMain.handle("env", () => ({ configDir: CONFIG_DIR }));
 ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
+	let sites: UiSite[] | null = null;
 	for (const key of ["ui", "settingsUi"] as const) {
 		const ref = patch[key];
 		if (ref === undefined) continue;
 		if (typeof ref !== "string" || ref === "") throw new Error(`${key} 须为非空字符串`);
-		if (siteByRef(ref) === null) throw new Error(`未知界面（${key}）：${ref}（可用：${uiList()}）`);
+		sites ??= uiSites();
+		if (siteByRef(sites, ref) === null) throw new Error(`未知界面（${key}）：${ref}（可用：${uiList(sites)}）`);
 	}
 	if (patch.model !== undefined) {
 		if (typeof patch.model !== "string" || patch.model.trim() === "") throw new Error("model 须为非空字符串");
 		const { model, error } = resolveCliModel({ cliModel: patch.model, modelRuntime: await modelRuntime() });
 		if (!model || error) throw new Error(`模型 "${patch.model}" 不可用：${modelErrorReason(error)}`);
 	}
-	saveSettings(patch);
-	return settings();
+	return saveSettings(patch);
 });
 
 ipcMain.handle("settings:open", () => openSettings());
