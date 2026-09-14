@@ -29,8 +29,8 @@ contextBridge.exposeInMainWorld("shell", {
 	auth: {
 		providers: () => ipcRenderer.invoke("auth:providers"),
 		login: (provider, type) => ipcRenderer.invoke("auth:login", { provider, type }),
-		answer: (flow, value) => ipcRenderer.invoke("auth:answer", { flow, value }),
-		cancel: (flow) => ipcRenderer.invoke("auth:cancel", { flow }),
+		answer: (value) => ipcRenderer.invoke("auth:answer", { value }),
+		cancel: () => ipcRenderer.invoke("auth:cancel"),
 		logout: (provider) => ipcRenderer.invoke("auth:logout", { provider }),
 		onPrompt: on("auth:prompt"),
 		onNotice: on("auth:notify"),

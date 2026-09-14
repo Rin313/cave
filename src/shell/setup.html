@@ -265,7 +265,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 		$("flow").hidden = false;
 		$("notices").replaceChildren();
 		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
-		const offPrompt = shell.auth.onPrompt(({ flow, prompt }) => renderPrompt(flow, prompt));
+		const offPrompt = shell.auth.onPrompt(({ prompt }) => renderPrompt(prompt));
 		const offNotice = shell.auth.onNotice(({ notice }) => renderNotice(notice));
 		try {
 			await shell.auth.login(provider, type);
@@ -279,26 +279,26 @@ document.documentElement.lang = zh ? "zh" : "en";
 		}
 	}
 
-	function renderPrompt(flow, prompt) {
+	function renderPrompt(prompt) {
 		const area = $("promptArea");
 		area.replaceChildren(el("p", prompt.message));
 		if (prompt.type === "select") {
-			for (const option of prompt.options ?? []) area.append(button(`${option.label}${option.description ? ` — ${option.description}` : ""}`, () => answer(flow, option.id)));
+			for (const option of prompt.options ?? []) area.append(button(`${option.label}${option.description ? ` — ${option.description}` : ""}`, () => answer(option.id)));
 			return;
 		}
 		const input = el("input");
 		input.type = prompt.type === "secret" ? "password" : "text";
 		input.placeholder = prompt.placeholder ?? "";
-		input.addEventListener("keydown", (e) => { if (e.key === "Enter") answer(flow, input.value); });
+		input.addEventListener("keydown", (e) => { if (e.key === "Enter") answer(input.value); });
 		const row = el("div", undefined, "row");
-		row.append(input, button(t("login.ok"), () => answer(flow, input.value)));
+		row.append(input, button(t("login.ok"), () => answer(input.value)));
 		area.append(row);
 		input.focus();
 	}
 
-	function answer(flow, value) {
+	function answer(value) {
 		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
-		void shell.auth.answer(flow, value).catch((e) => $("promptArea").replaceChildren(el("p", reason(e), "err")));
+		void shell.auth.answer(value).catch((e) => $("promptArea").replaceChildren(el("p", reason(e), "err")));
 	}
 
 	function renderNotice(notice) {
