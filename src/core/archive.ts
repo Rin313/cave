@@ -25,7 +25,6 @@ export type ArchiveLine =
 	| { kind: "narration"; seq: number; narration: string }
 	| { kind: "broken" };
 
-/** 单行解析：空行即 null（不计入）。 */
 export function parseArchiveLine(raw: string): ArchiveLine | null {
 	const text = raw.trim();
 	if (text === "") return null;
