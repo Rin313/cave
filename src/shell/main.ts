@@ -194,7 +194,6 @@ function bindWindow(w: BrowserWindow): void {
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
-/** 页面装载失败只降级呈现（控制台显形）：界面是可选层，不动引擎与档案。 */
 function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>): void {
 	const job = query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
 	void job.catch((e: unknown) => console.error(`界面装载失败（${file}）：${String(e)}`));
