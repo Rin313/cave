@@ -71,9 +71,10 @@ interface RunState {
 	warnings: string[];
 }
 
-/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源），lastSeq 是定稿序位 */
+/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源），narrations 是它们的表达，lastSeq 是定稿序位 */
 interface Ledger {
 	records: ChronicleEntry[];
+	narrations: Map<number, string>;
 	lastSeq: number;
 	dead: string | null;
 }
@@ -140,7 +141,7 @@ export class Engine {
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const loaded = options.archive?.load(def);
-		const ledger: Ledger = { records: loaded?.records ?? [], lastSeq: loaded?.lastSeq ?? 0, dead: null };
+		const ledger: Ledger = { records: loaded?.records ?? [], narrations: new Map(loaded?.narrations), lastSeq: loaded?.lastSeq ?? 0, dead: null };
 		const sim = loaded?.sim ?? new Simulation(def);
 		const loadWarnings = loaded?.warnings ?? [];
 
@@ -214,6 +215,11 @@ export class Engine {
 		return this.ledger.lastSeq;
 	}
 
+	/** 装载读入与本次会话产生的表达；缺席即该回合无表达。 */
+	get narrations(): ReadonlyMap<number, string> {
+		return this.ledger.narrations;
+	}
+
 	get busy(): "act" | "narrate" | null {
 		return this.running;
 	}
@@ -261,6 +267,7 @@ export class Engine {
 			} else {
 				narration = this.settleNarration(session, this.run.steps);
 			}
+			this.recordNarration(narration);
 			this.updateRecent();
 			return {
 				steps: this.run.steps,
@@ -344,6 +351,17 @@ export class Engine {
 		const { text, warning } = skeletonSummary(this.sim, steps);
 		if (warning) this.run.warnings.push(warning);
 		return text;
+	}
+
+	/** 表达是可有可无的追加写：失败只降级警告，已定稿的回合不受影响。 */
+	private recordNarration(narration: string): void {
+		if (this.run.phase !== "narration" || this.ledger.dead !== null) return;
+		this.ledger.narrations.set(this.ledger.lastSeq, narration);
+		try {
+			this.options.archive?.appendExpression(this.ledger.lastSeq, narration);
+		} catch (e) {
+			this.run.warnings.push(`表达落盘失败（忽略）：${String(e)}`);
+		}
 	}
 
 	dispose(): void {

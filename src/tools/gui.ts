@@ -42,6 +42,7 @@ interface RunFace {
 interface RecordsFace {
 	broken: number;
 	records: unknown[];
+	narrations: unknown[];
 }
 
 interface ActFace extends RunFace {
@@ -329,7 +330,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 		case "records": {
 			const [game, run] = requireRun();
 			const face = (await evaluate(target, `window.shell.records(${js(game)},${js(run)})`, timeout)) as unknown as RecordsFace;
-			console.log(`【${game}/${run}】${face.records.length} 回合${face.broken ? `，${face.broken} 条形状损坏` : ""}`);
+			console.log(`【${game}/${run}】${face.records.length} 回合${face.narrations.length ? `，${face.narrations.length} 表达` : ""}${face.broken ? `，${face.broken} 条形状损坏` : ""}`);
 			console.log(JSON.stringify(face.records, null, 1));
 			return;
 		}

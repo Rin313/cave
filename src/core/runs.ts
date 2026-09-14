@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getDocsPath, ModelRuntime, resolveCliModel, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
-import { openArchive, parseRecordLine } from "./archive.ts";
+import { openArchive, parseArchiveLine } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
 import { configDir, dataDir, recordsPath, runsDir } from "./paths.ts";
@@ -16,22 +16,26 @@ export interface RunFace {
 	mtime: number;
 }
 
-/** 尾部读最后一条完好的回合记录（半行与损坏向更早回退）；取不到即省略。 */
+/** 尾部读最后一条完好的回合记录（表达行、半行与损坏向更早回退；窗口按块向文件头扩）。 */
 function tailRecord(path: string, size: number): { turn: number; time: number } | null {
 	const fd = openSync(path, "r");
 	try {
-		const start = Math.max(0, size - 64 * 1024);
-		const buf = Buffer.alloc(size - start);
-		const got = readSync(fd, buf, 0, buf.length, start);
-		const lines = buf.subarray(0, got).toString("utf8").split("\n");
-		for (let i = lines.length - 1; i >= 0; i--) {
-			const parsed = parseRecordLine(lines[i]!);
-			if (parsed?.kind === "record") return { turn: parsed.record.seq, time: parsed.record.time };
+		let span = 64 * 1024;
+		for (;;) {
+			const start = Math.max(0, size - span);
+			const buf = Buffer.alloc(size - start);
+			const got = readSync(fd, buf, 0, buf.length, start);
+			const lines = buf.subarray(0, got).toString("utf8").split("\n");
+			for (let i = lines.length - 1; i >= 0; i--) {
+				const parsed = parseArchiveLine(lines[i]!);
+				if (parsed?.kind === "record") return { turn: parsed.record.seq, time: parsed.record.time };
+			}
+			if (start === 0) return null;
+			span *= 4;
 		}
 	} finally {
 		closeSync(fd);
 	}
-	return null;
 }
 
 /** 枚举存档（按记录文件 mtime 降序）；game 缺席即扫全部游戏目录。 */
