@@ -218,7 +218,15 @@ document.documentElement.lang = zh ? "zh" : "en";
 			const scope = u.game && u.game !== u.name ? t("ui.scope", { game: u.game }) : "";
 			const mark = u.ref === settings.ui ? ` · ${t("current")}` : "";
 			const li = document.createElement("li");
-			li.append(el("span", `${u.name}${scope}${mark}`, "name"), button(t("use"), () => shell.use(u.ref)));
+			li.append(el("span", `${u.name}${scope}${mark}`, "name"), button(t("use"), async () => {
+				try {
+					await shell.use(u.ref);
+				} catch (e) {
+					none.hidden = false;
+					none.className = "err";
+					none.textContent = reason(e);
+				}
+			}));
 			return li;
 		}));
 	}

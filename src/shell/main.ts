@@ -22,11 +22,17 @@ interface Session {
 	busy: "act" | "narrate" | null;
 }
 
-/** 两态单表：开启中的 promise 或已开启的实例；关闭对两者同样权威。 */
-const sessions = new Map<string, Session | Promise<Session>>();
-/** 两段均为路径段（isSegment，不含 /）：首个 / 即切分点。 */
+/** 会话槽：opened 恒为本次打开的结果；session 落定后可用；关闭即除名，落定不复活。 */
+interface SessionSlot {
+	readonly game: string;
+	readonly run: string;
+	readonly opened: Promise<Session>;
+	session: Session | null;
+}
+
+/** 会话单表：键为 (game, run)；两段均为路径段（isSegment），首个 / 即切分点。 */
+const sessions = new Map<string, SessionSlot>();
 const sessionKey = (game: string, run: string): string => `${game}/${run}`;
-const isSession = (slot: Session | Promise<Session>): slot is Session => !(slot instanceof Promise);
 
 let win: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
@@ -121,14 +127,17 @@ function saveSettings(patch: Settings): Settings {
 function bootUi(): UiSite {
 	const named = stringSetting(settings(), "ui");
 	const sites = uiRegistry();
+	let why = "未指定界面";
 	if (named !== undefined) {
 		const site = sites.get(named);
 		if (site !== undefined) return site;
+		why = `设置的界面 ${named} 不存在`;
+		console.error(`${why}（可用：${uiList(sites)}）：回落自动解析`);
 	}
 	const all = [...sites.values()];
 	if (all.length === 1) return all[0]!;
 	if (all.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置 index.html（缺省）或 <name>/index.html`);
-	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
+	throw new Error(`${why}：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
 }
 
 let ui: UiSite | null = null;
@@ -186,6 +195,12 @@ function bindWindow(w: BrowserWindow): void {
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
+/** 页面装载失败只降级呈现（控制台显形）：界面是可选层，不动引擎与档案。 */
+function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>): void {
+	const job = query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
+	void job.catch((e: unknown) => console.error(`界面装载失败（${file}）：${String(e)}`));
+}
+
 function openSettings(): void {
 	if (settingsWin !== null && !settingsWin.isDestroyed()) {
 		settingsWin.focus();
@@ -197,7 +212,7 @@ function openSettings(): void {
 	settingsWin.on("closed", () => {
 		settingsWin = null;
 	});
-	void settingsWin.loadFile(file);
+	loadPage(settingsWin, file);
 }
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
@@ -210,45 +225,51 @@ async function createSession(game: string, run: string): Promise<Session> {
 	return session;
 }
 
-/** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）。 */
-async function openSession(game: string, run: string): Promise<Session> {
+/** 建槽：并发首调只建一次；落定即置入实例，表项被 close 除名时不复活，失败释放位置。 */
+function slotOf(game: string, run: string): SessionSlot {
 	const key = sessionKey(game, run);
 	const found = sessions.get(key);
 	if (found !== undefined) return found;
-	const started = createSession(game, run);
-	sessions.set(key, started);
-	// 表项被 close 除名时不复活；成功替换为实例，失败释放位置
-	started.then(
+	const opened = createSession(game, run);
+	const slot: SessionSlot = { game, run, opened, session: null };
+	sessions.set(key, slot);
+	opened.then(
 		(session) => {
-			if (sessions.get(key) === started) sessions.set(key, session);
+			if (sessions.get(key) === slot) slot.session = session;
 		},
 		() => {
-			if (sessions.get(key) === started) sessions.delete(key);
+			if (sessions.get(key) === slot) sessions.delete(key);
 		},
 	);
-	return started;
+	return slot;
+}
+
+/** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）；返回必为表内活实例。 */
+async function openSession(game: string, run: string): Promise<Session> {
+	slotOf(game, run);
+	return attached(game, run);
 }
 
 /** state/act 只附着已打开的实例（附着中的 open 一并等）；未打开或被关闭即拒绝，不隐式创建。 */
 async function attached(game: string, run: string): Promise<Session> {
 	const key = sessionKey(game, run);
-	const found = sessions.get(key);
-	if (found === undefined) throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
-	const session = await found;
-	if (sessions.get(key) !== session) throw new Error(`运行 ${game}/${run} 已关闭：重新 open 后再附着`);
+	const slot = sessions.get(key);
+	if (slot === undefined) throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
+	const session = slot.session ?? await slot.opened;
+	if (sessions.get(key) !== slot) throw new Error(`运行 ${game}/${run} 已关闭：重新 open 后再附着`);
 	return session;
 }
 
 /** 关闭对开启中的 open 同样权威：先除名，待落定后释放；open 失败已由其调用点报告。 */
 async function closeSession(game: string, run: string): Promise<void> {
 	const key = sessionKey(game, run);
-	const found = sessions.get(key);
-	if (found === undefined) return;
-	if (isSession(found) && found.busy !== null) throw new Error(`回合进行中（${found.busy}）：${game}/${run} 不能关闭`);
+	const slot = sessions.get(key);
+	if (slot === undefined) return;
+	if (slot.session !== null && slot.session.busy !== null) throw new Error(`回合进行中（${slot.session.busy}）：${game}/${run} 不能关闭`);
 	sessions.delete(key);
 	let session: Session;
 	try {
-		session = await found;
+		session = await slot.opened;
 	} catch {
 		return; // open 失败已由其调用点报告
 	}
@@ -282,15 +303,25 @@ function face(session: Session): { game: string; run: string; turn: number; time
 	return { ...coords(session), view: session.engine.sim.view() };
 }
 
+/** IPC 载荷不可信：只声明形状，语义逐命令校验。 */
+type GameRequest = { game?: unknown };
+type RunRequest = GameRequest & { run?: unknown };
+
+/** 非空字符串字段（trim 后非空）：IPC 边界校验，返回原值。 */
+function strIn(value: unknown, cmd: string, field: string): string {
+	if (typeof value !== "string" || value.trim() === "") throw new Error(`${cmd} 的 ${field} 须为非空字符串`);
+	return value;
+}
+
 /** 可缺席的 game 字段：缺席即 undefined，非路径段即拒。 */
-function idIn(req: { game?: unknown } | undefined, cmd: string): string | undefined {
+function idIn(req: GameRequest | undefined, cmd: string): string | undefined {
 	if (req?.game === undefined) return undefined;
 	if (!isSegment(req.game)) throw new Error(`${cmd} 的 game 须为游戏 id`);
 	return req.game;
 }
 
 /** 必填的 game 与 run 字段。 */
-function idsIn(req: { game?: unknown; run?: unknown } | undefined, cmd: string): { game: string; run: string } {
+function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: string } {
 	const game = idIn(req, cmd);
 	if (game === undefined) throw new Error(`${cmd} 需要游戏 id`);
 	if (!isSegment(req?.run)) throw new Error(`${cmd} 的 run 须为存档 id（路径段，不含分隔符）`);
@@ -325,10 +356,10 @@ const uiFace = (site: UiSite): { name: string; ref: string; game?: string } => (
 ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
-ipcMain.handle("runs", (_event, req: { game?: unknown } | undefined) => listRuns(DATA_ROOT, idIn(req, "runs")));
+ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(DATA_ROOT, idIn(req, "runs")));
 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
-ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | undefined) => {
+ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
 	const path = recordsPath(game, run, DATA_ROOT);
 	const read = readRecords(path);
@@ -336,11 +367,14 @@ ipcMain.handle("records", (_event, req: { game?: unknown; run?: unknown } | unde
 	return { game, run, ...read };
 });
 
-/** 活实例清单：界面换装/重载后据此附着回既有实例。 */
-ipcMain.handle("sessions", () => [...sessions.values()].filter(isSession).map((s) => ({ ...coords(s), busy: s.busy })));
+/** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */
+ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
+	const { session } = slot;
+	return session === null ? { game: slot.game, run: slot.run, opening: true } : { ...coords(session), busy: session.busy };
+}));
 
 /** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
-ipcMain.handle("meta", (_event, req: { game?: unknown } | undefined) => {
+ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "meta");
 	if (game === undefined) throw new Error("meta 需要游戏 id");
 	const read = readGameMeta(game, CONTENT_ROOTS);
@@ -349,7 +383,7 @@ ipcMain.handle("meta", (_event, req: { game?: unknown } | undefined) => {
 });
 
 /** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
-ipcMain.handle("def", async (_event, req: { game?: unknown } | undefined) => {
+ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "def");
 	if (game === undefined) throw new Error("def 需要游戏 id");
 	const def = await loadGame(game, CONTENT_ROOTS);
@@ -357,7 +391,7 @@ ipcMain.handle("def", async (_event, req: { game?: unknown } | undefined) => {
 });
 
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
-ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
+ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "uis");
 	const compatible = [...uiRegistry().values()].filter((s) => s.game === null || game === undefined || s.game === game);
 	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
@@ -366,12 +400,12 @@ ipcMain.handle("uis", (_event, req: { game?: unknown } | undefined) => {
 
 /** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动。 */
 ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
-	if (typeof req?.ref !== "string" || req.ref === "") throw new Error("use 需要界面 ref");
+	const ref = strIn(req?.ref, "use", "ref");
 	const sites = uiRegistry();
-	const site = sites.get(req.ref);
-	if (site === undefined) throw new Error(`未知界面：${req.ref}（可用：${uiList(sites)}）`);
-	saveSettings({ ui: req.ref });
-	void win?.loadFile(site.file);
+	const site = sites.get(ref);
+	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
+	saveSettings({ ui: ref });
+	if (win !== null && !win.isDestroyed()) loadPage(win, site.file);
 });
 
 ipcMain.handle("settings", () => settings());
@@ -382,55 +416,52 @@ ipcMain.handle("settings:set", async (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
-	const settingsUi = patch.settingsUi;
-	if (settingsUi !== undefined) {
-		if (typeof settingsUi !== "string" || settingsUi === "") throw new Error("settingsUi 须为非空字符串");
+	if (patch.settingsUi !== undefined) {
+		const ref = strIn(patch.settingsUi, "settings:set", "settingsUi");
 		const sites = uiRegistry();
-		if (!sites.has(settingsUi)) throw new Error(`未知界面（settingsUi）：${settingsUi}（可用：${uiList(sites)}）`);
+		if (!sites.has(ref)) throw new Error(`未知界面（settingsUi）：${ref}（可用：${uiList(sites)}）`);
 	}
 	if (patch.model !== undefined) {
-		if (typeof patch.model !== "string" || patch.model.trim() === "") throw new Error("model 须为非空字符串");
-		const resolved = resolveModelRef(patch.model, await modelRuntime());
-		if (!resolved.ok) throw new Error(`模型 "${patch.model}" 不可用：${resolved.reason}`);
+		const ref = strIn(patch.model, "settings:set", "model");
+		const resolved = resolveModelRef(ref, await modelRuntime());
+		if (!resolved.ok) throw new Error(`模型 "${ref}" 不可用：${resolved.reason}`);
 	}
 	return saveSettings(patch);
 });
 
 ipcMain.handle("settings:open", () => openSettings());
 
-ipcMain.handle("open", async (_event, req: { game?: unknown; run?: unknown }) => {
+ipcMain.handle("open", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "open");
 	const session = await openSession(game, run);
 	return { ...face(session), warnings: [...session.engine.loadWarnings] };
 });
 
 /** 显式释放：不关别人的实例，也不动档案。 */
-ipcMain.handle("close", (_event, req: { game?: unknown; run?: unknown }) => {
+ipcMain.handle("close", (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "close");
 	return closeSession(game, run);
 });
 
-ipcMain.handle("act", async (_event, req: { game?: unknown; run?: unknown; utterance?: unknown }) => {
+ipcMain.handle("act", async (_event, req: RunRequest & { utterance?: unknown }) => {
 	const { game, run } = idsIn(req, "act");
-	if (typeof req?.utterance !== "string" || req.utterance.trim() === "") throw new Error("act 需要非空 utterance");
-	const utterance = req.utterance;
+	const utterance = strIn(req?.utterance, "act", "utterance");
 	return turn(game, run, "act", async (session) => {
 		const outcome: ActOutcome = await configured(() => session.engine.act({ utterance }));
 		return { ...face(session), ...outcome };
 	});
 });
 
-ipcMain.handle("narrate", async (_event, req: { game?: unknown; run?: unknown; instruction?: unknown }) => {
+ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unknown }) => {
 	const { game, run } = idsIn(req, "narrate");
-	if (typeof req?.instruction !== "string" || req.instruction.trim() === "") throw new Error("narrate 需要非空 instruction");
-	const instruction = req.instruction;
+	const instruction = strIn(req?.instruction, "narrate", "instruction");
 	return turn(game, run, "narrate", async (session) => {
 		const outcome: NarrationOutcome = await configured(() => session.engine.narrate(instruction));
 		return { narration: outcome.narration, warnings: outcome.warnings, usage: outcome.usage };
 	});
 });
 
-ipcMain.handle("state", async (_event, req: { game?: unknown; run?: unknown }) => {
+ipcMain.handle("state", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "state");
 	return face(await attached(game, run));
 });
@@ -444,6 +475,6 @@ app.whenReady().then(() => {
 		win = null;
 		app.quit();
 	});
-	if (ui !== null) void win.loadFile(ui.file);
-	else void win.loadFile(SETUP_FILE, { query: { boot: "1", error: bootError ?? "未解析到界面" } });
+	if (ui !== null) loadPage(win, ui.file);
+	else loadPage(win, SETUP_FILE, { boot: "1", error: bootError ?? "未解析到界面" });
 });

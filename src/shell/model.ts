@@ -61,8 +61,10 @@ function providerInfo(runtime: ModelRuntime): ProviderInfo[] {
 
 /** 登录流程的应答通道：prompt/notice 只发往发起窗口，answer/cancel 只接受同一窗口；窗口销毁即取消。 */
 export function installModel(load: () => Promise<ModelRuntime>): void {
+	/** 登录流按窗口单槽（键即 sender.id）：新登录、导航、窗口销毁都以 close 抢占旧流。 */
 	const flows = new Map<number, Flow>();
-	let next = 1;
+	/** 登录流依附窗口的当前文档：主帧导航（重载/换页）后旧文档不再应答提示，流须一并关闭。 */
+	const watched = new WeakSet<WebContents>();
 
 	const close = (id: number): void => {
 		const flow = flows.get(id);
@@ -72,11 +74,19 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		flow.abort.abort();
 	};
 
-	const flowOf = (sender: WebContents, id: unknown): [number, Flow] => {
-		if (typeof id !== "number" || !Number.isInteger(id)) throw new Error("未知登录流程");
+	const watchNavigations = (sender: WebContents): void => {
+		if (watched.has(sender)) return;
+		watched.add(sender);
+		sender.on("did-start-navigation", (_event, _url, inPlace, isMainFrame) => {
+			if (isMainFrame && !inPlace) close(sender.id);
+		});
+	};
+
+	const flowOf = (sender: WebContents, id: unknown): Flow => {
+		if (typeof id !== "number" || !Number.isInteger(id) || id !== sender.id) throw new Error("未知登录流程");
 		const flow = flows.get(id);
-		if (flow === undefined || flow.sender !== sender) throw new Error("未知登录流程");
-		return [id, flow];
+		if (flow === undefined) throw new Error("未知登录流程");
+		return flow;
 	};
 
 	ipcMain.handle("auth:providers", async (): Promise<ProviderInfo[]> => providerInfo(await load()));
@@ -95,8 +105,10 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		const type: LoginType | null = req?.type === "api_key" || req?.type === "oauth" ? req.type : null;
 		if (provider === null) throw new Error("login 需要 provider");
 		if (type === null) throw new Error("login 需要 type（api_key|oauth）");
-		const id = next++;
 		const sender = event.sender;
+		const id = sender.id;
+		close(id);
+		watchNavigations(sender);
 		const flow: Flow = { sender, abort: new AbortController(), answer: null, onDestroyed: () => close(id) };
 		sender.once("destroyed", flow.onDestroyed);
 		flows.set(id, flow);
@@ -139,20 +151,20 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 					}),
 			});
 		} finally {
-			close(id);
+			if (flows.get(id) === flow) close(id);
 		}
 	});
 
 	ipcMain.handle("auth:answer", (event, req: { flow?: unknown; value?: unknown }) => {
-		const [, flow] = flowOf(event.sender, req?.flow);
+		const flow = flowOf(event.sender, req?.flow);
 		if (typeof req?.value !== "string") throw new Error("answer 需要字符串 value");
 		if (flow.answer === null) throw new Error("该登录流程没有待答提示");
 		flow.answer(req.value);
 	});
 
 	ipcMain.handle("auth:cancel", (event, req: { flow?: unknown }) => {
-		const [id] = flowOf(event.sender, req?.flow);
-		close(id);
+		const flow = flowOf(event.sender, req?.flow);
+		close(flow.sender.id);
 	});
 
 	ipcMain.handle("auth:logout", async (_event, req: { provider?: unknown }) => {
