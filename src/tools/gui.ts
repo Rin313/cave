@@ -174,7 +174,7 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string): Promise<T
 		await sleep(150);
 	}
 	child.kill();
-	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根 ui/<name>/index.html 提供界面，打包另可在 resources/ui${logTail()}`);
+	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根 games/<id>/ui/index.html 提供界面，打包另可在 resources/games${logTail()}`);
 }
 
 /** 重连或启动宿主：参数不符时报错，进程已死则清理残留后重启。 */

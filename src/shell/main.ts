@@ -43,13 +43,12 @@ app.on("second-instance", () => {
 });
 
 const USER_DATA = app.getPath("userData");
-/** 数据根：runs 与用户级内容（games、ui）的所在；引擎包内不复含内容。 */
+/** 数据根：runs 与用户级内容（games）的所在；引擎包内不复含内容。 */
 const DATA_ROOT = dataDir(USER_DATA);
 /** 包外资源根：随安装分发，位于 asar 之外；dev 无此层。 */
 const RESOURCE_ROOT = process.resourcesPath;
 /** 内容根：数据根 → 包外资源（仅打包分发）；同名前者遮蔽后者。 */
 const CONTENT_ROOTS = app.isPackaged ? [DATA_ROOT, RESOURCE_ROOT] : [DATA_ROOT];
-const UI_ROOTS = CONTENT_ROOTS.map((root) => join(root, "ui"));
 /** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按数据根。 */
 const CONFIG_DIR = configDir(USER_DATA);
 const SETTINGS_FILE = settingsPath(CONFIG_DIR);
@@ -74,21 +73,21 @@ function modelRuntime(): Promise<ModelRuntime> {
 interface UiSite {
 	name: string;
 	file: string;
-	/** 作用域由位置给出：games/<id>/ui 下绑定 id，ui/<name> 恒通用。 */
-	game: string | null;
+	/** 作用域由位置给出：games/<id>/ui 下即绑定 id。 */
+	game: string;
 }
 
-/** 界面 ref：`<name>`（通用）或 `<game>/<name>`（游戏作用域）；两段均来自目录名，不含斜杠。 */
-const uiRef = (site: UiSite): string => (site.game === null ? site.name : `${site.game}/${site.name}`);
+/** 界面 ref：`<game>/<name>`；两段均来自目录名，不含斜杠。 */
+const uiRef = (site: UiSite): string => `${site.game}/${site.name}`;
 
-/** 全部界面（ref 去重、先见者优先）：通用 ui/<name>；游戏自带 games/<id>/ui/<name>，根 index.html 为名即 id 的缺省界面。 */
+/** 全部界面（ref 去重、先见者优先）：games/<id>/ui/index.html 为名即 id 的缺省界面，games/<id>/ui/<name>/index.html 为具名界面。 */
 function uiRegistry(): ReadonlyMap<string, UiSite> {
 	const sites = new Map<string, UiSite>();
 	const add = (site: UiSite): void => {
 		const ref = uiRef(site);
 		if (!sites.has(ref)) sites.set(ref, site);
 	};
-	const scan = (base: string, game: string | null): void => {
+	const scan = (base: string, game: string): void => {
 		if (!existsSync(base)) return;
 		for (const entry of readdirSync(base, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
@@ -96,7 +95,6 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 			if (existsSync(file)) add({ name: entry.name, file, game });
 		}
 	};
-	for (const root of UI_ROOTS) scan(root, null);
 	for (const root of CONTENT_ROOTS) {
 		const dir = join(root, "games");
 		if (!existsSync(dir)) continue;
@@ -134,8 +132,8 @@ function bootUi(): UiSite {
 	}
 	const all = [...sites.values()];
 	if (all.length === 1) return all[0]!;
-	if (all.length === 0) throw new Error(`没有可用界面：在 ${UI_ROOTS.join(" 或 ")} 下放置 <name>/index.html，或在 games/<id>/ui 放置 index.html（缺省）或 <name>/index.html`);
-	throw new Error(`${why}：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<ref>" }`);
+	if (all.length === 0) throw new Error(`没有可用界面：在 ${CONTENT_ROOTS.map((root) => join(root, "games")).join(" 或 ")} 下任一 <id>/ui 放置 index.html（缺省）或 <name>/index.html`);
+	throw new Error(`${why}：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 }
 
 let ui: UiSite | null = null;
@@ -307,11 +305,7 @@ function slotFace(slots: Record<string, SlotDef> | undefined): SlotFace[] {
 	return Object.entries(slots ?? {}).map(([key, d]) => ({ key, ...d }));
 }
 
-const uiFace = (site: UiSite): { name: string; ref: string; game?: string } => ({
-	name: site.name,
-	ref: uiRef(site),
-	...(site.game !== null && { game: site.game }),
-});
+const uiFace = (site: UiSite): { name: string; ref: string; game: string } => ({ name: site.name, ref: uiRef(site), game: site.game });
 
 ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 
@@ -353,7 +347,7 @@ ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
 ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "uis");
-	const compatible = [...uiRegistry().values()].filter((s) => s.game === null || game === undefined || s.game === game);
+	const compatible = [...uiRegistry().values()].filter((s) => game === undefined || s.game === game);
 	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
 	return compatible.map(uiFace);
 });
