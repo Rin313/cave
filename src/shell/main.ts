@@ -1,15 +1,15 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { readRecords } from "../core/archive.ts";
-import type { ActOutcome, Engine, NarrationOutcome } from "../core/engine.ts";
+import type { ActOutcome, AgentSpec, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
 import { isSegment, recordsPath, rootDir } from "../core/paths.ts";
-import { listRuns, ModelConfigError, openModelRuntime, openRun } from "../core/runs.ts";
-import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "../core/settings.ts";
-import { installModel } from "./model.ts";
+import { listRuns, openRun } from "../core/runs.ts";
+import { installModel, openModelRuntime, resolveModelRef } from "./model.ts";
+import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "./settings.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
 
@@ -49,22 +49,19 @@ const RESOURCE_ROOT = app.isPackaged ? process.resourcesPath : app.getAppPath();
 /** 内容根：根（用户覆盖）→ 分发资源根；同名前者遮蔽后者。 */
 const CONTENT_ROOTS = [...new Set([ROOT, RESOURCE_ROOT])];
 const SETTINGS_FILE = settingsPath(ROOT);
-/** 分发缺省：位于资源根、只读；用户文件只存覆盖，故缺省可随包更新；文件缺席即无此层。 */
-const SETTINGS_DEFAULT = join(RESOURCE_ROOT, "settings.json");
-const SETTINGS_DEFAULTS = existsSync(SETTINGS_DEFAULT) ? [SETTINGS_DEFAULT] : [];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
-let runtime: Promise<ModelRuntime> | null = null;
-/** 壳与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败归配置错误（引向配置面）并弃置，下次重试。 */
+let sharedRuntime: Promise<ModelRuntime> | null = null;
+/** 壳、配置协议与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败弃置，下次重试。 */
 function modelRuntime(): Promise<ModelRuntime> {
-	if (runtime === null) {
-		runtime = openModelRuntime(ROOT).catch((e: unknown) => {
-			runtime = null;
-			throw new ModelConfigError(`模型运行时不可用：${String(e)}`);
+	if (sharedRuntime === null) {
+		sharedRuntime = openModelRuntime(ROOT).catch((e: unknown) => {
+			sharedRuntime = null;
+			throw new Error(`模型运行时不可用：${String(e)}`);
 		});
 	}
-	return runtime;
+	return sharedRuntime;
 }
 
 interface UiSite {
@@ -109,11 +106,21 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
-const settings = (): Settings => readSettings(ROOT, SETTINGS_DEFAULTS);
+const settings = (): Settings => readSettings(ROOT);
 
-/** 写入用户层（只存覆盖，分发缺省不固化）；返回写入后的合并态。 */
-function saveSettings(patch: Settings): Settings {
-	return patchSettings(ROOT, patch, SETTINGS_DEFAULTS);
+/** 模型与凭据惰性解析：只在 act/narrate 建会话时调用，设置每次都重读。 */
+async function agent(): Promise<AgentSpec> {
+	const ref = stringSetting(settings(), "model");
+	if (ref === undefined || ref.trim() === "") throw new Error(`模型未配置：在 ${SETTINGS_FILE} 写入 { "model": "provider/model[:thinking]" }`);
+	const runtime = await modelRuntime();
+	const resolved = resolveModelRef(ref, runtime);
+	if (!resolved.ok) throw new Error(`模型 "${ref}"（${SETTINGS_FILE}）不可用：${resolved.reason}`);
+	if (resolved.warning) console.warn(`⚠ ${resolved.warning}`);
+	const { model, thinkingLevel } = resolved;
+	if (!(await runtime.checkAuth(model.provider))) {
+		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(ROOT, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
+	}
+	return { model, modelRuntime: runtime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
@@ -209,7 +216,7 @@ function openSettings(): void {
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(game, run, { root: ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime });
+	const engine = await openRun(game, run, { root: ROOT, gameRoots: CONTENT_ROOTS, agent });
 	const unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
 	});
@@ -355,7 +362,7 @@ ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 	const sites = uiRegistry();
 	const site = sites.get(ref);
 	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
-	saveSettings({ ui: ref });
+	patchSettings(ROOT, { ui: ref });
 	if (win !== null && !win.isDestroyed()) loadPage(win, site.file);
 });
 
@@ -372,12 +379,12 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 写入是哑的：patch 原样落用户层，宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话的 ModelConfigError）；ui 归 use（写+导航）。 */
+/** 写入是哑的：patch 原样落用户层，宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话报错）；ui 归 use（写+导航）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
-	return saveSettings(patch);
+	return patchSettings(ROOT, patch);
 });
 
 ipcMain.handle("settings:open", () => openSettings());

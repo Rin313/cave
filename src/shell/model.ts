@@ -1,5 +1,7 @@
 import { ipcMain, type Event, type WebContents, type WebContentsDidStartNavigationEventParams } from "electron";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
+import type { AgentSpec } from "../core/engine.ts";
 
 type Interaction = Parameters<ModelRuntime["login"]>[2];
 type LoginType = Parameters<ModelRuntime["login"]>[1];
@@ -41,6 +43,30 @@ interface Flow {
 function promptPayload(prompt: Prompt): PromptPayload {
 	const { signal, ...rest } = prompt;
 	return rest;
+}
+
+/** 凭据与模型表随用户级配置根自持：不读 pi agent 的 ~/.pi/agent，用户无需安装 pi agent 或 /login。 */
+export function openModelRuntime(root: string): Promise<ModelRuntime> {
+	return ModelRuntime.create({
+		authPath: join(root, "auth.json"),
+		modelsPath: join(root, "models.json"),
+		modelsStorePath: join(root, "models-store.json"),
+	});
+}
+
+/** SDK 的错误提示以 pi CLI 旗标收尾（--list-models/--provider）；本项目没有这些旗标，只保留原因。 */
+function modelErrorReason(error: string | undefined): string {
+	return (error ?? "未解析到模型").replace(/ Use --[\s\S]*$/, "");
+}
+
+type ModelResolution =
+	| { ok: true; model: AgentSpec["model"]; thinkingLevel?: AgentSpec["thinkingLevel"]; warning?: string }
+	| { ok: false; reason: string };
+
+export function resolveModelRef(ref: string, modelRuntime: ModelRuntime): ModelResolution {
+	const { model, thinkingLevel, warning, error } = resolveCliModel({ cliModel: ref, modelRuntime });
+	if (!model || error) return { ok: false, reason: modelErrorReason(error) };
+	return { ok: true, model, ...(thinkingLevel !== undefined && { thinkingLevel }), ...(warning !== undefined && { warning }) };
 }
 
 function providerInfo(runtime: ModelRuntime): ProviderInfo[] {

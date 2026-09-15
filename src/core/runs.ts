@@ -1,11 +1,8 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { getDocsPath, ModelRuntime, resolveCliModel, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import { openArchive } from "./archive.ts";
-import { Engine } from "./engine.ts";
+import { Engine, type AgentSpec } from "./engine.ts";
 import { loadGame } from "./games.ts";
-import { recordsPath, rootDir, runsDir } from "./paths.ts";
-import { readSettings, settingsPath, stringSetting, type Settings } from "./settings.ts";
+import { recordsPath, runsDir } from "./paths.ts";
 
 /** 存档目录的派生清单：runs/<game>/<run>/records.jsonl。 */
 export interface RunFace {
@@ -36,74 +33,20 @@ export function listRuns(root: string, game?: string): RunFace[] {
 	return out;
 }
 
-/** 模型与凭据未就绪：宿主据此把用户引向配置面（文件、CLI 或壳暴露的配置协议）。 */
-export class ModelConfigError extends Error {}
-
-/** 模型是单一引用 `provider/model[:thinking]`：合并设置（分发缺省 ← 用户层）给缺省。 */
-function modelReference(settings: Settings, file: string, hasDefaults: boolean): { ref: string; source: string } {
-	const ref = stringSetting(settings, "model");
-	if (ref !== undefined && ref.trim() !== "") return { ref, source: hasDefaults ? `${file} 或分发缺省` : file };
-	throw new ModelConfigError(`模型未配置：在 ${file} 写入 { "model": "provider/model[:thinking]" }`);
-}
-
-/** 凭据与模型表随用户级配置根自持：不读 pi agent 的 ~/.pi/agent，用户无需安装 pi agent 或 /login。 */
-export function openModelRuntime(config: string): Promise<ModelRuntime> {
-	return ModelRuntime.create({
-		authPath: join(config, "auth.json"),
-		modelsPath: join(config, "models.json"),
-		modelsStorePath: join(config, "models-store.json"),
-	});
-}
-
-/** SDK 的错误提示以 pi CLI 旗标收尾（--list-models/--provider），本项目的配置面没有这些旗标，只保留原因。 */
-function modelErrorReason(error: string | undefined): string {
-	return (error ?? "未解析到模型").replace(/ Use --[\s\S]*$/, "");
-}
-
-/** 单一引用的解析结果：配置面校验与建会话共用同一入口与文案。 */
-export type ModelResolution =
-	| { ok: true; model: NonNullable<CreateAgentSessionOptions["model"]>; thinkingLevel?: NonNullable<CreateAgentSessionOptions["thinkingLevel"]>; warning?: string }
-	| { ok: false; reason: string };
-
-export function resolveModelRef(ref: string, modelRuntime: ModelRuntime): ModelResolution {
-	const { model, thinkingLevel, warning, error } = resolveCliModel({ cliModel: ref, modelRuntime });
-	if (!model || error) return { ok: false, reason: modelErrorReason(error) };
-	return { ok: true, model, ...(thinkingLevel !== undefined && { thinkingLevel }), ...(warning !== undefined && { warning }) };
-}
-
 export interface OpenRunOptions {
-	/** 根：runs、games 与配置（settings、auth、models）的所在。 */
-	root?: string;
+	/** 根：runs 与 agentDir 的所在。 */
+	root: string;
 	/** 游戏查找链（先见者遮蔽）。 */
-	gameRoots?: readonly string[];
-	/** 设置缺省层（靠前者优先，如随包分发的 settings.json）；与用户层合并后供模型引用读取。 */
-	settingLayers?: readonly string[];
-	/** 宿主共享的模型运行时工厂（配置协议与引擎同源） */
-	modelRuntime?: () => Promise<ModelRuntime>;
+	gameRoots: readonly string[];
+	/** 模型与凭据的解析由宿主注入；只在 act/narrate 建会话时调用。 */
+	agent: () => Promise<AgentSpec>;
 }
 
-/** 装载（或新建）一次运行。模型与凭据只在 act/narrate 建会话时解析，设置每次都重读。 */
-export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
-	const root = options.root ?? rootDir();
-	const gameRoots = options.gameRoots ?? [root];
-	const file = settingsPath(root);
-	const agent = async () => {
-		const layers = options.settingLayers ?? [];
-		const { ref, source } = modelReference(readSettings(root, layers), file, layers.length > 0);
-		const loadRuntime = options.modelRuntime ?? (() => openModelRuntime(root));
-		const modelRuntime = await loadRuntime();
-		const resolved = resolveModelRef(ref, modelRuntime);
-		if (!resolved.ok) throw new ModelConfigError(`模型 "${ref}"（${source}）不可用：${resolved.reason}`);
-		if (resolved.warning) console.warn(`⚠ ${resolved.warning}`);
-		const { model, thinkingLevel } = resolved;
-		if (!(await modelRuntime.checkAuth(model.provider))) {
-			throw new ModelConfigError(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(root, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
-		}
-		return { model, modelRuntime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
-	};
-	return Engine.create(await loadGame(game, gameRoots), {
-		agent,
-		agentDir: root,
-		archive: openArchive(recordsPath(game, run, root)),
+/** 装载（或新建）一次运行；世界与档案就绪，模型到建会话时才解析。 */
+export async function openRun(game: string, run: string, options: OpenRunOptions): Promise<Engine> {
+	return Engine.create(await loadGame(game, options.gameRoots), {
+		agent: options.agent,
+		agentDir: options.root,
+		archive: openArchive(recordsPath(game, run, options.root)),
 	});
 }
