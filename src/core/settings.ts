@@ -1,5 +1,6 @@
-import { join } from "node:path";
-import { readJsonObject, writeJson } from "./paths.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { readJsonObject } from "./paths.ts";
 
 /** 设置：用户级全局（凭据、模型与界面偏好），与 CLI 共用 */
 export type Settings = Record<string, unknown>;
@@ -26,8 +27,10 @@ export function readSettings(config: string, defaults: readonly string[] = []): 
 
 /** 用户层写补丁（分发缺省不固化）；返回写入后的合并态。 */
 export function patchSettings(config: string, patch: Settings, defaults: readonly string[] = []): Settings {
-	const user = Object.assign(readLayer(settingsPath(config)), patch);
-	writeJson(settingsPath(config), user);
+	const file = settingsPath(config);
+	const user = Object.assign(readLayer(file), patch);
+	mkdirSync(dirname(file), { recursive: true });
+	writeFileSync(file, `${JSON.stringify(user, null, "\t")}\n`, "utf8");
 	return readSettings(config, defaults);
 }
 

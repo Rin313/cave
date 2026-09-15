@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 export function rootDir(hostRoot?: string): string {
 	if (hostRoot !== undefined) return hostRoot;
@@ -34,9 +34,4 @@ export function readJsonObject(file: string): { value: Record<string, unknown> |
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: null, error: `须为 JSON 对象（${file}）` };
 	return { value: parsed as Record<string, unknown> };
-}
-
-export function writeJson(file: string, value: unknown): void {
-	mkdirSync(dirname(file), { recursive: true });
-	writeFileSync(file, `${JSON.stringify(value, null, "\t")}\n`, "utf8");
 }

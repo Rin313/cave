@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isSegment, readJsonObject } from "./paths.ts";
 import * as core from "./sim.ts";
-import type { GameDef } from "./sim.ts";
 
 /** 条目名按此序查找；id 即 <root>/games 下的目录名。 */
 const ENTRIES = ["index.ts", "index.js", "index.mjs"];
@@ -47,7 +46,7 @@ export function readGameMeta(id: string, roots: readonly string[]): { meta: Game
 }
 
 /** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂。模块缓存按进程：改文件后须重启进程（CLI 每命令新进程，壳重启即生效）。 */
-export async function loadGame(id: string, roots: readonly string[]): Promise<GameDef> {
+export async function loadGame(id: string, roots: readonly string[]): Promise<core.GameDef> {
 	const file = gameFile(id, roots);
 	if (file === null) throw new Error(`未知游戏：${id}（可用：${listGames(roots).join(", ") || "无"}）`);
 	let mod: { default?: unknown };
@@ -56,7 +55,7 @@ export async function loadGame(id: string, roots: readonly string[]): Promise<Ga
 	} catch (e) {
 		throw new Error(`游戏 ${id} 装载失败（${file}）：${String(e)}`);
 	}
-	const def = typeof mod.default === "function" ? (mod.default as (sim: typeof core) => GameDef)(core) : mod.default;
+	const def = typeof mod.default === "function" ? (mod.default as (sim: typeof core) => core.GameDef)(core) : mod.default;
 	if (def === null || typeof def !== "object") throw new Error(`游戏 ${id} 未导出 GameDef（${file}）`);
-	return def as GameDef;
+	return def as core.GameDef;
 }
