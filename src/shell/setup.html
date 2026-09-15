@@ -313,6 +313,8 @@ document.documentElement.lang = zh ? "zh" : "en";
 			li.append(el("span", `${u.name}${scope}${mark}`, "name"), button(t("use"), async () => {
 				try {
 					await shell.use(u.ref);
+					await refreshSettings();
+					await renderUis();
 				} catch (e) {
 					none.hidden = false;
 					none.className = "err";

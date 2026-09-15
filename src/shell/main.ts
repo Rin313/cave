@@ -63,8 +63,10 @@ function subdirs(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
+type JsonObject = Record<string, unknown>;
+
 /** 读 JSON 对象：缺席与破损都按空对象；破损原因不含文件名，由调用方补全语境。 */
-function readJsonObject(file: string): { value: Record<string, unknown>; error?: string } {
+function readJsonObject(file: string): { value: JsonObject; error?: string } {
 	if (!existsSync(file)) return { value: {} };
 	let parsed: unknown;
 	try {
@@ -73,20 +75,18 @@ function readJsonObject(file: string): { value: Record<string, unknown>; error?:
 		return { value: {}, error: `JSON 解析失败：${String(e)}` };
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: {}, error: "须为 JSON 对象" };
-	return { value: parsed as Record<string, unknown> };
+	return { value: parsed as JsonObject };
 }
 
-type Settings = Record<string, unknown>;
-
 /** 设置快照：缺席与破损都按空对象；error 随数据透出，由消费处呈现或报错。 */
-function readSettings(): { settings: Settings; error?: string } {
+function readSettings(): { settings: JsonObject; error?: string } {
 	const read = readJsonObject(SETTINGS_FILE);
 	if (read.error === undefined) return { settings: read.value };
 	return { settings: read.value, error: `设置文件不可读（按空处理，${SETTINGS_FILE}）：${read.error}` };
 }
 
 /** 写补丁并返回写入后的设置；原件破损先改名为 .bad，不静默覆盖。 */
-function patchSettings(patch: Settings): Settings {
+function patchSettings(patch: JsonObject): JsonObject {
 	const read = readSettings();
 	if (read.error !== undefined) renameSync(SETTINGS_FILE, `${SETTINGS_FILE}.bad`);
 	const settings = { ...read.settings, ...patch };
@@ -96,7 +96,7 @@ function patchSettings(patch: Settings): Settings {
 }
 
 /** 字符串键：非字符串即未定（不做回退）。 */
-function stringSetting(settings: Settings, key: string): string | undefined {
+function stringSetting(settings: JsonObject, key: string): string | undefined {
 	const v = settings[key];
 	return typeof v === "string" ? v : undefined;
 }
@@ -126,7 +126,7 @@ interface UiSite {
 /** 界面 ref：`<game>/<name>`；两段均来自目录名，不含斜杠。 */
 const uiRef = (site: UiSite): string => `${site.game}/${site.name}`;
 
-/** 全部界面（ref 去重）：games/<id>/ui/index.html 为名即 id 的缺省界面，games/<id>/ui/<name>/index.html 为具名界面。 */
+/** 全部界面（ref 去重，按 ref 升序）：games/<id>/ui/index.html 为名即 id 的缺省界面，games/<id>/ui/<name>/index.html 为具名界面。 */
 function uiRegistry(): ReadonlyMap<string, UiSite> {
 	const sites = new Map<string, UiSite>();
 	const add = (site: UiSite): void => {
@@ -138,14 +138,14 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 		add({ name: game, file: join(ui, "index.html"), game });
 		for (const name of subdirs(ui)) add({ name, file: join(ui, name, "index.html"), game });
 	}
-	return sites;
+	return new Map([...sites].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
 /** 设置中解析出的当前模型：未配置即 null；告警随解析面透出。 */
-async function configuredModel(settings: Settings): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
+async function configuredModel(settings: JsonObject): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
 	const ref = stringSetting(settings, "model");
 	if (ref === undefined || ref.trim() === "") return null;
 	const runtime = await modelRuntime();
@@ -288,10 +288,8 @@ function listGames(root: string): string[] {
 	return subdirs(join(root, "games")).filter((id) => gameFile(root, id) !== null).sort();
 }
 
-type GameMeta = Record<string, unknown>;
-
 /** 读目录清单：缺失即空对象；坏元数据回落并携错；未知游戏即 null。 */
-function readGameMeta(root: string, id: string): { meta: GameMeta; error?: string } | null {
+function readGameMeta(root: string, id: string): { meta: JsonObject; error?: string } | null {
 	const entry = gameFile(root, id);
 	if (entry === null) return null;
 	const file = join(dirname(entry), "game.json");
@@ -369,19 +367,16 @@ function slotOf(game: string, run: string): SessionSlot {
 	return slot;
 }
 
-/** 槽的落定：打开中即等 `opened`；已落定即复用。 */
-const settle = (slot: SessionSlot): Promise<Session> => Promise.resolve(slot.session ?? slot.opened);
-
 /** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）；返回必为表内活实例。 */
-async function openSession(game: string, run: string): Promise<Session> {
-	return settle(slotOf(game, run));
+function openSession(game: string, run: string): Promise<Session> {
+	return slotOf(game, run).opened;
 }
 
 /** state/act 只附着已打开的实例（打开中一并等）；未打开即拒绝，不隐式创建。 */
-async function attached(game: string, run: string): Promise<Session> {
+function attached(game: string, run: string): Promise<Session> {
 	const slot = sessions.get(sessionKey(game, run));
 	if (slot === undefined) throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
-	return settle(slot);
+	return slot.opened;
 }
 
 /** 关闭是显式的：打开中与回合进行中都拒绝；成功即除名释放（引擎自持回合互斥）。 */
@@ -478,15 +473,13 @@ ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
 	return { game, verbs: sim.verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
-/** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
+/** 界面清单：带 game 即按作用域过滤（启动器菜单）；注册表已按 ref 升序。 */
 ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "uis");
-	const compatible = [...uiRegistry().values()].filter((s) => game === undefined || s.game === game);
-	compatible.sort((a, b) => (uiRef(a) < uiRef(b) ? -1 : uiRef(a) > uiRef(b) ? 1 : 0));
-	return compatible.map(uiFace);
+	return [...uiRegistry().values()].filter((s) => game === undefined || s.game === game).map(uiFace);
 });
 
-/** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动；装载失败抛回调用页。 */
+/** 换界面：只导航主窗，不动任何引擎；选择先落设置供下次启动（装载失败即抛回调用页，已改的设置由下次启动的引导面显形）。 */
 ipcMain.handle("use", async (_event, req: { ref?: unknown }) => {
 	const ref = strIn(req?.ref, "use", "ref");
 	const sites = uiRegistry();
@@ -526,9 +519,9 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 /** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话报错）；ui 归 use（写+导航）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
-	const patch = { ...(req.patch as Record<string, unknown>) };
+	const patch = { ...(req.patch as JsonObject) };
 	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
-	return patchSettings(patch);
+	return { settings: patchSettings(patch) };
 });
 
 ipcMain.handle("settings:open", () => openSettings());
