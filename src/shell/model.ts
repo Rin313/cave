@@ -51,6 +51,8 @@ export interface ModelFace {
 	/** 显式档位；缺席即无偏好（由 SDK 缺省与模型能力收敛）。 */
 	level?: ThinkingLevel;
 	thinkingLevels: readonly ThinkingLevel[];
+	/** 解析告警（如非法档位回落）：呈现面直用。 */
+	warning?: string;
 }
 
 /** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄（AuthPrompt 是 union，直接 Omit 会塌成公共键）。 */

@@ -1,5 +1,5 @@
-import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -78,16 +78,18 @@ function readJsonObject(file: string): { value: Record<string, unknown>; error?:
 
 type Settings = Record<string, unknown>;
 
-/** 缺席与破损都按空对象；破损显形于控制台。 */
-function readSettings(): Settings {
+/** 设置快照：缺席与破损都按空对象；error 随数据透出，由消费处呈现或报错。 */
+function readSettings(): { settings: Settings; error?: string } {
 	const read = readJsonObject(SETTINGS_FILE);
-	if (read.error !== undefined) console.error(`设置文件不可读（按缺席处理，${SETTINGS_FILE}）：${read.error}`);
-	return read.value;
+	if (read.error === undefined) return { settings: read.value };
+	return { settings: read.value, error: `设置文件不可读（按空处理，${SETTINGS_FILE}）：${read.error}` };
 }
 
-/** 写补丁并返回写入后的设置。 */
+/** 写补丁并返回写入后的设置；原件破损先改名为 .bad，不静默覆盖。 */
 function patchSettings(patch: Settings): Settings {
-	const settings = { ...readSettings(), ...patch };
+	const read = readSettings();
+	if (read.error !== undefined) renameSync(SETTINGS_FILE, `${SETTINGS_FILE}.bad`);
+	const settings = { ...read.settings, ...patch };
 	mkdirSync(ROOT, { recursive: true });
 	writeFileSync(SETTINGS_FILE, `${JSON.stringify(settings, null, "\t")}\n`, "utf8");
 	return settings;
@@ -142,26 +144,19 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
-/** 最近显形的解析告警：同一条不重复刷屏。 */
-let modelWarning: string | undefined;
-
-/** 设置中解析出的当前模型：未配置即 null；warning 在此显形。 */
-async function configuredModel(): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
-	const ref = stringSetting(readSettings(), "model");
+/** 设置中解析出的当前模型：未配置即 null；告警随解析面透出。 */
+async function configuredModel(settings: Settings): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
+	const ref = stringSetting(settings, "model");
 	if (ref === undefined || ref.trim() === "") return null;
 	const runtime = await modelRuntime();
-	const resolved = resolveModelRef(ref, runtime);
-	const warning = resolved.ok ? resolved.warning : undefined;
-	if (warning !== modelWarning) {
-		modelWarning = warning;
-		if (warning !== undefined) console.warn(`⚠ ${warning}`);
-	}
-	return { ref, runtime, resolved };
+	return { ref, runtime, resolved: resolveModelRef(ref, runtime) };
 }
 
 /** 模型与凭据惰性解析：只在 act/narrate 建会话时调用，设置每次都重读。 */
 async function agent(): Promise<AgentSpec> {
-	const current = await configuredModel();
+	const read = readSettings();
+	if (read.error !== undefined) throw new Error(read.error);
+	const current = await configuredModel(read.settings);
 	if (current === null) throw new Error(`模型未配置：在 ${SETTINGS_FILE} 写入 { "model": "provider/model[:thinking]" }`);
 	const { ref, runtime, resolved } = current;
 	if (!resolved.ok) throw new Error(`模型 "${ref}"（${SETTINGS_FILE}）不可用：${resolved.reason}`);
@@ -172,21 +167,19 @@ async function agent(): Promise<AgentSpec> {
 	return { model, modelRuntime: runtime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
-/** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
+/** 初始界面：settings.json 指定者优先（须存在），其次唯一可用界面；无解即抛，由装载处显形。 */
 function bootUi(): UiSite {
-	const named = stringSetting(readSettings(), "ui");
+	const named = stringSetting(readSettings().settings, "ui");
 	const sites = uiRegistry();
-	let why = "未指定界面";
 	if (named !== undefined) {
 		const site = sites.get(named);
-		if (site !== undefined) return site;
-		why = `设置的界面 ${named} 不存在`;
-		console.error(`${why}（可用：${uiList(sites)}）：回落自动解析`);
+		if (site === undefined) throw new Error(`设置的界面 ${named} 不存在：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
+		return site;
 	}
 	const all = [...sites.values()];
 	if (all.length === 1) return all[0]!;
 	if (all.length === 0) throw new Error(`没有可用界面：在 ${join(ROOT, "games")} 下任一 <id>/ui 放置 index.html 或 <name>/index.html`);
-	throw new Error(`${why}：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
+	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 }
 
 let ui: UiSite | null = null;
@@ -194,21 +187,17 @@ let bootError: string | null = null;
 try {
 	ui = bootUi();
 } catch (e) {
-	bootError = String(e);
-	console.error(bootError);
+	bootError = e instanceof Error ? e.message : String(e);
 }
 
-/** 配置面：settingsUi 指定的内容界面为皮肤层；缺席或失效即壳内引导面（配置面是兜底，不因设置失效而锁死）。 */
-function settingsSite(): UiSite | null {
-	const ref = stringSetting(readSettings(), "settingsUi");
-	if (ref === undefined) return null;
+/** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即引导面，失效即引导面并携原因（配置面是兜底，不因设置失效而锁死）。 */
+function settingsSite(): { site: UiSite | null; error?: string } {
+	const ref = stringSetting(readSettings().settings, "settingsUi");
+	if (ref === undefined) return { site: null };
 	const sites = uiRegistry();
 	const site = sites.get(ref);
-	if (site === undefined) {
-		console.error(`未知配置界面：${ref}（可用：${uiList(sites)}）：回落壳内引导面`);
-		return null;
-	}
-	return site;
+	if (site !== undefined) return { site };
+	return { site: null, error: `未知配置界面：${ref}（可用：${uiList(sites)}）` };
 }
 
 function windowOptions(): BrowserWindowConstructorOptions {
@@ -244,9 +233,35 @@ function bindWindow(w: BrowserWindow): void {
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
-function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>): void {
-	const job = query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
-	void job.catch((e: unknown) => console.error(`界面装载失败（${file}）：${String(e)}`));
+function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>): Promise<void> {
+	return query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
+}
+
+/** 引导面亦失败：桌面级告知；主窗无面可救即退出，其余窗只弃自身。 */
+function setupFailed(w: BrowserWindow, message: string): void {
+	console.error(message);
+	dialog.showErrorBox("cave", message);
+	if (w === win) app.exit(1);
+	else w.destroy();
+}
+
+/** 装载引导面；error 非空即显形并附界面清单（失败驱动的到达才列清单），并强制显示（正常路径留给 ready-to-show，不闪底色）。 */
+function loadSetup(w: BrowserWindow, error?: string): void {
+	if (w.isDestroyed()) return;
+	const job = error === undefined ? loadPage(w, SETUP_FILE) : loadPage(w, SETUP_FILE, { boot: "1", error });
+	job.then(
+		() => {
+			if (error !== undefined && !w.isDestroyed()) w.show();
+		},
+		(e: unknown) => {
+			if (!w.isDestroyed()) setupFailed(w, `${error === undefined ? "" : `${error}\n`}引导面装载失败（${SETUP_FILE}）：${String(e)}`);
+		},
+	);
+}
+
+/** 装载内容界面；失败即回落引导面并显形原因（引导面自身失败即无窗口面）。 */
+function loadSite(w: BrowserWindow, site: UiSite): void {
+	loadPage(w, site.file).catch((e: unknown) => loadSetup(w, `界面 ${uiRef(site)} 装载失败（${site.file}）：${String(e)}`));
 }
 
 function openSettings(): void {
@@ -254,13 +269,14 @@ function openSettings(): void {
 		settingsWin.focus();
 		return;
 	}
-	const file = settingsSite()?.file ?? SETUP_FILE;
+	const { site, error } = settingsSite();
 	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640 });
 	bindWindow(settingsWin);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
 	});
-	loadPage(settingsWin, file);
+	if (site !== null) loadSite(settingsWin, site);
+	else loadSetup(settingsWin, error);
 }
 
 function gameFile(root: string, id: string): string | null {
@@ -475,21 +491,21 @@ ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
 	return compatible.map(uiFace);
 });
 
-/** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动。 */
-ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
+/** 换界面：只导航当前窗口，不动任何引擎；选择写入设置供下次启动；装载失败抛回调用页。 */
+ipcMain.handle("use", async (_event, req: { ref?: unknown }) => {
 	const ref = strIn(req?.ref, "use", "ref");
 	const sites = uiRegistry();
 	const site = sites.get(ref);
 	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
 	patchSettings({ ui: ref });
-	if (win !== null && !win.isDestroyed()) loadPage(win, site.file);
+	if (win !== null && !win.isDestroyed()) await loadPage(win, site.file);
 });
 
 ipcMain.handle("settings", () => readSettings());
 
-/** 当前模型的解析面：规范化 ref、显式档位与受支持档位；未配置即 null，解析失败即 error。 */
+/** 当前模型的解析面：规范化 ref、显式档位、受支持档位与解析告警；未配置即 null，解析失败即 error。 */
 ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } | null> => {
-	const current = await configuredModel();
+	const current = await configuredModel(readSettings().settings);
 	if (current === null) return null;
 	const { resolved } = current;
 	if (!resolved.ok) return { error: resolved.reason };
@@ -497,6 +513,7 @@ ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } 
 		ref: modelRef(resolved.model),
 		...(resolved.thinkingLevel !== undefined && { level: resolved.thinkingLevel }),
 		thinkingLevels: supportedThinkingLevels(resolved.model),
+		...(resolved.warning !== undefined && { warning: resolved.warning }),
 	};
 });
 
@@ -511,7 +528,7 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 写入是哑的：patch 原样落用户层，宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话报错）；ui 归 use（写+导航）。 */
+/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话报错）；ui 归 use（写+导航）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
@@ -563,6 +580,6 @@ app.whenReady().then(() => {
 		win = null;
 		app.quit();
 	});
-	if (ui !== null) loadPage(win, ui.file);
-	else loadPage(win, SETUP_FILE, { boot: "1", error: bootError ?? "未解析到界面" });
+	if (ui !== null) loadSite(win, ui);
+	else loadSetup(win, bootError ?? "未解析到界面");
 });

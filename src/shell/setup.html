@@ -95,6 +95,7 @@
 		<button id="close" type="button"></button>
 	</header>
 	<p id="boot" class="err" hidden></p>
+	<p id="settingsError" class="err" hidden></p>
 	<section id="uiSection" hidden>
 		<h2 id="uiTitle"></h2>
 		<ul id="uiList"></ul>
@@ -104,6 +105,7 @@
 		<h2 id="modelTitle"></h2>
 		<p id="current"></p>
 		<p id="currentError" class="err" hidden></p>
+		<p id="currentWarning" class="muted" hidden></p>
 		<div id="thinking" hidden><span id="thinkingLabel" class="tag"></span></div>
 		<div id="providers"></div>
 		<div id="flow" hidden>
@@ -135,7 +137,6 @@ const text = {
 	"title": ["配置", "Settings"],
 	"close": ["完成", "Done"],
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
-	"boot": ["界面未能自动解析：{error}", "Could not resolve a user interface: {error}"],
 	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json（与 CLI 共用）。", "Advanced: edit settings.json and auth.json under {dir} directly (shared with the CLI)."],
 	"open.root": ["打开根目录", "Open root folder"],
 	"open.games": ["打开 games 目录", "Open games folder"],
@@ -179,7 +180,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 	}
 	const params = new URLSearchParams(location.search);
 	const env = await shell.env();
-	let settings = await shell.settings();
+	let settings = {};
 	let allModels = [];
 	let showAll = false;
 	let face = null;
@@ -206,9 +207,13 @@ document.documentElement.lang = zh ? "zh" : "en";
 		drawModels();
 	};
 
-	if (params.get("boot") === "1") {
+	await refreshSettings();
+	const bootError = params.get("error");
+	if (bootError !== null) {
 		$("boot").hidden = false;
-		$("boot").textContent = t("boot", { error: params.get("error") ?? "" });
+		$("boot").textContent = bootError;
+	}
+	if (params.get("boot") === "1") {
 		$("uiSection").hidden = false;
 		$("uiTitle").textContent = t("ui.section");
 		await renderUis();
@@ -247,11 +252,20 @@ document.documentElement.lang = zh ? "zh" : "en";
 		for (const b of buttons) b.classList.toggle("on", b.dataset.level === current);
 	}
 
+	async function refreshSettings() {
+		const read = await shell.settings();
+		settings = read.settings;
+		const error = read.error ?? null;
+		$("settingsError").hidden = error === null;
+		if (error !== null) $("settingsError").textContent = error;
+	}
+
 	async function applyModel(model) {
 		if (busy) return;
 		busy = true;
 		try {
-			settings = await shell.setSettings({ model });
+			await shell.setSettings({ model });
+			await refreshSettings();
 			await refreshCurrent();
 			drawModels();
 		} finally {
@@ -274,6 +288,9 @@ document.documentElement.lang = zh ? "zh" : "en";
 		const error = face !== null && face.error !== undefined ? face.error : null;
 		$("currentError").hidden = error === null;
 		if (error !== null) $("currentError").textContent = t("model.error", { error });
+		const warning = face !== null && face.error === undefined ? (face.warning ?? null) : null;
+		$("currentWarning").hidden = warning === null;
+		if (warning !== null) $("currentWarning").textContent = `⚠ ${warning}`;
 		renderThinking();
 	}
 
@@ -330,7 +347,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 	}
 
 	async function refreshProvidersAndModels() {
-		settings = await shell.settings();
+		await refreshSettings();
 		await refreshCurrent();
 		await renderProviders();
 		await renderModels();
