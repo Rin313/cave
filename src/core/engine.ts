@@ -59,10 +59,9 @@ interface RunState {
 	warnings: string[];
 }
 
-/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源），narrations 是它们的表达，lastSeq 是定稿序位 */
+/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源，表达随记录），lastSeq 是定稿序位 */
 interface Ledger {
 	records: ChronicleEntry[];
-	narrations: Map<number, string>;
 	lastSeq: number;
 	dead: string | null;
 }
@@ -78,7 +77,7 @@ export class Engine {
 	private readonly sessionManager: SessionManager;
 	private readonly customTools: NonNullable<CreateAgentSessionOptions["customTools"]>;
 	private readonly recent: RecentEntry[];
-	/** 定稿写点（act 工具尾）与近况选择的共同源；保留全部存活回合记录。 */
+	/** 定稿写点（表达落定）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly ledger: Ledger;
 	/** 装载期诊断：形状损坏条目与档案链断的显形出口。 */
 	readonly loadWarnings: readonly string[];
@@ -129,7 +128,7 @@ export class Engine {
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const loaded = options.archive?.load(def);
-		const ledger: Ledger = { records: loaded?.records ?? [], narrations: new Map(loaded?.narrations), lastSeq: loaded?.lastSeq ?? 0, dead: null };
+		const ledger: Ledger = { records: loaded?.records ?? [], lastSeq: loaded?.lastSeq ?? 0, dead: null };
 		const sim = loaded?.sim ?? new Simulation(def);
 		const loadWarnings = loaded?.warnings ?? [];
 
@@ -156,7 +155,7 @@ export class Engine {
 		});
 		await loader.reload();
 
-		const customTools = [buildActTool(def, sim, run, ledger, options.archive)];
+		const customTools = [buildActTool(def, sim, run)];
 		return new Engine(sim, options, loader, settingsManager, sessionManager, customTools, ledger, recent, run, loadWarnings);
 	}
 
@@ -200,7 +199,9 @@ export class Engine {
 
 	/** 装载读入与本次会话产生的表达；缺席即该回合无表达。 */
 	get narrations(): ReadonlyMap<number, string> {
-		return this.ledger.narrations;
+		const out = new Map<number, string>();
+		for (const record of this.ledger.records) if (record.narration !== undefined) out.set(record.seq, record.narration);
+		return out;
 	}
 
 	get busy(): "act" | "narrate" | null {
@@ -236,9 +237,9 @@ export class Engine {
 				const prompt = this.sim.def.prompt;
 				await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
 			} catch (e) {
-				// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 账目已在工具尾定稿，表达中断只降级呈现
+				// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 裁决已完成，表达中断只降级呈现，回合仍将在表达落定时定稿
 				if (this.run.phase === "mapping") throw e;
-				this.run.warnings.push(`表达中断（回合已定稿，呈现回落）：${String(e)}`);
+				this.run.warnings.push(`表达中断（呈现回落，回合照常定稿）：${String(e)}`);
 			}
 
 			let narration: string;
@@ -247,9 +248,15 @@ export class Engine {
 				this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
 				narration = this.fallbackSummary([]);
 			} else {
-				narration = this.settleNarration(session, this.run.steps);
+				try {
+					narration = this.settleNarration(session, this.run.steps);
+				} catch (e) {
+					// 叙述读取是呈现，定稿不依赖它
+					this.run.warnings.push(`叙述读取抛错（回落骨架）：${String(e)}`);
+					narration = this.fallbackSummary(this.run.steps);
+				}
+				this.finalizeTurn(narration);
 			}
-			this.recordNarration(narration);
 			this.updateRecent();
 			return {
 				steps: this.run.steps,
@@ -321,15 +328,18 @@ export class Engine {
 		return text;
 	}
 
-	/** 表达是可有可无的追加写：失败只降级警告，已定稿的回合不受影响。 */
-	private recordNarration(narration: string): void {
-		if (this.run.phase !== "narration" || this.ledger.dead !== null) return;
-		this.ledger.narrations.set(this.ledger.lastSeq, narration);
+	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信（重启后世界与档案停在上一回合，前缀档案无损）。 */
+	private finalizeTurn(narration: string): void {
+		const record: ChronicleEntry = deepFreeze({ seq: this.ledger.lastSeq + 1, time: this.sim.world.time, utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
 		try {
-			this.options.archive?.appendExpression(this.ledger.lastSeq, narration);
+			this.options.archive?.append(record);
 		} catch (e) {
-			this.run.warnings.push(`表达落盘失败（忽略）：${String(e)}`);
+			this.ledger.dead = `定稿落盘失败：${String(e)}`;
+			this.run.warnings.push(this.ledger.dead);
+			return;
 		}
+		this.ledger.records.push(record);
+		this.ledger.lastSeq = record.seq;
 	}
 
 	dispose(): void {
@@ -384,14 +394,6 @@ function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[])
 	}
 }
 
-/** 定稿：窗口关闭即落档案（回合的内容于裁决完成时已完备，叙述不在定义内）；落盘失败即不可信，由调用点判死。 */
-function finalizeTurn(sim: Simulation, run: RunState, ledger: Ledger, store: ArchiveStore | undefined): void {
-	const record: ChronicleEntry = deepFreeze({ seq: ledger.lastSeq + 1, time: sim.world.time, utterance: run.utterance ?? "", steps: run.steps });
-	store?.append(record);
-	ledger.records.push(record);
-	ledger.lastSeq = record.seq;
-}
-
 /** 接口模式走 JSON Schema 通道；ref 的 JSON 型是 string。 */
 type JsonSchema = {
 	type?: string;
@@ -435,7 +437,7 @@ function hostParametersSchema(face: readonly VerbFace[]): JsonSchema {
 	};
 }
 
-function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledger, store: ArchiveStore | undefined) {
+function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 	const base = `Propose actions to the world; the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; one call opens this turn's adjudication window; an empty actions array is a refusal.\nAvailable verbs:\n${catalog(def.verbs)}`;
 	const description = def.prompt.tool?.(base) ?? base;
 	if (typeof description !== "string" || description.trim() === "") throw new Error("prompt.tool 须返回非空字符串（act 工具描述）");
@@ -467,14 +469,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState, ledger: Ledg
 				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
 			}
 			run.steps = steps;
-			// 定稿先于一切呈现：窗口关闭即落条目
-			try {
-				finalizeTurn(sim, run, ledger, store);
-			} catch (e) {
-				ledger.dead = `定稿落盘失败：${String(e)}`;
-				run.warnings.push(ledger.dead);
-			}
-			// 事件行与新增呈现分相投影：任一相失灵只降级该相，账目已在定稿；结果即回合呈现，不重算
+			// 事件行与新增呈现分相投影：任一相失灵只降级该相；结果即回合呈现，不重算
 			let projected = false;
 			try {
 				run.lines = spineLines(sim, steps, sim.snapshot());

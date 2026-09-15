@@ -771,12 +771,14 @@ export function isCommit(s: unknown): boolean {
 	return isDenial(c.denial);
 }
 
-/** 回合定稿记录（档案主侧条目的载荷）：seq 是全日志单调序位，time 是回合末钟。 */
+/** 回合定稿记录（档案每行的载荷）：seq 是全日志单调序位，time 是回合末钟，narration 是可有可无的表达（不进重放）。 */
 export interface ChronicleEntry {
 	seq: number;
 	time: number;
 	utterance: string;
 	steps: Commit[];
+	/** 表达：落定后合并入本记录；缺席即该回合无表达。 */
+	narration?: string;
 }
 
 export function entity(world: World, id: string): Entity | undefined {
