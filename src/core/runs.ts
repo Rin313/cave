@@ -34,17 +34,15 @@ export function listRuns(root: string, game?: string): RunFace[] {
 }
 
 export interface OpenRunOptions {
-	/** 根：runs 与 agentDir 的所在。 */
+	/** 根：runs、games 与 agentDir 的所在。 */
 	root: string;
-	/** 游戏查找链（先见者遮蔽）。 */
-	gameRoots: readonly string[];
 	/** 模型与凭据的解析由宿主注入；只在 act/narrate 建会话时调用。 */
 	agent: () => Promise<AgentSpec>;
 }
 
 /** 装载（或新建）一次运行；世界与档案就绪，模型到建会话时才解析。 */
 export async function openRun(game: string, run: string, options: OpenRunOptions): Promise<Engine> {
-	return Engine.create(await loadGame(game, options.gameRoots), {
+	return Engine.create(await loadGame(game, options.root), {
 		agent: options.agent,
 		agentDir: options.root,
 		archive: openArchive(recordsPath(game, run, options.root)),

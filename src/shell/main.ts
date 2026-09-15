@@ -44,10 +44,6 @@ app.on("second-instance", () => {
 
 /** 根：games、runs 与配置（settings、auth、models）的共同所在；缺省取宿主用户数据目录。 */
 const ROOT = rootDir(app.getPath("userData"));
-/** 分发资源根：打包取 asar 之外的安装资源目录，dev 取应用路径（仓库）；游戏与界面随此分发。 */
-const RESOURCE_ROOT = app.isPackaged ? process.resourcesPath : app.getAppPath();
-/** 内容根：根（用户覆盖）→ 分发资源根；同名前者遮蔽后者。 */
-const CONTENT_ROOTS = [...new Set([ROOT, RESOURCE_ROOT])];
 const SETTINGS_FILE = settingsPath(ROOT);
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
@@ -74,7 +70,7 @@ interface UiSite {
 /** 界面 ref：`<game>/<name>`；两段均来自目录名，不含斜杠。 */
 const uiRef = (site: UiSite): string => `${site.game}/${site.name}`;
 
-/** 全部界面（ref 去重、先见者优先）：games/<id>/ui/index.html 为名即 id 的缺省界面，games/<id>/ui/<name>/index.html 为具名界面。 */
+/** 全部界面（ref 去重）：games/<id>/ui/index.html 为名即 id 的缺省界面，games/<id>/ui/<name>/index.html 为具名界面。 */
 function uiRegistry(): ReadonlyMap<string, UiSite> {
 	const sites = new Map<string, UiSite>();
 	const add = (site: UiSite): void => {
@@ -89,16 +85,14 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 			if (existsSync(file)) add({ name: entry.name, file, game });
 		}
 	};
-	for (const root of CONTENT_ROOTS) {
-		const dir = join(root, "games");
-		if (!existsSync(dir)) continue;
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			if (!entry.isDirectory()) continue;
-			const ui = join(dir, entry.name, "ui");
-			const file = join(ui, "index.html");
-			if (existsSync(file)) add({ name: entry.name, file, game: entry.name });
-			scan(ui, entry.name);
-		}
+	const dir = join(ROOT, "games");
+	if (!existsSync(dir)) return sites;
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const ui = join(dir, entry.name, "ui");
+		const file = join(ui, "index.html");
+		if (existsSync(file)) add({ name: entry.name, file, game: entry.name });
+		scan(ui, entry.name);
 	}
 	return sites;
 }
@@ -136,7 +130,7 @@ function bootUi(): UiSite {
 	}
 	const all = [...sites.values()];
 	if (all.length === 1) return all[0]!;
-	if (all.length === 0) throw new Error(`没有可用界面：在 ${CONTENT_ROOTS.map((root) => join(root, "games")).join(" 或 ")} 下任一 <id>/ui 放置 index.html（缺省）或 <name>/index.html`);
+	if (all.length === 0) throw new Error(`没有可用界面：在 ${join(ROOT, "games")} 下任一 <id>/ui 放置 index.html 或 <name>/index.html`);
 	throw new Error(`${why}：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 }
 
@@ -216,7 +210,7 @@ function openSettings(): void {
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(game, run, { root: ROOT, gameRoots: CONTENT_ROOTS, agent });
+	const engine = await openRun(game, run, { root: ROOT, agent });
 	const unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
 	});
@@ -311,7 +305,7 @@ function slotFace(slots: Record<string, SlotDef> | undefined): SlotFace[] {
 
 const uiFace = (site: UiSite): { name: string; ref: string; game: string } => ({ name: site.name, ref: uiRef(site), game: site.game });
 
-ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
+ipcMain.handle("games", () => listGames(ROOT));
 
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
 ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, idIn(req, "runs")));
@@ -332,8 +326,8 @@ ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
 ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "meta");
 	if (game === undefined) throw new Error("meta 需要游戏 id");
-	const read = readGameMeta(game, CONTENT_ROOTS);
-	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(CONTENT_ROOTS).join(", ") || "无"}）`);
+	const read = readGameMeta(game, ROOT);
+	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
 	return { game, meta: read.meta, ...(read.error !== undefined && { error: read.error }) };
 });
 
@@ -341,7 +335,7 @@ ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "def");
 	if (game === undefined) throw new Error("def 需要游戏 id");
-	const def = await loadGame(game, CONTENT_ROOTS);
+	const def = await loadGame(game, ROOT);
 	return { game, verbs: verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
