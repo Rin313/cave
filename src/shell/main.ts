@@ -1,14 +1,14 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { readRecords } from "../core/archive.ts";
 import type { ActOutcome, AgentSpec, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
-import { isSegment, readJsonObject, recordsPath, rootDir } from "../core/paths.ts";
+import { isSegment, readJsonObject, recordsPath, rootDir, subdirs } from "../core/paths.ts";
 import { listRuns, openRun } from "../core/runs.ts";
-import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace } from "./model.ts";
+import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace, type ModelResolution } from "./model.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
 
@@ -48,24 +48,19 @@ const SETTINGS_FILE = join(ROOT, "settings.json");
 type Settings = Record<string, unknown>;
 
 /** 缺席与破损都按空对象；破损显形于控制台。 */
-function readSettingsFile(file: string): Settings {
-	const read = readJsonObject(file);
+function readSettings(): Settings {
+	const read = readJsonObject(SETTINGS_FILE);
 	if (read === null) return {};
 	if (read.value !== null) return read.value;
 	console.error(`设置文件不可读（按缺席处理）：${read.error}`);
 	return {};
 }
 
-function readSettings(root: string): Settings {
-	return readSettingsFile(join(root, "settings.json"));
-}
-
 /** 写补丁并返回写入后的设置。 */
-function patchSettings(root: string, patch: Settings): Settings {
-	const file = join(root, "settings.json");
-	const settings = Object.assign(readSettingsFile(file), patch);
-	mkdirSync(dirname(file), { recursive: true });
-	writeFileSync(file, `${JSON.stringify(settings, null, "\t")}\n`, "utf8");
+function patchSettings(patch: Settings): Settings {
+	const settings = { ...readSettings(), ...patch };
+	mkdirSync(ROOT, { recursive: true });
+	writeFileSync(SETTINGS_FILE, `${JSON.stringify(settings, null, "\t")}\n`, "utf8");
 	return settings;
 }
 
@@ -105,24 +100,12 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 	const sites = new Map<string, UiSite>();
 	const add = (site: UiSite): void => {
 		const ref = uiRef(site);
-		if (!sites.has(ref)) sites.set(ref, site);
+		if (existsSync(site.file) && !sites.has(ref)) sites.set(ref, site);
 	};
-	const scan = (base: string, game: string): void => {
-		if (!existsSync(base)) return;
-		for (const entry of readdirSync(base, { withFileTypes: true })) {
-			if (!entry.isDirectory()) continue;
-			const file = join(base, entry.name, "index.html");
-			if (existsSync(file)) add({ name: entry.name, file, game });
-		}
-	};
-	const dir = join(ROOT, "games");
-	if (!existsSync(dir)) return sites;
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const ui = join(dir, entry.name, "ui");
-		const file = join(ui, "index.html");
-		if (existsSync(file)) add({ name: entry.name, file, game: entry.name });
-		scan(ui, entry.name);
+	for (const game of subdirs(join(ROOT, "games"))) {
+		const ui = join(ROOT, "games", game, "ui");
+		add({ name: game, file: join(ui, "index.html"), game });
+		for (const name of subdirs(ui)) add({ name, file: join(ui, name, "index.html"), game });
 	}
 	return sites;
 }
@@ -130,16 +113,22 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
-const settings = (): Settings => readSettings(ROOT);
+/** 设置中解析出的当前模型：未配置即 null；warning 在此显形。 */
+async function configuredModel(): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
+	const ref = stringSetting(readSettings(), "model");
+	if (ref === undefined || ref.trim() === "") return null;
+	const runtime = await modelRuntime();
+	const resolved = resolveModelRef(ref, runtime);
+	if (resolved.ok && resolved.warning) console.warn(`⚠ ${resolved.warning}`);
+	return { ref, runtime, resolved };
+}
 
 /** 模型与凭据惰性解析：只在 act/narrate 建会话时调用，设置每次都重读。 */
 async function agent(): Promise<AgentSpec> {
-	const ref = stringSetting(settings(), "model");
-	if (ref === undefined || ref.trim() === "") throw new Error(`模型未配置：在 ${SETTINGS_FILE} 写入 { "model": "provider/model[:thinking]" }`);
-	const runtime = await modelRuntime();
-	const resolved = resolveModelRef(ref, runtime);
+	const current = await configuredModel();
+	if (current === null) throw new Error(`模型未配置：在 ${SETTINGS_FILE} 写入 { "model": "provider/model[:thinking]" }`);
+	const { ref, runtime, resolved } = current;
 	if (!resolved.ok) throw new Error(`模型 "${ref}"（${SETTINGS_FILE}）不可用：${resolved.reason}`);
-	if (resolved.warning) console.warn(`⚠ ${resolved.warning}`);
 	const { model, thinkingLevel } = resolved;
 	if (!(await runtime.checkAuth(model.provider))) {
 		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(ROOT, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
@@ -149,7 +138,7 @@ async function agent(): Promise<AgentSpec> {
 
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
 function bootUi(): UiSite {
-	const named = stringSetting(settings(), "ui");
+	const named = stringSetting(readSettings(), "ui");
 	const sites = uiRegistry();
 	let why = "未指定界面";
 	if (named !== undefined) {
@@ -175,7 +164,7 @@ try {
 
 /** 配置面：settingsUi 指定的内容界面为皮肤层；缺席或失效即壳内引导面（配置面是兜底，不因设置失效而锁死）。 */
 function settingsSite(): UiSite | null {
-	const ref = stringSetting(settings(), "settingsUi");
+	const ref = stringSetting(readSettings(), "settingsUi");
 	if (ref === undefined) return null;
 	const sites = uiRegistry();
 	const site = sites.get(ref);
@@ -240,7 +229,7 @@ function openSettings(): void {
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(game, run, { root: ROOT, agent });
+	const engine = await openRun(ROOT, game, run, agent);
 	const unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
 	});
@@ -343,7 +332,7 @@ ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
-	return { game, run, ...readRecords(recordsPath(game, run, ROOT)) };
+	return { game, run, ...readRecords(recordsPath(ROOT, game, run)) };
 });
 
 /** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */
@@ -356,7 +345,7 @@ ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
 ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "meta");
 	if (game === undefined) throw new Error("meta 需要游戏 id");
-	const read = readGameMeta(game, ROOT);
+	const read = readGameMeta(ROOT, game);
 	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
 	return { game, meta: read.meta, ...(read.error !== undefined && { error: read.error }) };
 });
@@ -365,7 +354,7 @@ ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "def");
 	if (game === undefined) throw new Error("def 需要游戏 id");
-	const def = await loadGame(game, ROOT);
+	const def = await loadGame(ROOT, game);
 	return { game, verbs: verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
@@ -383,17 +372,17 @@ ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 	const sites = uiRegistry();
 	const site = sites.get(ref);
 	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
-	patchSettings(ROOT, { ui: ref });
+	patchSettings({ ui: ref });
 	if (win !== null && !win.isDestroyed()) loadPage(win, site.file);
 });
 
-ipcMain.handle("settings", () => settings());
+ipcMain.handle("settings", () => readSettings());
 
 /** 当前模型的解析面：规范化 ref、显式档位与受支持档位；未配置即 null，解析失败即 error。 */
 ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } | null> => {
-	const ref = stringSetting(settings(), "model");
-	if (ref === undefined || ref.trim() === "") return null;
-	const resolved = resolveModelRef(ref, await modelRuntime());
+	const current = await configuredModel();
+	if (current === null) return null;
+	const { resolved } = current;
 	if (!resolved.ok) return { error: resolved.reason };
 	return {
 		ref: modelRef(resolved.model),
@@ -418,7 +407,7 @@ ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as Record<string, unknown>) };
 	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
-	return patchSettings(ROOT, patch);
+	return patchSettings(patch);
 });
 
 ipcMain.handle("settings:open", () => openSettings());

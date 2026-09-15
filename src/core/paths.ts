@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -15,13 +15,19 @@ export function isSegment(v: unknown): v is string {
 	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/]/.test(v);
 }
 
-export function runsDir(root = rootDir(), game?: string): string {
+export function runsDir(root: string, game?: string): string {
 	const base = join(root, "runs");
 	return game === undefined ? base : join(base, game);
 }
 
-export function recordsPath(game: string, run: string, root = rootDir()): string {
+export function recordsPath(root: string, game: string, run: string): string {
 	return join(runsDir(root, game), run, "records.jsonl");
+}
+
+/** 目录下的直接子目录名；目录缺席即空。 */
+export function subdirs(dir: string): string[] {
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
 export function readJsonObject(file: string): { value: Record<string, unknown> | null; error?: string } | null {

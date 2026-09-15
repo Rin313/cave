@@ -85,7 +85,7 @@ function modelErrorReason(error: string | undefined): string {
 	return (error ?? "未解析到模型").replace(/ Use --[\s\S]*$/, "");
 }
 
-type ModelResolution =
+export type ModelResolution =
 	| { ok: true; model: AgentSpec["model"]; thinkingLevel?: AgentSpec["thinkingLevel"]; warning?: string }
 	| { ok: false; reason: string };
 
@@ -113,6 +113,12 @@ function providerInfo(runtime: ModelRuntime): ProviderInfo[] {
 	});
 }
 
+/** 非空字符串 provider（IPC 边界）。 */
+function providerIn(value: unknown, cmd: string): string {
+	if (typeof value !== "string" || value === "") throw new Error(`${cmd} 需要 provider`);
+	return value;
+}
+
 /** 登录流程的应答通道：prompt/notice 只发往发起窗口，answer/cancel 只接受同一窗口；发起文档导航或销毁即取消。 */
 export function installModel(load: () => Promise<ModelRuntime>): void {
 	let flow: Flow | null = null;
@@ -138,9 +144,8 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 	});
 
 	ipcMain.handle("auth:login", async (event, req: { provider?: unknown; type?: unknown }) => {
-		const provider = typeof req?.provider === "string" && req.provider !== "" ? req.provider : null;
+		const provider = providerIn(req?.provider, "login");
 		const type: LoginType | null = req?.type === "api_key" || req?.type === "oauth" ? req.type : null;
-		if (provider === null) throw new Error("login 需要 provider");
 		if (type === null) throw new Error("login 需要 type（api_key|oauth）");
 		const sender = event.sender;
 		closeFlow(); // 新登录抢占旧流：最后一次点击胜出
@@ -215,8 +220,6 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 	});
 
 	ipcMain.handle("auth:logout", async (_event, req: { provider?: unknown }) => {
-		const provider = typeof req?.provider === "string" && req.provider !== "" ? req.provider : null;
-		if (provider === null) throw new Error("logout 需要 provider");
-		await (await load()).logout(provider);
+		await (await load()).logout(providerIn(req?.provider, "logout"));
 	});
 }
