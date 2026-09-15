@@ -72,13 +72,13 @@ export function resolveModelRef(ref: string, modelRuntime: ModelRuntime): ModelR
 }
 
 export interface OpenRunOptions {
-	/** 根：runs、games 与配置（settings、auth、models）的所在；缺省 rootDir()。 */
+	/** 根：runs、games 与配置（settings、auth、models）的所在。 */
 	root?: string;
-	/** 游戏查找链（先见者遮蔽）；缺省 [root]。 */
+	/** 游戏查找链（先见者遮蔽）。 */
 	gameRoots?: readonly string[];
 	/** 设置缺省层（靠前者优先，如随包分发的 settings.json）；与用户层合并后供模型引用读取。 */
 	settingLayers?: readonly string[];
-	/** 宿主共享的模型运行时工厂（配置协议与引擎同源）；缺省按配置根新建；装载不建运行时，解析推迟到会话建立。 */
+	/** 宿主共享的模型运行时工厂（配置协议与引擎同源） */
 	modelRuntime?: () => Promise<ModelRuntime>;
 }
 
