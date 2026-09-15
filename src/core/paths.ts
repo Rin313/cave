@@ -1,14 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-
-export function rootDir(hostRoot?: string): string {
-	if (hostRoot !== undefined) return hostRoot;
-	const base = process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming")
-		: process.platform === "darwin" ? join(homedir(), "Library", "Application Support")
-		: process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-	return join(base, "cave");
-}
 
 /** 路径段：id 不做路径解析。 */
 export function isSegment(v: unknown): v is string {
@@ -30,14 +21,15 @@ export function subdirs(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-export function readJsonObject(file: string): { value: Record<string, unknown> | null; error?: string } | null {
-	if (!existsSync(file)) return null;
+/** 读 JSON 对象：缺席与破损都按空对象；破损原因不含文件名，由调用方补全语境。 */
+export function readJsonObject(file: string): { value: Record<string, unknown>; error?: string } {
+	if (!existsSync(file)) return { value: {} };
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(readFileSync(file, "utf8"));
 	} catch (e) {
-		return { value: null, error: `解析失败（${file}）：${String(e)}` };
+		return { value: {}, error: `JSON 解析失败：${String(e)}` };
 	}
-	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: null, error: `须为 JSON 对象（${file}）` };
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: {}, error: "须为 JSON 对象" };
 	return { value: parsed as Record<string, unknown> };
 }

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openArchive, readRecords } from "../core/archive.ts";
 import { Engine, type ActOutcome, type AgentSpec, type NarrationOutcome } from "../core/engine.ts";
-import { isSegment, readJsonObject, recordsPath, rootDir, runsDir, subdirs } from "../core/paths.ts";
+import { isSegment, readJsonObject, recordsPath, runsDir, subdirs } from "../core/paths.ts";
 import * as sim from "../core/sim.ts";
 import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace, type ModelResolution } from "./model.ts";
 
@@ -40,8 +40,8 @@ app.on("second-instance", () => {
 	win.focus();
 });
 
-/** 根：games、runs 与配置（settings、auth、models）的共同所在；缺省取宿主用户数据目录。 */
-const ROOT = rootDir(app.getPath("userData"));
+/** 根：games、runs 与配置（settings、auth、models）的共同所在；即宿主用户数据目录（--user-data-dir 可覆盖）。 */
+const ROOT = app.getPath("userData");
 const SETTINGS_FILE = join(ROOT, "settings.json");
 
 type Settings = Record<string, unknown>;
@@ -49,10 +49,8 @@ type Settings = Record<string, unknown>;
 /** 缺席与破损都按空对象；破损显形于控制台。 */
 function readSettings(): Settings {
 	const read = readJsonObject(SETTINGS_FILE);
-	if (read === null) return {};
-	if (read.value !== null) return read.value;
-	console.error(`设置文件不可读（按缺席处理）：${read.error}`);
-	return {};
+	if (read.error !== undefined) console.error(`设置文件不可读（按缺席处理，${SETTINGS_FILE}）：${read.error}`);
+	return read.value;
 }
 
 /** 写补丁并返回写入后的设置。 */
@@ -112,13 +110,20 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
+/** 最近显形的解析告警：同一条不重复刷屏。 */
+let modelWarning: string | undefined;
+
 /** 设置中解析出的当前模型：未配置即 null；warning 在此显形。 */
 async function configuredModel(): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
 	const ref = stringSetting(readSettings(), "model");
 	if (ref === undefined || ref.trim() === "") return null;
 	const runtime = await modelRuntime();
 	const resolved = resolveModelRef(ref, runtime);
-	if (resolved.ok && resolved.warning) console.warn(`⚠ ${resolved.warning}`);
+	const warning = resolved.ok ? resolved.warning : undefined;
+	if (warning !== modelWarning) {
+		modelWarning = warning;
+		if (warning !== undefined) console.warn(`⚠ ${warning}`);
+	}
 	return { ref, runtime, resolved };
 }
 
@@ -250,10 +255,10 @@ type GameMeta = Record<string, unknown>;
 function readGameMeta(root: string, id: string): { meta: GameMeta; error?: string } | null {
 	const entry = gameFile(root, id);
 	if (entry === null) return null;
-	const parsed = readJsonObject(join(dirname(entry), "game.json"));
-	if (parsed === null) return { meta: {} };
-	if (parsed.value === null) return { meta: {}, error: `游戏元数据${parsed.error}` };
-	return { meta: parsed.value };
+	const file = join(dirname(entry), "game.json");
+	const read = readJsonObject(file);
+	if (read.error !== undefined) return { meta: {}, error: `游戏元数据不可读（${file}）：${read.error}` };
+	return { meta: read.value };
 }
 
 /** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂；模块缓存按进程，改文件后须重启壳生效。 */
@@ -382,10 +387,16 @@ function idIn(req: GameRequest | undefined, cmd: string): string | undefined {
 	return req.game;
 }
 
-/** 必填的 game 与 run 字段。 */
-function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: string } {
+/** 必填的 game 字段。 */
+function gameIn(req: GameRequest | undefined, cmd: string): string {
 	const game = idIn(req, cmd);
 	if (game === undefined) throw new Error(`${cmd} 需要游戏 id`);
+	return game;
+}
+
+/** 必填的 game 与 run 字段。 */
+function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: string } {
+	const game = gameIn(req, cmd);
 	if (!isSegment(req?.run)) throw new Error(`${cmd} 的 run 须为存档 id（路径段，不含分隔符）`);
 	return { game, run: req.run };
 }
@@ -418,8 +429,7 @@ ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
 
 /** 游戏目录 */
 ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
-	const game = idIn(req, "meta");
-	if (game === undefined) throw new Error("meta 需要游戏 id");
+	const game = gameIn(req, "meta");
 	const read = readGameMeta(ROOT, game);
 	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
 	return { game, meta: read.meta, ...(read.error !== undefined && { error: read.error }) };
@@ -427,8 +437,7 @@ ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 
 /** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
 ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
-	const game = idIn(req, "def");
-	if (game === undefined) throw new Error("def 需要游戏 id");
+	const game = gameIn(req, "def");
 	const def = await loadGame(ROOT, game);
 	return { game, verbs: sim.verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
@@ -471,7 +480,7 @@ ipcMain.handle("env", () => ({ root: ROOT }));
 /** 打开根下目录（不存在即建）：界面据此暴露内容与配置的可写位置。 */
 ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	const dir = req?.dir ?? "";
-	if (typeof dir !== "string" || (dir !== "" && !isSegment(dir))) throw new Error("reveal 的 dir 须为根下的路径段");
+	if (dir !== "" && !isSegment(dir)) throw new Error("reveal 的 dir 须为根下的路径段");
 	const path = join(ROOT, dir);
 	mkdirSync(path, { recursive: true });
 	return shell.openPath(path);

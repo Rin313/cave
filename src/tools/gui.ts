@@ -5,7 +5,6 @@ import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { rootDir } from "../core/paths.ts";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 
@@ -51,6 +50,8 @@ interface NarrateFace {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const js = (v: unknown): string => JSON.stringify(v);
 const openExpr = (game: string, run: string): string => `window.shell.open(${js(game)},${js(run)})`;
+/** 打开（必要时建会话）再求值：装载告警与结果一并回传。 */
+const openThen = (game: string, run: string, call: string): string => `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await (${call})}})()`;
 
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
@@ -64,7 +65,7 @@ function freePort(): Promise<number> {
 	});
 }
 
-/** 保活宿主的状态记录：参数随记录，供重连判定。 */
+/** 保活宿主的状态记录：参数随记录，供重连判定；dataRoot 为宿主自报的实际数据根。 */
 interface Host {
 	pid: number;
 	port: number;
@@ -133,11 +134,12 @@ function discardHost(): void {
 	rmSync(HOST_FILE, { force: true });
 }
 
-async function waitHost(exe: string, dataRoot: string, ms: number): Promise<Target | null> {
+/** 宿主记录须匹配 exe；dataRoot 缺省（未指定 --data-dir）即接受在跑宿主的实际根。 */
+async function waitHost(exe: string, dataRoot: string | undefined, ms: number): Promise<Target | null> {
 	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
 		const host = readHost();
-		if (host !== null && host.exe === exe && host.dataRoot === dataRoot) {
+		if (host !== null && host.exe === exe && (dataRoot === undefined || samePath(host.dataRoot, dataRoot))) {
 			const target = await targetOf(host.port);
 			if (target !== null) return target;
 		}
@@ -147,10 +149,10 @@ async function waitHost(exe: string, dataRoot: string, ms: number): Promise<Targ
 }
 
 /** 脱离父进程启动宿主；就绪后才落盘状态（并发竞争由单实例锁收敛到先到者）。 */
-async function spawnHost(exe: string, dev: boolean, dataRoot: string): Promise<Target> {
+async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<Target> {
 	const port = await freePort();
-	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*", `--user-data-dir=${dataRoot}`];
-	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot}）\n`, "utf8");
+	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*", ...(dataRoot === undefined ? [] : [`--user-data-dir=${dataRoot}`])];
+	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot ?? "宿主默认"}）\n`, "utf8");
 	const fd = openSync(HOST_LOG, "a");
 	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd] });
 	closeSync(fd);
@@ -166,23 +168,28 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string): Promise<T
 			throw new Error(`Electron 退出（code ${child.exitCode}）${logTail()}`);
 		}
 		const target = await targetOf(port);
-		if (target !== null) {
-			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot });
+		const root = target === null ? null : await hostRoot(target).catch(() => null);
+		if (target !== null && root !== null) {
+			if (dataRoot !== undefined && !samePath(root, dataRoot)) {
+				child.kill();
+				throw new Error(`宿主未采用指定数据根（期望 ${dataRoot}，实际 ${root}）`);
+			}
+			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot: root });
 			return target;
 		}
 		await sleep(150);
 	}
 	child.kill();
-	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根的 games/<id>/ui/index.html 提供界面${logTail()}`);
+	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根的 games/<id>/ui/index.html 提供界面，且该界面经 preload 暴露 window.shell${logTail()}`);
 }
 
 /** 重连或启动宿主：参数不符时报错，进程已死则清理残留后重启。 */
-async function ensureHost(exe: string | undefined, dataRoot: string): Promise<Target> {
+async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<Target> {
 	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
 	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
 	const host = readHost();
 	if (host !== null) {
-		if (host.exe !== binary || host.dataRoot !== dataRoot) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot}）：先 stop 再以当前参数运行`);
+		if (host.exe !== binary || (dataRoot !== undefined && !samePath(host.dataRoot, dataRoot))) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot}）：先 stop 再以当前参数运行`);
 		const target = await targetOf(host.port);
 		if (target !== null) return target;
 		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
@@ -232,7 +239,7 @@ async function stopHost(): Promise<void> {
 	console.log(`宿主已停止（pid ${host.pid}${targets.length === 0 ? "，界面本不可达" : ""}）`);
 }
 
-async function evaluate(target: Target, expression: string, timeoutMs: number): Promise<unknown> {
+async function evaluate<T>(target: Target, expression: string, timeoutMs: number): Promise<T> {
 	const ws = new WebSocket(target.webSocketDebuggerUrl);
 	await new Promise<void>((resolve, reject) => {
 		ws.onopen = () => resolve();
@@ -256,10 +263,24 @@ async function evaluate(target: Target, expression: string, timeoutMs: number): 
 			const desc = details.exception?.description ?? details.text ?? "CDP 异常";
 			throw new Error(desc.startsWith("Error: ") ? desc.slice(7) : desc);
 		}
-		return reply.result?.result?.value;
+		return reply.result?.result?.value as T;
 	} finally {
 		ws.close();
 	}
+}
+
+/** 宿主自报的数据根：工具侧的唯一权威，不镜像 Electron 的默认值。 */
+async function hostRoot(target: Target): Promise<string> {
+	const face = await evaluate<{ root?: unknown }>(target, "window.shell.env()", 10_000);
+	if (typeof face?.root !== "string" || face.root === "") throw new Error("宿主未报告数据根（window.shell.env）");
+	return face.root;
+}
+
+/** 路径同一性：解析后比较；Windows 大小写不敏感。 */
+function samePath(a: string, b: string): boolean {
+	const x = resolve(a);
+	const y = resolve(b);
+	return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 function printWarnings(warnings: string[]): void {
@@ -298,7 +319,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 		}
 		case "state": {
 			const [game, run] = requireRun();
-			const face = (await evaluate(target, openExpr(game, run), timeout)) as unknown as RunFace;
+			const face = await evaluate<RunFace>(target, openExpr(game, run), timeout);
 			console.log(`【${game}/${run}】t=${face.time}`);
 			printWarnings(face.warnings ?? []);
 			console.log(JSON.stringify(face.view, null, 1));
@@ -306,7 +327,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 		}
 		case "records": {
 			const [game, run] = requireRun();
-			const face = (await evaluate(target, `window.shell.records(${js(game)},${js(run)})`, timeout)) as unknown as RecordsFace;
+			const face = await evaluate<RecordsFace>(target, `window.shell.records(${js(game)},${js(run)})`, timeout);
 			const narrated = face.records.reduce((n, r) => n + (r.narration === undefined ? 0 : 1), 0);
 			console.log(`【${game}/${run}】${face.records.length} 回合${narrated ? `，${narrated} 表达` : ""}${face.broken ? `，${face.broken} 条形状损坏` : ""}`);
 			console.log(JSON.stringify(face.records, null, 1));
@@ -322,8 +343,8 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const utterance = rest.join(" ").trim();
 			if (utterance === "") throw new Error("act 需要话语");
-			const expr = `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await window.shell.act(${js(game)},${js(run)},${js(utterance)})}})()`;
-			const { warnings, result } = (await evaluate(target, expr, timeout)) as unknown as { warnings: string[]; result: ActFace };
+			const expr = openThen(game, run, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`);
+			const { warnings, result } = await evaluate<{ warnings: string[]; result: ActFace }>(target, expr, timeout);
 			printWarnings(warnings);
 			printAct(utterance, result);
 			return;
@@ -334,18 +355,18 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			if (file === undefined) throw new Error("batch 需要话语文件");
 			const lines = readFileSync(file, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 			if (!lines.length) throw new Error(`话语文件 ${file} 为空`);
-			const expr = `(async()=>{const o=await ${openExpr(game, run)};const results=[];for(const u of ${js(lines)})results.push(await window.shell.act(${js(game)},${js(run)},u));return {warnings:o.warnings??[],results}})()`;
-			const { warnings, results } = (await evaluate(target, expr, timeout)) as unknown as { warnings: string[]; results: ActFace[] };
+			const expr = openThen(game, run, `(async()=>{const results=[];for(const u of ${js(lines)})results.push(await window.shell.act(${js(game)},${js(run)},u));return results})()`);
+			const { warnings, result } = await evaluate<{ warnings: string[]; result: ActFace[] }>(target, expr, timeout);
 			printWarnings(warnings);
-			results.forEach((face, i) => printAct(lines[i] ?? "", face, true));
+			result.forEach((face, i) => printAct(lines[i] ?? "", face, true));
 			return;
 		}
 		case "narrate": {
 			const [game, run] = requireRun();
 			const instruction = rest.join(" ").trim();
 			if (instruction === "") throw new Error("narrate 需要指令");
-			const expr = `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await window.shell.narrate(${js(game)},${js(run)},${js(instruction)})}})()`;
-			const { warnings, result } = (await evaluate(target, expr, timeout)) as unknown as { warnings: string[]; result: NarrateFace };
+			const expr = openThen(game, run, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`);
+			const { warnings, result } = await evaluate<{ warnings: string[]; result: NarrateFace }>(target, expr, timeout);
 			console.log(`\n【${game}/${run} narrate】${instruction}`);
 			printWarnings(warnings);
 			printWarnings(result.warnings);
@@ -406,7 +427,8 @@ async function main(): Promise<void> {
 	if (!cmd) throw new Error("需要命令");
 	const rawExe = flagStr(a, "exe");
 	const exe = rawExe === undefined ? undefined : resolve(rawExe);
-	const dataRoot = resolve(flagStr(a, "data-dir") ?? rootDir());
+	const rawDataRoot = flagStr(a, "data-dir");
+	const dataRoot = rawDataRoot === undefined ? undefined : resolve(rawDataRoot);
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
 	if (cmd === "stop") {
