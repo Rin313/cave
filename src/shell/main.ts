@@ -182,14 +182,6 @@ function bootUi(): UiSite {
 	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 }
 
-let ui: UiSite | null = null;
-let bootError: string | null = null;
-try {
-	ui = bootUi();
-} catch (e) {
-	bootError = e instanceof Error ? e.message : String(e);
-}
-
 /** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即引导面，失效即引导面并携原因（配置面是兜底，不因设置失效而锁死）。 */
 function settingsSite(): { site: UiSite | null; error?: string } {
 	const ref = stringSetting(readSettings().settings, "settingsUi");
@@ -233,6 +225,13 @@ function bindWindow(w: BrowserWindow): void {
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
+/** 建窗即定尺寸并绑纪律。 */
+function newWindow(width: number, height: number): BrowserWindow {
+	const w = new BrowserWindow({ ...windowOptions(), width, height });
+	bindWindow(w);
+	return w;
+}
+
 function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>): Promise<void> {
 	return query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
 }
@@ -270,8 +269,7 @@ function openSettings(): void {
 		return;
 	}
 	const { site, error } = settingsSite();
-	settingsWin = new BrowserWindow({ ...windowOptions(), width: 720, height: 640 });
-	bindWindow(settingsWin);
+	settingsWin = newWindow(720, 640);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
 	});
@@ -339,18 +337,13 @@ function listRuns(root: string, game?: string): RunFace[] {
 	return out;
 }
 
-/** 装载（或新建）一次运行；世界与档案就绪，模型到建会话时才解析。 */
-async function openRun(root: string, game: string, run: string, agent: () => Promise<AgentSpec>): Promise<Engine> {
-	return Engine.create(await loadGame(root, game), {
-		agent,
-		agentDir: root,
-		archive: openArchive(recordsPath(root, game, run)),
-	});
-}
-
-/** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
+/** 装载（或新建）一次运行并订阅：世界与档案就绪，模型到 act/narrate 建会话时才解析；事件按实例身份分流，界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(ROOT, game, run, agent);
+	const engine = await Engine.create(await loadGame(ROOT, game), {
+		agent,
+		agentDir: ROOT,
+		archive: openArchive(recordsPath(ROOT, game, run)),
+	});
 	const unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
 	});
@@ -376,17 +369,19 @@ function slotOf(game: string, run: string): SessionSlot {
 	return slot;
 }
 
+/** 槽的落定：打开中即等 `opened`；已落定即复用。 */
+const settle = (slot: SessionSlot): Promise<Session> => Promise.resolve(slot.session ?? slot.opened);
+
 /** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）；返回必为表内活实例。 */
 async function openSession(game: string, run: string): Promise<Session> {
-	slotOf(game, run);
-	return attached(game, run);
+	return settle(slotOf(game, run));
 }
 
 /** state/act 只附着已打开的实例（打开中一并等）；未打开即拒绝，不隐式创建。 */
 async function attached(game: string, run: string): Promise<Session> {
 	const slot = sessions.get(sessionKey(game, run));
 	if (slot === undefined) throw new Error(`未打开运行 ${game}/${run}：先 open(game, run)`);
-	return slot.session ?? await slot.opened;
+	return settle(slot);
 }
 
 /** 关闭是显式的：打开中与回合进行中都拒绝；成功即除名释放（引擎自持回合互斥）。 */
@@ -573,13 +568,15 @@ ipcMain.handle("state", async (_event, req: RunRequest) => {
 
 app.whenReady().then(() => {
 	installModel(modelRuntime);
-	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
-	bindWindow(win);
+	win = newWindow(1200, 820);
 	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
 	win.on("closed", () => {
 		win = null;
 		app.quit();
 	});
-	if (ui !== null) loadSite(win, ui);
-	else loadSetup(win, bootError ?? "未解析到界面");
+	try {
+		loadSite(win, bootUi());
+	} catch (e) {
+		loadSetup(win, e instanceof Error ? e.message : String(e));
+	}
 });
