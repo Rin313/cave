@@ -488,7 +488,7 @@ export interface GameDef {
 	perspective?: (world: World) => Partial<Access>;
 	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第二参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
-	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回记录子序列（须严格递增 seq 且取自传入记录）。此钩子只做选择，投影与言默判据归引擎。 */
+	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回记录子序列（须取自传入记录且保持账本序）。此钩子只做选择，投影与言默判据归引擎。 */
 	recent?: (records: readonly ChronicleEntry[], base: readonly ChronicleEntry[]) => readonly ChronicleEntry[];
 	/** 缺省近况选择的窗口大小（回合记录数）；recent 缺席时必填，recent 在时作为 base 的参数（缺省即 base = 全量记录）。 */
 	recentWindow?: number;
@@ -771,9 +771,8 @@ export function isCommit(s: unknown): boolean {
 	return isDenial(c.denial);
 }
 
-/** 回合定稿记录（档案每行的载荷）：seq 是全日志单调序位，time 是回合末钟，narration 是可有可无的表达（不进重放）。 */
+/** 回合定稿记录（档案每行的载荷）：time 是回合末钟，narration 是可有可无的表达（不进重放）。 */
 export interface ChronicleEntry {
-	seq: number;
 	time: number;
 	utterance: string;
 	steps: Commit[];
@@ -1360,12 +1359,12 @@ export class Simulation {
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
-	/** 重放：𝒞 反推 δ 逐条应用（不重裁决、不掷骰、不重算级联），逐变更 prev 校验，终态 integrity；authored 不变式不重审。链断回滚并返回原因。 */
+	/** 重放：𝒞 反推 δ 逐条应用（不重裁决、不掷骰、不重算级联），逐变更 prev 校验，终态 integrity；authored 不变式不重审。失败回滚并返回原因。 */
 	replayRecord(record: ChronicleEntry): string | null {
 		const s0 = this.readState();
 		const fail = (reason: string): string => {
 			this.restore(s0);
-			return `seq${record.seq} ${reason}`;
+			return reason;
 		};
 		try {
 			for (const step of record.steps) {

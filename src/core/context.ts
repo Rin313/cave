@@ -20,17 +20,16 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings
 		warnings.push(`近况选择抛错（回落缺省窗口）：${String(e)}`);
 		return base;
 	}
-	const index = new Map(records.map((r, i) => [r.seq, i]));
+	const index = new Map(records.map((r, i) => [r, i]));
 	let prev = -1;
 	const ordered = Array.isArray(picked) && (picked as readonly unknown[]).every((r) => {
-		const seq = r !== null && typeof r === "object" ? (r as { seq?: unknown }).seq : undefined;
-		const at = typeof seq === "number" ? index.get(seq) : undefined;
+		const at = index.get(r as ChronicleEntry);
 		if (at === undefined || at <= prev) return false;
 		prev = at;
 		return true;
 	});
 	if (!ordered) {
-		warnings.push("近况选择须为账本序的子序列（严格递增 seq 且取自传入记录）：回落缺省窗口");
+		warnings.push("近况选择须为传入记录的子序列（账本序）：回落缺省窗口");
 		return base;
 	}
 	return picked;
@@ -39,13 +38,13 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings
 /** 投影所选记录：自账本末世界逐条逆推至最早入选者（spineLines 不自改入参，故就地回退），只取入选记录的提交边界；言默与 act 结果同判据。 */
 function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], selected: readonly ChronicleEntry[]): RecentEntry[] {
 	if (selected.length === 0) return [];
-	const slot = new Map(selected.map((r, i) => [r.seq, i]));
+	const slot = new Map(selected.map((r, i) => [r, i]));
 	const moves: string[][] = new Array(selected.length);
 	let need = selected.length;
 	const w = sim.snapshot();
 	for (let i = records.length - 1; i >= 0 && need > 0; i--) {
 		const r = records[i]!;
-		const at = slot.get(r.seq);
+		const at = slot.get(r);
 		if (at !== undefined) {
 			moves[at] = spineLines(sim, r.steps, w);
 			need--;

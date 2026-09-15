@@ -59,10 +59,9 @@ interface RunState {
 	warnings: string[];
 }
 
-/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源，表达随记录），lastSeq 是定稿序位 */
+/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源，表达随记录） */
 interface Ledger {
 	records: ChronicleEntry[];
-	lastSeq: number;
 	dead: string | null;
 }
 
@@ -79,7 +78,7 @@ export class Engine {
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（表达落定）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly ledger: Ledger;
-	/** 装载期诊断：形状损坏条目与档案链断的显形出口。 */
+	/** 装载期诊断：形状损坏条目、末尾不完整与记录不可应用的显形出口。 */
 	readonly loadWarnings: readonly string[];
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
@@ -128,7 +127,7 @@ export class Engine {
 
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const loaded = options.archive?.load(def);
-		const ledger: Ledger = { records: loaded?.records ?? [], lastSeq: loaded?.lastSeq ?? 0, dead: null };
+		const ledger: Ledger = { records: loaded?.records ?? [], dead: null };
 		const sim = loaded?.sim ?? new Simulation(def);
 		const loadWarnings = loaded?.warnings ?? [];
 
@@ -197,10 +196,12 @@ export class Engine {
 		return session;
 	}
 
-	/** 装载读入与本次会话产生的表达；缺席即该回合无表达。 */
+	/** 装载读入与本次会话产生的表达，键为回合序位（1 起）；缺席即该回合无表达。 */
 	get narrations(): ReadonlyMap<number, string> {
 		const out = new Map<number, string>();
-		for (const record of this.ledger.records) if (record.narration !== undefined) out.set(record.seq, record.narration);
+		this.ledger.records.forEach((record, i) => {
+			if (record.narration !== undefined) out.set(i + 1, record.narration);
+		});
 		return out;
 	}
 
@@ -330,7 +331,7 @@ export class Engine {
 
 	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信（重启后世界与档案停在上一回合，前缀档案无损）。 */
 	private finalizeTurn(narration: string): void {
-		const record: ChronicleEntry = deepFreeze({ seq: this.ledger.lastSeq + 1, time: this.sim.world.time, utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
+		const record: ChronicleEntry = deepFreeze({ time: this.sim.world.time, utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
 		try {
 			this.options.archive?.append(record);
 		} catch (e) {
@@ -339,7 +340,6 @@ export class Engine {
 			return;
 		}
 		this.ledger.records.push(record);
-		this.ledger.lastSeq = record.seq;
 	}
 
 	dispose(): void {
