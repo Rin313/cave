@@ -312,11 +312,6 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			console.log(JSON.stringify(await evaluate(target, `window.shell.def(${js(g)})`, timeout), null, 1));
 			return;
 		}
-		case "meta": {
-			if (g === undefined) throw new Error("meta 需要 <game>");
-			console.log(JSON.stringify(await evaluate(target, `window.shell.meta(${js(g)})`, timeout), null, 1));
-			return;
-		}
 		case "state": {
 			const [game, run] = requireRun();
 			const face = await evaluate<RunFace>(target, openExpr(game, run), timeout);

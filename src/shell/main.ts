@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openArchive, readRecords } from "../core/archive.ts";
@@ -167,18 +167,19 @@ async function agent(): Promise<AgentSpec> {
 	return { model, modelRuntime: runtime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
-/** 初始界面：settings.json 指定者优先（须存在），其次唯一可用界面；无解即抛，由装载处显形。 */
+/** 初始界面：settings.ui 优先（非空且须在注册表内）；否则唯一的游戏默认界面（name 即 game 的 ui/index.html）；具名界面永不自动启动；无解即抛，由装载处显形为引导选择面。 */
 function bootUi(): UiSite {
 	const named = stringSetting(readSettings().settings, "ui");
 	const sites = uiRegistry();
-	if (named !== undefined) {
+	if (named !== undefined && named.trim() !== "") {
 		const site = sites.get(named);
 		if (site === undefined) throw new Error(`设置的界面 ${named} 不存在：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 		return site;
 	}
-	const all = [...sites.values()];
-	if (all.length === 1) return all[0]!;
-	if (all.length === 0) throw new Error(`没有可用界面：在 ${join(ROOT, "games")} 下任一 <id>/ui 放置 index.html 或 <name>/index.html`);
+	const defaults = [...sites.values()].filter((site) => site.name === site.game);
+	if (defaults.length === 1) return defaults[0]!;
+	if (sites.size === 0) throw new Error(`没有可用界面：在 ${join(ROOT, "games")} 下任一 <id>/ui 放置 index.html 或 <name>/index.html`);
+	if (defaults.length > 1) throw new Error(`多个默认界面：${defaults.map(uiRef).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 }
 
@@ -274,16 +275,6 @@ function gameFile(root: string, id: string): string | null {
 /** 列出 <root>/games 下的可用游戏；id 升序。 */
 function listGames(root: string): string[] {
 	return subdirs(join(root, "games")).filter((id) => gameFile(root, id) !== null).sort();
-}
-
-/** 读目录清单：缺失即空对象；坏元数据回落并携错；未知游戏即 null。 */
-function readGameMeta(root: string, id: string): { meta: JsonObject; error?: string } | null {
-	const entry = gameFile(root, id);
-	if (entry === null) return null;
-	const file = join(dirname(entry), "game.json");
-	const read = readJsonObject(file);
-	if (read.error !== undefined) return { meta: {}, error: `游戏元数据不可读（${file}）：${read.error}` };
-	return { meta: read.value };
 }
 
 /** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂；模块缓存按进程，改文件后须重启壳生效。 */
@@ -429,6 +420,7 @@ function slotFace(slots: Record<string, sim.SlotDef> | undefined): SlotFace[] {
 
 const uiFace = (site: UiSite): { name: string; ref: string; game: string } => ({ name: site.name, ref: uiRef(site), game: site.game });
 
+/** 跨游戏的管理/启动面归内容：壳只提供枚举与会话协议；游戏自述与资产由内容自持，壳不设通道。 */
 ipcMain.handle("games", () => listGames(ROOT));
 
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
@@ -440,19 +432,20 @@ ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	return { game, run, ...readRecords(recordsPath(ROOT, game, run)) };
 });
 
-/** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */
-ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
-	const { session } = slot;
-	return session === null ? { game: slot.game, run: slot.run, opening: true } : { ...coords(session), busy: session.engine.busy };
-}));
+/** 活实例面：opening 即装载中，其余即引擎单飞态；time 仅在已落定时给出。 */
+interface SessionFace {
+	game: string;
+	run: string;
+	state: "opening" | "idle" | "act" | "narrate";
+	time?: number;
+}
 
-/** 游戏目录 */
-ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
-	const game = gameIn(req, "meta");
-	const read = readGameMeta(ROOT, game);
-	if (read === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
-	return { game, meta: read.meta, ...(read.error !== undefined && { error: read.error }) };
-});
+/** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */
+ipcMain.handle("sessions", (): SessionFace[] => [...sessions.values()].map((slot): SessionFace => {
+	const { session } = slot;
+	if (session === null) return { game: slot.game, run: slot.run, state: "opening" };
+	return { ...coords(session), state: session.engine.busy ?? "idle" };
+}));
 
 /** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
 ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
@@ -467,13 +460,12 @@ ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
 	return [...uiRegistry().values()].filter((s) => game === undefined || s.game === game).map(uiFace);
 });
 
-/** 换界面：只导航主窗，不动任何引擎；选择先落设置供下次启动（装载失败即抛回调用页，已改的设置由下次启动的引导面显形）。 */
-ipcMain.handle("use", async (_event, req: { ref?: unknown }) => {
-	const ref = strIn(req?.ref, "use", "ref");
+/** 呈现面切换：只导航主窗，不动引擎，不写偏好；持久偏好即 settings.ui（哑写；bootUi 解析，失效即引导面）。 */
+ipcMain.handle("navigate", async (_event, req: { ref?: unknown }) => {
+	const ref = strIn(req?.ref, "navigate", "ref");
 	const sites = uiRegistry();
 	const site = sites.get(ref);
 	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
-	patchSettings({ ui: ref });
 	if (win !== null && !win.isDestroyed()) await loadPage(win, site.file);
 });
 
@@ -504,11 +496,10 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi 回落、建会话报错）；ui 归 use（写+导航）。 */
+/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi 显形、建会话报错）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as JsonObject) };
-	if (patch.ui !== undefined) throw new Error("ui 只经 use 切换：settings:set 不接受 ui");
 	return { settings: patchSettings(patch) };
 });
 
