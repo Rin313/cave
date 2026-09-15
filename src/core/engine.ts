@@ -196,15 +196,6 @@ export class Engine {
 		return session;
 	}
 
-	/** 装载读入与本次会话产生的表达，键为回合序位（1 起）；缺席即该回合无表达。 */
-	get narrations(): ReadonlyMap<number, string> {
-		const out = new Map<number, string>();
-		this.ledger.records.forEach((record, i) => {
-			if (record.narration !== undefined) out.set(i + 1, record.narration);
-		});
-		return out;
-	}
-
 	get busy(): "act" | "narrate" | null {
 		return this.running;
 	}

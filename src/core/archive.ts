@@ -35,22 +35,19 @@ function parseArchiveLine(raw: string): ArchiveLine | null {
 	return { kind: "record", record: deepFreeze({ time: r.time, utterance: r.utterance as string, steps: r.steps as Commit[], ...(narration !== undefined && { narration }) }) };
 }
 
-/** 档案全读：缺席即 null；坏行、末尾半行、回合及其表达一并返回（narrations 是 records 的派生视图，键为解析序位），装载与诊断共用同一读法。 */
-export function readRecords(path: string): { records: ChronicleEntry[]; narrations: { turn: number; narration: string }[]; broken: number; incomplete: boolean } | null {
+/** 档案全读：缺席即 null；坏行、末尾半行、回合（表达随记录）一并返回，装载与诊断共用同一读法。 */
+export function readRecords(path: string): { records: ChronicleEntry[]; broken: number; incomplete: boolean } | null {
 	if (!existsSync(path)) return null;
 	const text = readFileSync(path, "utf8");
 	const records: ChronicleEntry[] = [];
-	const narrations: { turn: number; narration: string }[] = [];
 	let broken = 0;
 	for (const raw of text.split("\n")) {
 		const line = parseArchiveLine(raw);
 		if (line === null) continue;
-		if (line.kind === "record") {
-			records.push(line.record);
-			if (line.record.narration !== undefined) narrations.push({ turn: records.length, narration: line.record.narration });
-		} else broken += 1;
+		if (line.kind === "record") records.push(line.record);
+		else broken += 1;
 	}
-	return { records, narrations, broken, incomplete: text !== "" && !text.endsWith("\n") };
+	return { records, broken, incomplete: text !== "" && !text.endsWith("\n") };
 }
 
 /** 整档替换：临时文件 + rename，中途失败或崩溃不改原档。 */
@@ -75,7 +72,7 @@ export function openArchive(path: string): ArchiveStore {
 	return {
 		load(def) {
 			const warnings: string[] = [];
-			const read = readRecords(path) ?? { records: [], narrations: [], broken: 0, incomplete: false };
+			const read = readRecords(path) ?? { records: [], broken: 0, incomplete: false };
 			if (read.broken) warnings.push(`档案条目 ${read.broken} 条形状损坏`);
 			if (read.incomplete) warnings.push("档案末尾不完整（无换行）：截断至最后完整条目");
 			const sim = new Simulation(def);
