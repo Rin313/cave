@@ -1,12 +1,12 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { readRecords } from "../core/archive.ts";
 import type { ActOutcome, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
-import { configDir, dataDir, isSegment, recordsPath } from "../core/paths.ts";
+import { isSegment, recordsPath, rootDir } from "../core/paths.ts";
 import { listRuns, ModelConfigError, openModelRuntime, openRun } from "../core/runs.ts";
 import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "../core/settings.ts";
 import { installModel } from "./model.ts";
@@ -42,19 +42,16 @@ app.on("second-instance", () => {
 	win.focus();
 });
 
-const USER_DATA = app.getPath("userData");
-/** 数据根：runs 与用户级内容（games）的所在；引擎包内不复含内容。 */
-const DATA_ROOT = dataDir(USER_DATA);
-/** 包外资源根：随安装分发，位于 asar 之外；dev 无此层。 */
-const RESOURCE_ROOT = process.resourcesPath;
-/** 内容根：数据根 → 包外资源（仅打包分发）；同名前者遮蔽后者。 */
-const CONTENT_ROOTS = app.isPackaged ? [DATA_ROOT, RESOURCE_ROOT] : [DATA_ROOT];
-/** 配置根（用户级全局）：凭据、模型与界面偏好，与 CLI 共用；运行数据（runs）另按数据根。 */
-const CONFIG_DIR = configDir(USER_DATA);
-const SETTINGS_FILE = settingsPath(CONFIG_DIR);
-/** 分发缺省（仅打包）：位于资源根、只读；用户文件只存覆盖，故缺省可随包更新；文件缺席即无此层。 */
+/** 根：games、runs 与配置（settings、auth、models）的共同所在；缺省取宿主用户数据目录。 */
+const ROOT = rootDir(app.getPath("userData"));
+/** 分发资源根：打包取 asar 之外的安装资源目录，dev 取应用路径（仓库）；游戏与界面随此分发。 */
+const RESOURCE_ROOT = app.isPackaged ? process.resourcesPath : app.getAppPath();
+/** 内容根：根（用户覆盖）→ 分发资源根；同名前者遮蔽后者。 */
+const CONTENT_ROOTS = [...new Set([ROOT, RESOURCE_ROOT])];
+const SETTINGS_FILE = settingsPath(ROOT);
+/** 分发缺省：位于资源根、只读；用户文件只存覆盖，故缺省可随包更新；文件缺席即无此层。 */
 const SETTINGS_DEFAULT = join(RESOURCE_ROOT, "settings.json");
-const SETTINGS_DEFAULTS = app.isPackaged && existsSync(SETTINGS_DEFAULT) ? [SETTINGS_DEFAULT] : [];
+const SETTINGS_DEFAULTS = existsSync(SETTINGS_DEFAULT) ? [SETTINGS_DEFAULT] : [];
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
@@ -62,7 +59,7 @@ let runtime: Promise<ModelRuntime> | null = null;
 /** 壳与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败归配置错误（引向配置面）并弃置，下次重试。 */
 function modelRuntime(): Promise<ModelRuntime> {
 	if (runtime === null) {
-		runtime = openModelRuntime(CONFIG_DIR).catch((e: unknown) => {
+		runtime = openModelRuntime(ROOT).catch((e: unknown) => {
 			runtime = null;
 			throw new ModelConfigError(`模型运行时不可用：${String(e)}`);
 		});
@@ -112,11 +109,11 @@ function uiRegistry(): ReadonlyMap<string, UiSite> {
 /** 界面 ref 清单（诊断文案用）。 */
 const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
-const settings = (): Settings => readSettings(CONFIG_DIR, SETTINGS_DEFAULTS);
+const settings = (): Settings => readSettings(ROOT, SETTINGS_DEFAULTS);
 
 /** 写入用户层（只存覆盖，分发缺省不固化）；返回写入后的合并态。 */
 function saveSettings(patch: Settings): Settings {
-	return patchSettings(CONFIG_DIR, patch, SETTINGS_DEFAULTS);
+	return patchSettings(ROOT, patch, SETTINGS_DEFAULTS);
 }
 
 /** 初始界面：settings.json 指定者优先，其次唯一可用界面；解析失败回落壳内引导面。 */
@@ -212,7 +209,7 @@ function openSettings(): void {
 
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
-	const engine = await openRun(game, run, { root: DATA_ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime });
+	const engine = await openRun(game, run, { root: ROOT, gameRoots: CONTENT_ROOTS, settingLayers: SETTINGS_DEFAULTS, modelRuntime });
 	const unsubscribe = engine.subscribe((event) => {
 		if (win !== null && !win.isDestroyed()) win.webContents.send("event", { game, run, event });
 	});
@@ -310,12 +307,12 @@ const uiFace = (site: UiSite): { name: string; ref: string; game: string } => ({
 ipcMain.handle("games", () => listGames(CONTENT_ROOTS));
 
 /** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
-ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(DATA_ROOT, idIn(req, "runs")));
+ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, idIn(req, "runs")));
 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
-	const path = recordsPath(game, run, DATA_ROOT);
+	const path = recordsPath(game, run, ROOT);
 	const read = readRecords(path);
 	if (read === null) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
 	return { game, run, ...read };
@@ -364,7 +361,16 @@ ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 
 ipcMain.handle("settings", () => settings());
 
-ipcMain.handle("env", () => ({ configDir: CONFIG_DIR }));
+ipcMain.handle("env", () => ({ root: ROOT }));
+
+/** 打开根下目录（不存在即建）：界面据此暴露内容与配置的可写位置。 */
+ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
+	const dir = req?.dir ?? "";
+	if (typeof dir !== "string" || (dir !== "" && !isSegment(dir))) throw new Error("reveal 的 dir 须为根下的路径段");
+	const path = join(ROOT, dir);
+	mkdirSync(path, { recursive: true });
+	return shell.openPath(path);
+});
 
 /** 写入是哑的：patch 原样落用户层，宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话的 ModelConfigError）；ui 归 use（写+导航）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {

@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld("shell", {
 	use: (ref) => ipcRenderer.invoke("use", { ref }),
 	settings: () => ipcRenderer.invoke("settings"),
 	env: () => ipcRenderer.invoke("env"),
+	reveal: (dir) => ipcRenderer.invoke("reveal", { dir }),
 	setSettings: (patch) => ipcRenderer.invoke("settings:set", { patch }),
 	openSettings: () => ipcRenderer.invoke("settings:open"),
 	models: () => ipcRenderer.invoke("models"),

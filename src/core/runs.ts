@@ -4,7 +4,7 @@ import { getDocsPath, ModelRuntime, resolveCliModel, type CreateAgentSessionOpti
 import { openArchive } from "./archive.ts";
 import { Engine } from "./engine.ts";
 import { loadGame } from "./games.ts";
-import { configDir, dataDir, recordsPath, runsDir } from "./paths.ts";
+import { recordsPath, rootDir, runsDir } from "./paths.ts";
 import { readSettings, settingsPath, stringSetting, type Settings } from "./settings.ts";
 
 /** 存档目录的派生清单：runs/<game>/<run>/records.jsonl。 */
@@ -75,7 +75,7 @@ export function resolveModelRef(ref: string, modelRuntime: ModelRuntime): ModelR
 }
 
 export interface OpenRunOptions {
-	/** 数据根：runs 的所在；缺省 dataDir()。 */
+	/** 根：runs、games 与配置（settings、auth、models）的所在；缺省 rootDir()。 */
 	root?: string;
 	/** 游戏查找链（先见者遮蔽）；缺省 [root]。 */
 	gameRoots?: readonly string[];
@@ -87,27 +87,26 @@ export interface OpenRunOptions {
 
 /** 装载（或新建）一次运行。模型与凭据只在 act/narrate 建会话时解析，设置每次都重读。 */
 export async function openRun(game: string, run: string, options: OpenRunOptions = {}): Promise<Engine> {
-	const root = options.root ?? dataDir();
+	const root = options.root ?? rootDir();
 	const gameRoots = options.gameRoots ?? [root];
-	const config = configDir();
-	const file = settingsPath(config);
+	const file = settingsPath(root);
 	const agent = async () => {
 		const layers = options.settingLayers ?? [];
-		const { ref, source } = modelReference(game, readSettings(config, layers), file, layers.length > 0);
-		const loadRuntime = options.modelRuntime ?? (() => openModelRuntime(config));
+		const { ref, source } = modelReference(game, readSettings(root, layers), file, layers.length > 0);
+		const loadRuntime = options.modelRuntime ?? (() => openModelRuntime(root));
 		const modelRuntime = await loadRuntime();
 		const resolved = resolveModelRef(ref, modelRuntime);
 		if (!resolved.ok) throw new ModelConfigError(`模型 "${ref}"（${source}）不可用：${resolved.reason}`);
 		if (resolved.warning) console.warn(`⚠ ${resolved.warning}`);
 		const { model, thinkingLevel } = resolved;
 		if (!(await modelRuntime.checkAuth(model.provider))) {
-			throw new ModelConfigError(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(config, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
+			throw new ModelConfigError(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(root, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
 		}
 		return { model, modelRuntime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 	};
 	return Engine.create(await loadGame(game, gameRoots), {
 		agent,
-		agentDir: config,
+		agentDir: root,
 		archive: openArchive(recordsPath(game, run, root)),
 	});
 }

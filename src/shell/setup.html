@@ -113,7 +113,7 @@
 			<ul id="modelList"></ul>
 		</div>
 	</section>
-	<footer><p id="advanced" class="muted"></p></footer>
+	<footer><p id="advanced" class="muted"></p><div class="row"><button id="openRoot" type="button"></button><button id="openGames" type="button"></button></div></footer>
 </main>
 <script>
 (() => {
@@ -132,13 +132,15 @@ const text = {
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
 	"boot": ["界面未能自动解析：{error}", "Could not resolve a user interface: {error}"],
 	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json（与 CLI 共用）。", "Advanced: edit settings.json and auth.json under {dir} directly (shared with the CLI)."],
+	"open.root": ["打开根目录", "Open root folder"],
+	"open.games": ["打开 games 目录", "Open games folder"],
 	"current": ["当前", "Current"],
 	"use": ["使用", "Use"],
 	"configured": ["已配置", "Configured"],
 	"unconfigured": ["未配置", "Not configured"],
 	"ui.section": ["界面", "Interface"],
 	"ui.scope": ["（{game}）", " ({game})"],
-	"ui.none": ["没有可用界面：在数据根的 games/<id>/ui/index.html（缺省）或 games/<id>/ui/<name>/index.html 放置界面。", "No user interface available: add games/<id>/ui/index.html (default) or games/<id>/ui/<name>/index.html under the data root."],
+	"ui.none": ["没有可用界面：在 games/<id>/ui/index.html（缺省）或 games/<id>/ui/<name>/index.html 放置界面。", "No user interface available: add games/<id>/ui/index.html (default) or games/<id>/ui/<name>/index.html."],
 	"model.section": ["模型与凭据", "Models & credentials"],
 	"model.current": ["当前模型：{model}", "Current model: {model}"],
 	"model.loading": ["加载…", "Loading…"],
@@ -176,8 +178,12 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("title").textContent = t("title");
 	$("close").textContent = t("close");
 	$("close").onclick = () => window.close();
+	$("openRoot").textContent = t("open.root");
+	$("openRoot").onclick = () => shell.reveal();
+	$("openGames").textContent = t("open.games");
+	$("openGames").onclick = () => shell.reveal("games");
 	$("modelTitle").textContent = t("model.section");
-	$("advanced").textContent = t("advanced", { dir: env.configDir });
+	$("advanced").textContent = t("advanced", { dir: env.root });
 	$("search").placeholder = t("model.filter");
 	$("all").textContent = t("model.all");
 	$("search").oninput = drawModels;

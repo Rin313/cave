@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { dataDir } from "../core/paths.ts";
+import { rootDir } from "../core/paths.ts";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 
@@ -174,7 +174,7 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string): Promise<T
 		await sleep(150);
 	}
 	child.kill();
-	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根 games/<id>/ui/index.html 提供界面，打包另可在 resources/games${logTail()}`);
+	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根或资源根（dev 为应用目录，打包为 resources）的 games/<id>/ui/index.html 提供界面${logTail()}`);
 }
 
 /** 重连或启动宿主：参数不符时报错，进程已死则清理残留后重启。 */
@@ -407,7 +407,7 @@ async function main(): Promise<void> {
 	if (!cmd) throw new Error("需要命令");
 	const rawExe = flagStr(a, "exe");
 	const exe = rawExe === undefined ? undefined : resolve(rawExe);
-	const dataRoot = resolve(flagStr(a, "data-dir") ?? dataDir());
+	const dataRoot = resolve(flagStr(a, "data-dir") ?? rootDir());
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
 	if (cmd === "stop") {
