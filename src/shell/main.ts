@@ -263,17 +263,10 @@ function openSettings(): void {
 	loadPage(settingsWin, file);
 }
 
-/** 条目名按此序查找；游戏即 <root>/games 下的同名目录。 */
-const ENTRIES = ["index.ts", "index.js", "index.mjs"];
-
-/** id 是路径段：不做路径解析。 */
 function gameFile(root: string, id: string): string | null {
 	if (!isSegment(id)) return null;
-	for (const name of ENTRIES) {
-		const file = join(root, "games", id, name);
-		if (existsSync(file)) return file;
-	}
-	return null;
+	const file = join(root, "games", id, "index.ts");
+	return existsSync(file) ? file : null;
 }
 
 /** 列出 <root>/games 下的可用游戏；id 升序。 */
