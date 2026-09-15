@@ -319,10 +319,7 @@ ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
-	const path = recordsPath(game, run, ROOT);
-	const read = readRecords(path);
-	if (read === null) throw new Error(`运行 ${game}/${run} 无回合记录（${path}）`);
-	return { game, run, ...read };
+	return { game, run, ...readRecords(recordsPath(game, run, ROOT)) };
 });
 
 /** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */

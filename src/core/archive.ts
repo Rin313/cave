@@ -35,9 +35,9 @@ function parseArchiveLine(raw: string): ArchiveLine | null {
 	return { kind: "record", record: deepFreeze({ time: r.time, utterance: r.utterance as string, steps: r.steps as Commit[], ...(narration !== undefined && { narration }) }) };
 }
 
-/** 档案全读：缺席即 null；坏行、末尾半行、回合（表达随记录）一并返回，装载与诊断共用同一读法。 */
-export function readRecords(path: string): { records: ChronicleEntry[]; broken: number; incomplete: boolean } | null {
-	if (!existsSync(path)) return null;
+/** 档案全读：缺席即空档案（新运行）；坏行、末尾半行、回合（表达随记录）一并返回，装载与诊断共用同一读法。 */
+export function readRecords(path: string): { records: ChronicleEntry[]; broken: number; incomplete: boolean } {
+	if (!existsSync(path)) return { records: [], broken: 0, incomplete: false };
 	const text = readFileSync(path, "utf8");
 	const records: ChronicleEntry[] = [];
 	let broken = 0;
@@ -72,7 +72,7 @@ export function openArchive(path: string): ArchiveStore {
 	return {
 		load(def) {
 			const warnings: string[] = [];
-			const read = readRecords(path) ?? { records: [], broken: 0, incomplete: false };
+			const read = readRecords(path);
 			if (read.broken) warnings.push(`档案条目 ${read.broken} 条形状损坏`);
 			if (read.incomplete) warnings.push("档案末尾不完整（无换行）：截断至最后完整条目");
 			const sim = new Simulation(def);
