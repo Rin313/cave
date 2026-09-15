@@ -1,13 +1,12 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { readRecords } from "../core/archive.ts";
-import type { ActOutcome, AgentSpec, Engine, NarrationOutcome } from "../core/engine.ts";
-import { listGames, loadGame, readGameMeta } from "../core/games.ts";
-import { verbFace, type SlotDef } from "../core/sim.ts";
-import { isSegment, readJsonObject, recordsPath, rootDir, subdirs } from "../core/paths.ts";
-import { listRuns, openRun } from "../core/runs.ts";
+import { openArchive, readRecords } from "../core/archive.ts";
+import { Engine, type ActOutcome, type AgentSpec, type NarrationOutcome } from "../core/engine.ts";
+import { isSegment, readJsonObject, recordsPath, rootDir, runsDir, subdirs } from "../core/paths.ts";
+import * as sim from "../core/sim.ts";
 import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace, type ModelResolution } from "./model.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -227,6 +226,82 @@ function openSettings(): void {
 	loadPage(settingsWin, file);
 }
 
+/** 条目名按此序查找；游戏即 <root>/games 下的同名目录。 */
+const ENTRIES = ["index.ts", "index.js", "index.mjs"];
+
+/** id 是路径段：不做路径解析。 */
+function gameFile(root: string, id: string): string | null {
+	if (!isSegment(id)) return null;
+	for (const name of ENTRIES) {
+		const file = join(root, "games", id, name);
+		if (existsSync(file)) return file;
+	}
+	return null;
+}
+
+/** 列出 <root>/games 下的可用游戏；id 升序。 */
+function listGames(root: string): string[] {
+	return subdirs(join(root, "games")).filter((id) => gameFile(root, id) !== null).sort();
+}
+
+type GameMeta = Record<string, unknown>;
+
+/** 读目录清单：缺失即空对象；坏元数据回落并携错；未知游戏即 null。 */
+function readGameMeta(root: string, id: string): { meta: GameMeta; error?: string } | null {
+	const entry = gameFile(root, id);
+	if (entry === null) return null;
+	const parsed = readJsonObject(join(dirname(entry), "game.json"));
+	if (parsed === null) return { meta: {} };
+	if (parsed.value === null) return { meta: {}, error: `游戏元数据${parsed.error}` };
+	return { meta: parsed.value };
+}
+
+/** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂；模块缓存按进程，改文件后须重启壳生效。 */
+async function loadGame(root: string, id: string): Promise<sim.GameDef> {
+	const file = gameFile(root, id);
+	if (file === null) throw new Error(`未知游戏：${id}（可用：${listGames(root).join(", ") || "无"}）`);
+	let mod: { default?: unknown };
+	try {
+		mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
+	} catch (e) {
+		throw new Error(`游戏 ${id} 装载失败（${file}）：${String(e)}`);
+	}
+	const def = typeof mod.default === "function" ? (mod.default as (core: typeof sim) => sim.GameDef)(sim) : mod.default;
+	if (def === null || typeof def !== "object") throw new Error(`游戏 ${id} 未导出 GameDef（${file}）`);
+	return def as sim.GameDef;
+}
+
+/** 存档目录的派生清单：runs/<game>/<run>/records.jsonl。 */
+interface RunFace {
+	game: string;
+	run: string;
+	mtime: number;
+}
+
+/** 枚举存档（按记录文件 mtime 降序）；game 缺席即扫全部游戏目录。 */
+function listRuns(root: string, game?: string): RunFace[] {
+	const games = game !== undefined ? [game] : subdirs(runsDir(root));
+	const out: RunFace[] = [];
+	for (const g of games) {
+		for (const run of subdirs(runsDir(root, g))) {
+			const stat = statSync(recordsPath(root, g, run), { throwIfNoEntry: false });
+			if (stat === undefined) continue;
+			out.push({ game: g, run, mtime: stat.mtimeMs });
+		}
+	}
+	out.sort((a, b) => b.mtime - a.mtime);
+	return out;
+}
+
+/** 装载（或新建）一次运行；世界与档案就绪，模型到建会话时才解析。 */
+async function openRun(root: string, game: string, run: string, agent: () => Promise<AgentSpec>): Promise<Engine> {
+	return Engine.create(await loadGame(root, game), {
+		agent,
+		agentDir: root,
+		archive: openArchive(recordsPath(root, game, run)),
+	});
+}
+
 /** 事件按实例身份分流；界面自行按 (game, run) 过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
 	const engine = await openRun(ROOT, game, run, agent);
@@ -316,9 +391,9 @@ function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: s
 }
 
 /** 注册槽静态面：核心 SlotDef 加内部键；界面据此生成控件。 */
-type SlotFace = SlotDef & { key: string };
+type SlotFace = sim.SlotDef & { key: string };
 
-function slotFace(slots: Record<string, SlotDef> | undefined): SlotFace[] {
+function slotFace(slots: Record<string, sim.SlotDef> | undefined): SlotFace[] {
 	return Object.entries(slots ?? {}).map(([key, d]) => ({ key, ...d }));
 }
 
@@ -355,7 +430,7 @@ ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "def");
 	if (game === undefined) throw new Error("def 需要游戏 id");
 	const def = await loadGame(ROOT, game);
-	return { game, verbs: verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
+	return { game, verbs: sim.verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
 });
 
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；序稳定。 */
