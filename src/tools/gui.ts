@@ -150,10 +150,10 @@ async function waitHost(exe: string, dataRoot: string, ms: number): Promise<Targ
 /** 脱离父进程启动宿主；就绪后才落盘状态（并发竞争由单实例锁收敛到先到者）。 */
 async function spawnHost(exe: string, dev: boolean, dataRoot: string): Promise<Target> {
 	const port = await freePort();
-	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*"];
+	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*", `--user-data-dir=${dataRoot}`];
 	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot}）\n`, "utf8");
 	const fd = openSync(HOST_LOG, "a");
-	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd], env: { ...process.env, ENGINE_DATA_DIR: dataRoot } });
+	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd] });
 	closeSync(fd);
 	child.unref();
 	const deadline = Date.now() + 30_000;

@@ -10,9 +10,9 @@ function platformUserData(): string {
 	return join(base, "cave");
 }
 
-/** 根：games、runs 与配置（settings、auth、models）的共同所在；ENGINE_DATA_DIR 覆盖，缺省取宿主注入的用户数据目录。 */
+/** 根：games、runs 与配置（settings、auth、models）的共同所在；缺省取宿主注入的用户数据目录。 */
 export function rootDir(hostRoot?: string): string {
-	return process.env.ENGINE_DATA_DIR ?? hostRoot ?? platformUserData();
+	return hostRoot ?? platformUserData();
 }
 
 /** 路径段：id 不做路径解析。 */

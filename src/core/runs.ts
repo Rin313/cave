@@ -39,14 +39,11 @@ export function listRuns(root: string, game?: string): RunFace[] {
 /** 模型与凭据未就绪：宿主据此把用户引向配置面（文件、CLI 或壳暴露的配置协议）。 */
 export class ModelConfigError extends Error {}
 
-/** 模型是单一引用 `provider/model[:thinking]`：合并设置（分发缺省 ← 用户层）给缺省，环境变量按游戏 id 覆盖。 */
-function modelReference(game: string, settings: Settings, file: string, hasDefaults: boolean): { ref: string; source: string } {
-	const name = `${game.toUpperCase()}_MODEL`;
-	const fromEnv = process.env[name];
-	if (fromEnv) return { ref: fromEnv, source: name };
+/** 模型是单一引用 `provider/model[:thinking]`：合并设置（分发缺省 ← 用户层）给缺省。 */
+function modelReference(settings: Settings, file: string, hasDefaults: boolean): { ref: string; source: string } {
 	const ref = stringSetting(settings, "model");
 	if (ref !== undefined && ref.trim() !== "") return { ref, source: hasDefaults ? `${file} 或分发缺省` : file };
-	throw new ModelConfigError(`模型未配置：在 ${file} 写入 { "model": "provider/model[:thinking]" }，或设置 ${name} 环境变量`);
+	throw new ModelConfigError(`模型未配置：在 ${file} 写入 { "model": "provider/model[:thinking]" }`);
 }
 
 /** 凭据与模型表随用户级配置根自持：不读 pi agent 的 ~/.pi/agent，用户无需安装 pi agent 或 /login。 */
@@ -92,7 +89,7 @@ export async function openRun(game: string, run: string, options: OpenRunOptions
 	const file = settingsPath(root);
 	const agent = async () => {
 		const layers = options.settingLayers ?? [];
-		const { ref, source } = modelReference(game, readSettings(root, layers), file, layers.length > 0);
+		const { ref, source } = modelReference(readSettings(root, layers), file, layers.length > 0);
 		const loadRuntime = options.modelRuntime ?? (() => openModelRuntime(root));
 		const modelRuntime = await loadRuntime();
 		const resolved = resolveModelRef(ref, modelRuntime);
