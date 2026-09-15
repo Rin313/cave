@@ -1,11 +1,10 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openArchive, readRecords } from "../core/archive.ts";
 import { Engine, type ActOutcome, type AgentSpec, type NarrationOutcome } from "../core/engine.ts";
-import { isSegment, readJsonObject, recordsPath, runsDir, subdirs } from "../core/paths.ts";
 import * as sim from "../core/sim.ts";
 import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace, type ModelResolution } from "./model.ts";
 
@@ -43,6 +42,39 @@ app.on("second-instance", () => {
 /** 根：games、runs 与配置（settings、auth、models）的共同所在；即宿主用户数据目录（--user-data-dir 可覆盖）。 */
 const ROOT = app.getPath("userData");
 const SETTINGS_FILE = join(ROOT, "settings.json");
+
+/** 路径段：id 不做路径解析。 */
+function isSegment(v: unknown): v is string {
+	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/]/.test(v);
+}
+
+function runsDir(root: string, game?: string): string {
+	const base = join(root, "runs");
+	return game === undefined ? base : join(base, game);
+}
+
+function recordsPath(root: string, game: string, run: string): string {
+	return join(runsDir(root, game), run, "records.jsonl");
+}
+
+/** 目录下的直接子目录名；目录缺席即空。 */
+function subdirs(dir: string): string[] {
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+}
+
+/** 读 JSON 对象：缺席与破损都按空对象；破损原因不含文件名，由调用方补全语境。 */
+function readJsonObject(file: string): { value: Record<string, unknown>; error?: string } {
+	if (!existsSync(file)) return { value: {} };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(file, "utf8"));
+	} catch (e) {
+		return { value: {}, error: `JSON 解析失败：${String(e)}` };
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: {}, error: "须为 JSON 对象" };
+	return { value: parsed as Record<string, unknown> };
+}
 
 type Settings = Record<string, unknown>;
 
