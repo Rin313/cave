@@ -8,7 +8,7 @@ import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
 import { isSegment, recordsPath, rootDir } from "../core/paths.ts";
 import { listRuns, openRun } from "../core/runs.ts";
-import { installModel, openModelRuntime, resolveModelRef } from "./model.ts";
+import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace } from "./model.ts";
 import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "./settings.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -367,6 +367,19 @@ ipcMain.handle("use", (_event, req: { ref?: unknown }) => {
 });
 
 ipcMain.handle("settings", () => settings());
+
+/** 当前模型的解析面：规范化 ref、显式档位与受支持档位；未配置即 null，解析失败即 error。 */
+ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } | null> => {
+	const ref = stringSetting(settings(), "model");
+	if (ref === undefined || ref.trim() === "") return null;
+	const resolved = resolveModelRef(ref, await modelRuntime());
+	if (!resolved.ok) return { error: resolved.reason };
+	return {
+		ref: modelRef(resolved.model),
+		...(resolved.thinkingLevel !== undefined && { level: resolved.thinkingLevel }),
+		thinkingLevels: supportedThinkingLevels(resolved.model),
+	};
+});
 
 ipcMain.handle("env", () => ({ root: ROOT }));
 

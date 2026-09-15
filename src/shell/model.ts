@@ -1,6 +1,6 @@
 import { ipcMain, type Event, type WebContents, type WebContentsDidStartNavigationEventParams } from "electron";
 import { join } from "node:path";
-import { ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, resolveCliModel, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import type { AgentSpec } from "../core/engine.ts";
 
 type Interaction = Parameters<ModelRuntime["login"]>[2];
@@ -19,12 +19,38 @@ interface ProviderInfo {
 	oauth?: { label: string; subscription: boolean };
 }
 
+type ThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
+
 interface ModelRef {
 	ref: string;
 	provider: string;
 	id: string;
 	name: string;
 	available: boolean;
+	thinkingLevels: readonly ThinkingLevel[];
+}
+
+/** pi 的思考档全序；实际子集由 reasoning 与 thinkingLevelMap 决定。 */
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
+
+/** 与 pi-ai getSupportedThinkingLevels 同义（SDK 根不导出，pi-ai 非直接依赖）：非推理模型仅 off；null 隐藏；xhigh/max 须显式开启。 */
+export function supportedThinkingLevels(model: AgentSpec["model"]): readonly ThinkingLevel[] {
+	if (!model.reasoning) return ["off"];
+	return THINKING_LEVELS.filter((level) => {
+		const mapped = model.thinkingLevelMap?.[level];
+		if (mapped === null) return false;
+		return level === "xhigh" || level === "max" ? mapped !== undefined : true;
+	});
+}
+
+export const modelRef = (model: AgentSpec["model"]): string => `${model.provider}/${model.id}`;
+
+/** 当前模型的解析面：规范化 ref、显式档位与受支持档位；供配置面渲染思考档。 */
+export interface ModelFace {
+	ref: string;
+	/** 显式档位；缺席即无偏好（由 SDK 缺省与模型能力收敛）。 */
+	level?: ThinkingLevel;
+	thinkingLevels: readonly ThinkingLevel[];
 }
 
 /** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄（AuthPrompt 是 union，直接 Omit 会塌成公共键）。 */
@@ -104,10 +130,10 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 
 	ipcMain.handle("models", async (): Promise<ModelRef[]> => {
 		const runtime = await load();
-		const available = new Set((await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`));
+		const available = new Set((await runtime.getAvailable()).map((m) => modelRef(m)));
 		return runtime.getModels().map((m) => {
-			const ref = `${m.provider}/${m.id}`;
-			return { ref, provider: m.provider, id: m.id, name: m.name, available: available.has(ref) };
+			const ref = modelRef(m);
+			return { ref, provider: m.provider, id: m.id, name: m.name, available: available.has(ref), thinkingLevels: supportedThinkingLevels(m) };
 		});
 	});
 

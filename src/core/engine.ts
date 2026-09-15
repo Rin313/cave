@@ -15,6 +15,7 @@ import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPromp
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
 	modelRuntime: ModelRuntime;
+	/** 缺席即无偏好：缺省档（medium）与模型能力的收敛由 SDK 建会话时完成。 */
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 }
 
@@ -173,7 +174,7 @@ export class Engine {
 		const { session } = await createAgentSession({
 			model,
 			modelRuntime,
-			thinkingLevel: thinkingLevel ?? "high",
+			...(thinkingLevel !== undefined && { thinkingLevel }),
 			resourceLoader: this.loader,
 			settingsManager: this.settingsManager,
 			sessionManager: this.sessionManager,

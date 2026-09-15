@@ -65,6 +65,9 @@
 	#close { background: var(--pink); color: #141414; }
 	#close:hover { background: var(--amber); }
 	#current { width: fit-content; max-width: 100%; padding: 4px 10px 5px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; background: var(--chip); border: 2px solid var(--ink); }
+	#thinking:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 0; }
+	#thinking button { padding: 3px 9px; font-size: 12px; box-shadow: 2px 2px 0 var(--shadow); }
+	#thinking button.on { background: var(--amber); color: #141414; }
 	#flow { margin: 14px 0; padding: 14px; background: var(--wash); border: 3px solid var(--ink); box-shadow: 6px 6px 0 var(--shadow); }
 	#flow a { display: inline-block; margin: 2px 8px 2px 0; padding: 2px 9px; font-weight: 700; color: #141414; text-decoration: none; background: var(--cyan); border: 2px solid var(--ink); box-shadow: 3px 3px 0 var(--shadow); }
 	#flow a:hover { background: var(--amber); }
@@ -100,6 +103,8 @@
 	<section>
 		<h2 id="modelTitle"></h2>
 		<p id="current"></p>
+		<p id="currentError" class="err" hidden></p>
+		<div id="thinking" hidden><span id="thinkingLabel" class="tag"></span></div>
 		<div id="providers"></div>
 		<div id="flow" hidden>
 			<div id="notices"></div>
@@ -136,6 +141,9 @@ const text = {
 	"open.games": ["打开 games 目录", "Open games folder"],
 	"current": ["当前", "Current"],
 	"use": ["使用", "Use"],
+	"thinking.label": ["思考档", "Thinking"],
+	"thinking.default": ["默认", "Default"],
+	"thinking.hint": ["默认即 SDK 缺省档；超出模型能力的档位自动收敛。", "Default uses the SDK default level; levels beyond model capability clamp automatically."],
 	"configured": ["已配置", "Configured"],
 	"unconfigured": ["未配置", "Not configured"],
 	"ui.section": ["界面", "Interface"],
@@ -143,6 +151,7 @@ const text = {
 	"ui.none": ["没有可用界面：在 games/<id>/ui/index.html（缺省）或 games/<id>/ui/<name>/index.html 放置界面。", "No user interface available: add games/<id>/ui/index.html (default) or games/<id>/ui/<name>/index.html."],
 	"model.section": ["模型与凭据", "Models & credentials"],
 	"model.current": ["当前模型：{model}", "Current model: {model}"],
+	"model.error": ["模型不可用：{error}", "Model unavailable: {error}"],
 	"model.loading": ["加载…", "Loading…"],
 	"model.noCredentials": ["未配置凭据", "No credentials"],
 	"model.logout": ["退出登录", "Sign out"],
@@ -173,6 +182,8 @@ document.documentElement.lang = zh ? "zh" : "en";
 	let settings = await shell.settings();
 	let allModels = [];
 	let showAll = false;
+	let face = null;
+	let busy = false;
 
 	document.title = t("title");
 	$("title").textContent = t("title");
@@ -184,6 +195,8 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("openGames").onclick = () => shell.reveal("games");
 	$("modelTitle").textContent = t("model.section");
 	$("advanced").textContent = t("advanced", { dir: env.root });
+	$("thinkingLabel").textContent = t("thinking.label");
+	$("thinking").title = t("thinking.hint");
 	$("search").placeholder = t("model.filter");
 	$("all").textContent = t("model.all");
 	$("search").oninput = drawModels;
@@ -200,12 +213,68 @@ document.documentElement.lang = zh ? "zh" : "en";
 		$("uiTitle").textContent = t("ui.section");
 		await renderUis();
 	}
-	refreshCurrent();
+	await refreshCurrent();
 	await renderProviders();
 	await renderModels();
 
-	function refreshCurrent() {
-		$("current").textContent = t("model.current", { model: typeof settings.model === "string" ? settings.model : t("unconfigured") });
+	function currentRef() {
+		return typeof settings.model === "string" ? settings.model : "";
+	}
+
+	/** 解析在壳内完成（与 SDK 同一解析器）：UI 不猜后缀，只渲染解析面。 */
+	async function currentFace() {
+		try {
+			return await shell.currentModel();
+		} catch (e) {
+			return { error: reason(e) };
+		}
+	}
+
+	function renderThinking() {
+		const row = $("thinking");
+		const resolved = face !== null && face.error === undefined;
+		const levels = resolved ? face.thinkingLevels : [];
+		row.hidden = levels.length === 0;
+		const buttons = [button(t("thinking.default"), () => void applyLevel(""))];
+		buttons[0].dataset.level = "";
+		for (const level of levels) {
+			const b = button(level, () => void applyLevel(level));
+			b.dataset.level = level;
+			buttons.push(b);
+		}
+		row.replaceChildren($("thinkingLabel"), ...buttons);
+		const current = resolved && face.level !== undefined ? face.level : "";
+		for (const b of buttons) b.classList.toggle("on", b.dataset.level === current);
+	}
+
+	async function applyModel(model) {
+		if (busy) return;
+		busy = true;
+		try {
+			settings = await shell.setSettings({ model });
+			await refreshCurrent();
+			drawModels();
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function applyLevel(level) {
+		if (face === null || face.error !== undefined) return;
+		try {
+			await applyModel(level === "" ? face.ref : `${face.ref}:${level}`);
+		} catch (e) {
+			alert(reason(e));
+		}
+	}
+
+	async function refreshCurrent() {
+		$("current").textContent = t("model.current", { model: currentRef() || t("unconfigured") });
+		face = await currentFace();
+		const error = face !== null && face.error !== undefined ? face.error : null;
+		$("currentError").hidden = error === null;
+		if (error !== null) $("currentError").textContent = t("model.error", { error });
+		renderThinking();
 	}
 
 	async function renderUis() {
@@ -262,7 +331,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 	async function refreshProvidersAndModels() {
 		settings = await shell.settings();
-		refreshCurrent();
+		await refreshCurrent();
 		await renderProviders();
 		await renderModels();
 	}
@@ -336,7 +405,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 	function drawModels() {
 		const query = $("search").value.trim().toLowerCase();
-		const current = typeof settings.model === "string" ? settings.model : "";
+		const current = face !== null && face.error === undefined ? face.ref : "";
 		const list = $("modelList");
 		const rows = allModels.filter((m) => (showAll || m.available) && (query === "" || m.ref.toLowerCase().includes(query) || m.name.toLowerCase().includes(query)));
 		list.replaceChildren();
@@ -350,9 +419,8 @@ document.documentElement.lang = zh ? "zh" : "en";
 			if (!m.available) li.append(el("span", t("model.noCredentials"), "tag"));
 			li.append(button(t("use"), async () => {
 				try {
-					settings = await shell.setSettings({ model: m.ref });
-					refreshCurrent();
-					drawModels();
+					const keep = face?.level !== undefined && m.thinkingLevels.includes(face.level) ? `:${face.level}` : "";
+					await applyModel(`${m.ref}${keep}`);
 				} catch (e) {
 					alert(reason(e));
 				}

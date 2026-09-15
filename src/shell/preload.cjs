@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("shell", {
 	setSettings: (patch) => ipcRenderer.invoke("settings:set", { patch }),
 	openSettings: () => ipcRenderer.invoke("settings:open"),
 	models: () => ipcRenderer.invoke("models"),
+	currentModel: () => ipcRenderer.invoke("model:current"),
 	auth: {
 		providers: () => ipcRenderer.invoke("auth:providers"),
 		login: (provider, type) => ipcRenderer.invoke("auth:login", { provider, type }),
