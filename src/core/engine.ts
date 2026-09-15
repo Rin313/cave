@@ -15,7 +15,6 @@ import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPromp
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
 	modelRuntime: ModelRuntime;
-	/** 缺席即无偏好：缺省档（medium）与模型能力的收敛由 SDK 建会话时完成。 */
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 }
 
@@ -120,7 +119,6 @@ export class Engine {
 		for (const l of this.listeners) l(event);
 	}
 
-	/** 装载即重放（archive.load）：引擎自回合记录档案组装世界；pi 会话只作进程内运行时。 */
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
 		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一：近况是映射层的跨回合指代锚，长短由游戏的物化纪律决定");
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);

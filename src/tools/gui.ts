@@ -191,7 +191,6 @@ async function ensureHost(exe: string | undefined, dataRoot: string): Promise<Ta
 	return await spawnHost(binary, exe === undefined, dataRoot);
 }
 
-/** Page.close 让窗口正常关闭（引擎释放、档案收尾）；超时未退再杀进程兜底。 */
 function requestClose(target: Target): Promise<void> {
 	return new Promise((resolve) => {
 		const ws = new WebSocket(target.webSocketDebuggerUrl);

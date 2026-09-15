@@ -331,7 +331,7 @@ ipcMain.handle("sessions", () => [...sessions.values()].map((slot) => {
 	return session === null ? { game: slot.game, run: slot.run, opening: true } : { ...coords(session), busy: session.engine.busy };
 }));
 
-/** 游戏目录事实：装载前可读（game.json），键由作者定义，壳不解释。 */
+/** 游戏目录 */
 ipcMain.handle("meta", (_event, req: GameRequest | undefined) => {
 	const game = idIn(req, "meta");
 	if (game === undefined) throw new Error("meta 需要游戏 id");

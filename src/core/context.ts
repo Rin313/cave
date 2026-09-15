@@ -54,7 +54,7 @@ function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], sele
 	return selected.map((r, i) => ({ time: r.time, utterance: JSON.stringify(r.utterance), moves: moves[i]! }));
 }
 
-/** 近况：选择（作者）× 投影（引擎） */
+/** 近况：选择 × 投影 */
 export function recentEntries(sim: Simulation, records: readonly ChronicleEntry[], warnings: string[]): RecentEntry[] {
 	return projectRecent(sim, records, selectRecent(sim.def, records, warnings));
 }

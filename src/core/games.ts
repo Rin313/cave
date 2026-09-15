@@ -32,7 +32,6 @@ export function listGames(roots: readonly string[]): string[] {
 	return [...ids].sort();
 }
 
-/** 游戏目录清单（game.json，旁挂）：键由作者定义，壳与引擎不解释；装载前可读、不执行 def。 */
 export type GameMeta = Record<string, unknown>;
 
 /** 读目录清单：缺失即空对象；坏元数据回落并携错；未知游戏即 null。 */
