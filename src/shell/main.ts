@@ -101,7 +101,7 @@ function stringSetting(settings: JsonObject, key: string): string | undefined {
 	return typeof v === "string" ? v : undefined;
 }
 
-/** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
+/** 壳内引导面 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
 let sharedRuntime: Promise<ModelRuntime> | null = null;
@@ -182,16 +182,6 @@ function bootUi(): UiSite {
 	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
 }
 
-/** 配置面：settingsUi 指定的内容界面为皮肤层；缺席即引导面，失效即引导面并携原因（配置面是兜底，不因设置失效而锁死）。 */
-function settingsSite(): { site: UiSite | null; error?: string } {
-	const ref = stringSetting(readSettings().settings, "settingsUi");
-	if (ref === undefined) return { site: null };
-	const sites = uiRegistry();
-	const site = sites.get(ref);
-	if (site !== undefined) return { site };
-	return { site: null, error: `未知配置界面：${ref}（可用：${uiList(sites)}）` };
-}
-
 function windowOptions(): BrowserWindowConstructorOptions {
 	return {
 		show: false,
@@ -268,13 +258,11 @@ function openSettings(): void {
 		settingsWin.focus();
 		return;
 	}
-	const { site, error } = settingsSite();
 	settingsWin = newWindow(720, 640);
 	settingsWin.on("closed", () => {
 		settingsWin = null;
 	});
-	if (site !== null) loadSite(settingsWin, site);
-	else loadSetup(settingsWin, error);
+	loadSetup(settingsWin);
 }
 
 function gameFile(root: string, id: string): string | null {
@@ -516,7 +504,7 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi/settingsSite 回落、建会话报错）；ui 归 use（写+导航）。 */
+/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi 回落、建会话报错）；ui 归 use（写+导航）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as JsonObject) };
