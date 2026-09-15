@@ -1,15 +1,14 @@
 import { app, BrowserWindow, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { readRecords } from "../core/archive.ts";
 import type { ActOutcome, AgentSpec, Engine, NarrationOutcome } from "../core/engine.ts";
 import { listGames, loadGame, readGameMeta } from "../core/games.ts";
 import { verbFace, type SlotDef } from "../core/sim.ts";
-import { isSegment, recordsPath, rootDir } from "../core/paths.ts";
+import { isSegment, readJsonObject, recordsPath, rootDir } from "../core/paths.ts";
 import { listRuns, openRun } from "../core/runs.ts";
 import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace } from "./model.ts";
-import { patchSettings, readSettings, settingsPath, stringSetting, type Settings } from "./settings.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
 
@@ -44,7 +43,38 @@ app.on("second-instance", () => {
 
 /** 根：games、runs 与配置（settings、auth、models）的共同所在；缺省取宿主用户数据目录。 */
 const ROOT = rootDir(app.getPath("userData"));
-const SETTINGS_FILE = settingsPath(ROOT);
+const SETTINGS_FILE = join(ROOT, "settings.json");
+
+type Settings = Record<string, unknown>;
+
+/** 缺席与破损都按空对象；破损显形于控制台。 */
+function readSettingsFile(file: string): Settings {
+	const read = readJsonObject(file);
+	if (read === null) return {};
+	if (read.value !== null) return read.value;
+	console.error(`设置文件不可读（按缺席处理）：${read.error}`);
+	return {};
+}
+
+function readSettings(root: string): Settings {
+	return readSettingsFile(join(root, "settings.json"));
+}
+
+/** 写补丁并返回写入后的设置。 */
+function patchSettings(root: string, patch: Settings): Settings {
+	const file = join(root, "settings.json");
+	const settings = Object.assign(readSettingsFile(file), patch);
+	mkdirSync(dirname(file), { recursive: true });
+	writeFileSync(file, `${JSON.stringify(settings, null, "\t")}\n`, "utf8");
+	return settings;
+}
+
+/** 字符串键：非字符串即未定（不做回退）。 */
+function stringSetting(settings: Settings, key: string): string | undefined {
+	const v = settings[key];
+	return typeof v === "string" ? v : undefined;
+}
+
 /** 壳内引导面：随包分发、不属内容、不可遮蔽；配置正确性的兜底，呈现可被 settingsUi 替换。 */
 const SETUP_FILE = join(import.meta.dirname, "setup.html");
 
