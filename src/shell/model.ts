@@ -5,7 +5,7 @@ type Interaction = Parameters<ModelRuntime["login"]>[2];
 type LoginType = Parameters<ModelRuntime["login"]>[1];
 type Prompt = Parameters<Interaction["prompt"]>[0];
 
-/** 配置协议：只转发 SDK 的目录与交互，不自产文案；配置面是内容。 */
+/** 配置协议 */
 interface ProviderInfo {
 	id: string;
 	name: string;

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { readJsonObject, writeJson } from "./paths.ts";
 
-/** 设置：用户级全局（凭据、模型与界面偏好），与 CLI 共用；键由宿主与内容约定，壳不解释。 */
+/** 设置：用户级全局（凭据、模型与界面偏好），与 CLI 共用 */
 export type Settings = Record<string, unknown>;
 
 export function settingsPath(config: string): string {
