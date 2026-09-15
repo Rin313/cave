@@ -2,17 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-/** 无宿主（CLI）时按平台约定复算 Electron userData。 */
-function platformUserData(): string {
+export function rootDir(hostRoot?: string): string {
+	if (hostRoot !== undefined) return hostRoot;
 	const base = process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming")
 		: process.platform === "darwin" ? join(homedir(), "Library", "Application Support")
 		: process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 	return join(base, "cave");
-}
-
-/** 根：games、runs 与配置（settings、auth、models）的共同所在；缺省取宿主注入的用户数据目录。 */
-export function rootDir(hostRoot?: string): string {
-	return hostRoot ?? platformUserData();
 }
 
 /** 路径段：id 不做路径解析。 */
