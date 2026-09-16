@@ -229,7 +229,6 @@ function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>
 
 /** 引导面亦失败：桌面级告知；主窗无面可救即退出，其余窗只弃自身。 */
 function setupFailed(w: BrowserWindow, message: string): void {
-	console.error(message);
 	dialog.showErrorBox("cave", message);
 	if (w === win) app.exit(1);
 	else w.destroy();
