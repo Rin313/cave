@@ -137,14 +137,13 @@ const text = {
 	"title": ["配置", "Settings"],
 	"close": ["完成", "Done"],
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
-	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json（与 CLI 共用）。", "Advanced: edit settings.json and auth.json under {dir} directly (shared with the CLI)."],
+	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json", "Advanced: edit settings.json and auth.json under {dir} directly."],
 	"open.root": ["打开根目录", "Open root folder"],
 	"open.games": ["打开 games 目录", "Open games folder"],
 	"current": ["当前", "Current"],
 	"use": ["使用", "Use"],
 	"thinking.label": ["思考档", "Thinking"],
 	"thinking.default": ["默认", "Default"],
-	"thinking.hint": ["默认即 SDK 缺省档；超出模型能力的档位自动收敛。", "Default uses the SDK default level; levels beyond model capability clamp automatically."],
 	"configured": ["已配置", "Configured"],
 	"unconfigured": ["未配置", "Not configured"],
 	"ui.section": ["界面", "Interface"],
@@ -198,7 +197,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("modelTitle").textContent = t("model.section");
 	$("advanced").textContent = t("advanced", { dir: env.root });
 	$("thinkingLabel").textContent = t("thinking.label");
-	$("thinking").title = t("thinking.hint");
 	$("search").placeholder = t("model.filter");
 	$("all").textContent = t("model.all");
 	$("search").oninput = drawModels;
