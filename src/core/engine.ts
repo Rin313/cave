@@ -15,14 +15,13 @@ import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPromp
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
 	modelRuntime: ModelRuntime;
+	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
+	agentDir: string;
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 }
 
 export interface EngineOptions {
 	agent: () => Promise<AgentSpec>;
-	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
-	agentDir: string;
-	sessionManager?: SessionManager;
 	/** 回合记录档案；缺省只留进程内存。 */
 	archive?: ArchiveStore;
 }
@@ -67,14 +66,10 @@ interface Ledger {
 
 export class Engine {
 	readonly sim: Simulation;
-	/** 会话按需建立：装载/浏览不需要模型，首次 act/narrate 才解析并建会话。 */
+	/** 会话按需建立：装载/浏览不需要模型与 pi 资源，首次 act/narrate 才解析并建会话。 */
 	private session: SessionHandle | null = null;
 	private opening: Promise<SessionHandle> | null = null;
 	private readonly options: EngineOptions;
-	private readonly loader: DefaultResourceLoader;
-	private readonly settingsManager: SettingsManager;
-	private readonly sessionManager: SessionManager;
-	private readonly customTools: NonNullable<CreateAgentSessionOptions["customTools"]>;
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（表达落定）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly ledger: Ledger;
@@ -85,24 +80,9 @@ export class Engine {
 	/** 单飞窗口：act/narrate 共享同一 run 槽，入口即占；dispose 同受此拒。 */
 	private running: "act" | "narrate" | null = null;
 
-	private constructor(
-		sim: Simulation,
-		options: EngineOptions,
-		loader: DefaultResourceLoader,
-		settingsManager: SettingsManager,
-		sessionManager: SessionManager,
-		customTools: NonNullable<CreateAgentSessionOptions["customTools"]>,
-		ledger: Ledger,
-		recent: RecentEntry[],
-		run: RunState,
-		loadWarnings: string[],
-	) {
+	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState, loadWarnings: string[]) {
 		this.sim = sim;
 		this.options = options;
-		this.loader = loader;
-		this.settingsManager = settingsManager;
-		this.sessionManager = sessionManager;
-		this.customTools = customTools;
 		this.ledger = ledger;
 		this.recent = recent;
 		this.run = run;
@@ -124,7 +104,6 @@ export class Engine {
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 
-		const sessionManager = options.sessionManager ?? SessionManager.inMemory();
 		const loaded = options.archive?.load(def);
 		const ledger: Ledger = { records: loaded?.records ?? [], dead: null };
 		const sim = loaded?.sim ?? new Simulation(def);
@@ -132,29 +111,8 @@ export class Engine {
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [], warnings: [] };
-		const settingsManager = SettingsManager.inMemory({
-			compaction: { enabled: false },
-			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
-			retry: { enabled: true, maxRetries: 2 },
-		});
 		const recent: RecentEntry[] = [];
-		const loader = new DefaultResourceLoader({
-			cwd: process.cwd(),
-			agentDir: options.agentDir,
-			appendSystemPrompt: [],
-			settingsManager,
-			systemPrompt: def.prompt.system,
-			extensionFactories: [buildContextExtension(def, () => recent)],
-			noExtensions: true,
-			noSkills: true,
-			noPromptTemplates: true,
-			noThemes: true,
-			noContextFiles: true,
-		});
-		await loader.reload();
-
-		const customTools = [buildActTool(def, sim, run)];
-		return new Engine(sim, options, loader, settingsManager, sessionManager, customTools, ledger, recent, run, loadWarnings);
+		return new Engine(sim, options, ledger, recent, run, loadWarnings);
 	}
 
 	/** 会话按需建立：并发首调共享同一次建立；解析失败原样上抛（配置出口在宿主），世界与档案均未动。 */
@@ -168,16 +126,36 @@ export class Engine {
 	}
 
 	private async openSession(): Promise<SessionHandle> {
-		const { model, modelRuntime, thinkingLevel } = await this.options.agent();
+		const { model, modelRuntime, agentDir, thinkingLevel } = await this.options.agent();
+		const settingsManager = SettingsManager.inMemory({
+			compaction: { enabled: false },
+			// 重试请求的历史已含已裁决动作及其结果，模型据此续行
+			retry: { enabled: true, maxRetries: 2 },
+		});
+		const loader = new DefaultResourceLoader({
+			cwd: process.cwd(),
+			agentDir,
+			appendSystemPrompt: [],
+			settingsManager,
+			systemPrompt: this.sim.def.prompt.system,
+			extensionFactories: [buildContextExtension(this.sim.def, () => this.recent)],
+			noExtensions: true,
+			noSkills: true,
+			noPromptTemplates: true,
+			noThemes: true,
+			noContextFiles: true,
+		});
+		await loader.reload();
+
 		const { session } = await createAgentSession({
 			model,
 			modelRuntime,
 			...(thinkingLevel !== undefined && { thinkingLevel }),
-			resourceLoader: this.loader,
-			settingsManager: this.settingsManager,
-			sessionManager: this.sessionManager,
+			resourceLoader: loader,
+			settingsManager,
+			sessionManager: SessionManager.inMemory(),
 			tools: ["act"],
-			customTools: this.customTools,
+			customTools: [buildActTool(this.sim.def, this.sim, this.run)],
 		});
 		this.session = session;
 		session.subscribe((event) => {

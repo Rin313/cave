@@ -152,7 +152,7 @@ async function configuredModel(settings: JsonObject): Promise<{ ref: string; run
 	return { ref, runtime, resolved: resolveModelRef(ref, runtime) };
 }
 
-/** 模型与凭据惰性解析：只在 act/narrate 建会话时调用，设置每次都重读。 */
+/** 会话规格惰性解析：模型与凭据只在 act/narrate 建会话时求值，设置每次都重读。 */
 async function agent(): Promise<AgentSpec> {
 	const read = readSettings();
 	if (read.error !== undefined) throw new Error(read.error);
@@ -164,7 +164,7 @@ async function agent(): Promise<AgentSpec> {
 	if (!(await runtime.checkAuth(model.provider))) {
 		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(ROOT, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
 	}
-	return { model, modelRuntime: runtime, ...(thinkingLevel !== undefined && { thinkingLevel }) };
+	return { model, modelRuntime: runtime, agentDir: ROOT, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
 /** 初始界面：settings.ui 优先（非空且须在注册表内）；否则唯一的游戏默认界面（name 即 game 的 ui/index.html）；具名界面永不自动启动；无解即抛，由装载处显形为引导选择面。 */
@@ -317,7 +317,6 @@ function listRuns(root: string, game?: string): RunFace[] {
 async function createSession(game: string, run: string): Promise<Session> {
 	const engine = await Engine.create(await loadGame(ROOT, game), {
 		agent,
-		agentDir: ROOT,
 		archive: openArchive(recordsPath(ROOT, game, run)),
 	});
 	const unsubscribe = engine.subscribe((event) => {
