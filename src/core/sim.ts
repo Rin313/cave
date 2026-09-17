@@ -20,6 +20,13 @@ export type Value = Scalar | Scalar[];
 /** 格写载荷：none（null）即删除。 */
 export type Payload = Value | null;
 
+/** 值的序列视图：标量视作单元素序列；数组原样返回。 */
+function seq(v: Value): readonly Scalar[];
+function seq(v: unknown): readonly unknown[];
+function seq(v: unknown): readonly unknown[] {
+	return Array.isArray(v) ? v : [v];
+}
+
 export type ViewValue = string | number | boolean | null | ViewValue[] | { [k: string]: ViewValue };
 
 export interface Entity {
@@ -257,7 +264,7 @@ export function param<T extends SlotType, O extends ParamOpts = object>(
 	type: T,
 	opts?: O & Record<Exclude<keyof O, keyof ParamOpts>, never>,
 ): { type: T } & O {
-	return Object.assign({ type }, opts, { type });
+	return Object.assign({}, opts, { type });
 }
 
 export function refParamsOf(verb: VerbDef): string[] {
@@ -359,7 +366,7 @@ export function catalog(verbs: Readonly<Record<string, VerbDef>>): string {
 function valueProblem(type: SlotType, many: boolean, v: unknown): string | null {
 	if (Array.isArray(v) !== many) return `expects ${many ? "a non-empty sequence" : "a scalar"}, got ${got(v)}`;
 	if (many && (v as unknown[]).length === 0) return "expects a non-empty sequence, got an empty sequence";
-	for (const x of Array.isArray(v) ? v : [v]) {
+	for (const x of seq(v)) {
 		if (type === "ref") {
 			if (typeof x !== "string") return `expects id reference, got ${got(x)}`;
 			continue;
@@ -559,7 +566,7 @@ function slotValueProblem(d: SlotDef, v: Value, ids: ReadonlySet<string>): strin
 	const problem = valueProblem(d.type, d.many === true, v);
 	if (problem) return problem;
 	if (d.type === "ref") {
-		for (const x of Array.isArray(v) ? v : [v]) if (typeof x === "string" && !ids.has(x)) return `-> missing entity ${x}`;
+		for (const x of seq(v)) if (typeof x === "string" && !ids.has(x)) return `-> missing entity ${x}`;
 	}
 	return null;
 }
@@ -824,13 +831,13 @@ function faceAt(field: FieldView, id: string): string {
 
 function renderValue(face: Face, v: Payload, isRef: boolean): string {
 	if (!isRef) return String(v);
-	return (Array.isArray(v) ? v : [v]).map((item) => (typeof item === "string" ? face(item) : String(item))).join(", ");
+	return seq(v).map((item) => (typeof item === "string" ? face(item) : String(item))).join(", ");
 }
 
 /** 值位的指称集：结构判定，不触命名（与 renderValue 同判据）。 */
 function valueIds(v: Payload, isRef: boolean): string[] {
 	if (!isRef) return [];
-	return (Array.isArray(v) ? v : [v]).filter((x): x is string => typeof x === "string");
+	return seq(v).filter((x): x is string => typeof x === "string");
 }
 
 /** 槽声明查表：属性按键、边按类型；未注册即 undefined。 */
@@ -878,7 +885,7 @@ function assertRules(where: string, rules: readonly Rule[]): void {
 
 /** 值是否含指称 id：弱载荷随目标删除级联的判据。 */
 function valueHasRef(v: Value, id: string): boolean {
-	return Array.isArray(v) ? v.includes(id) : v === id;
+	return seq(v).includes(id);
 }
 
 /** 弱引用级联：从值中移除亡者引用；值因此为空（或本来只有该引用）即 null（删格）。 */
@@ -890,7 +897,7 @@ function withoutRef(v: Value, id: string): Value | null {
 
 /** 指称集须落在给定域内：目标不在即整值不披露——披露的指称必有句柄。 */
 function valueRefsWithin(v: Value, vis: ReadonlySet<string>): boolean {
-	for (const item of Array.isArray(v) ? v : [v]) if (typeof item === "string" && !vis.has(item)) return false;
+	for (const item of seq(v)) if (typeof item === "string" && !vis.has(item)) return false;
 	return true;
 }
 
@@ -1177,7 +1184,7 @@ export class Simulation {
 		const invalid = refParams
 			.flatMap((p) => {
 				const v = action.params[p];
-				return (Array.isArray(v) ? v : [v]).filter((id): id is string => typeof id === "string" && !gate.has(id));
+				return seq(v ?? []).filter((id): id is string => typeof id === "string" && !gate.has(id));
 			});
 		if (invalid.length) return { ok: false, denial: { point: { kind: "gate" } } };
 		for (const r of rules) {
@@ -1312,17 +1319,17 @@ export class Simulation {
 
 	/** 取序位是纯读，不移动任何状态；仅当步确定入账才 markAttempt——默与崩溃不消耗序位。 */
 	private peekAttempt(at: number, trigger: Trigger, verb: string): number {
-		return this.attemptSeq.get(at)?.get(`${trigger}\u0000${verb}`) ?? 0;
+		return this.attemptSeq.get(at)?.get(tupleKey([trigger, verb])) ?? 0;
 	}
 
 	private markAttempt(at: number, trigger: Trigger, verb: string): void {
-		let seq = this.attemptSeq.get(at);
-		if (seq === undefined) {
-			seq = new Map();
-			this.attemptSeq.set(at, seq);
+		let counts = this.attemptSeq.get(at);
+		if (counts === undefined) {
+			counts = new Map();
+			this.attemptSeq.set(at, counts);
 		}
-		const key = `${trigger}\u0000${verb}`;
-		seq.set(key, (seq.get(key) ?? 0) + 1);
+		const key = tupleKey([trigger, verb]);
+		counts.set(key, (counts.get(key) ?? 0) + 1);
 	}
 
 	/** 成功提交后剪枝：跨成功单元时间不减，at < world.time 的计数不可能再被查询；at = world.time 须留（同刻的 price=0 回合复用）。 */
@@ -1350,12 +1357,7 @@ export class Simulation {
 		const refs = new Set(refParamsOf(verb));
 		const parts = Object.keys(verb.params)
 			.filter((k) => k in action.params)
-			.map((k) => {
-				const v = action.params[k]!;
-				if (!refs.has(k)) return renderValue(face, v, false);
-				const items = Array.isArray(v) ? v : [v];
-				return items.map((item) => (typeof item === "string" ? face(item) : String(item))).join(", ");
-			});
+			.map((k) => renderValue(face, action.params[k]!, refs.has(k)));
 		return parts.length ? `${verb.label}(${parts.join(",")})` : verb.label;
 	}
 
