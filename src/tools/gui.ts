@@ -49,9 +49,10 @@ interface NarrateFace {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const js = (v: unknown): string => JSON.stringify(v);
-const openExpr = (game: string, run: string): string => `window.shell.open(${js(game)},${js(run)})`;
-/** 求值探测时限：界面切换中的失败应快速落到重试，而不是占满命令时限。 */
+/** 求值探测时限 */
 const PROBE_MS = 5_000;
+/** 界面等待时限 */
+const UI_MS = 15_000;
 
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
@@ -133,22 +134,8 @@ function discardHost(): void {
 	rmSync(HOST_FILE, { force: true });
 }
 
-/** 宿主记录须匹配 exe；dataRoot 缺省（未指定 --data-dir）即接受在跑宿主的实际根。 */
-async function waitHost(exe: string, dataRoot: string | undefined, ms: number): Promise<Target | null> {
-	const deadline = Date.now() + ms;
-	while (Date.now() < deadline) {
-		const host = readHost();
-		if (host !== null && host.exe === exe && (dataRoot === undefined || samePath(host.dataRoot, dataRoot))) {
-			const target = await targetOf(host.port);
-			if (target !== null) return target;
-		}
-		await sleep(150);
-	}
-	return null;
-}
-
-/** 脱离父进程启动宿主；就绪后才落盘状态（并发竞争由单实例锁收敛到先到者）。 */
-async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<Target> {
+/** 脱离父进程启动宿主；就绪后才落盘状态。 */
+async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<{ target: Target; host: Host }> {
 	const port = await freePort();
 	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*", ...(dataRoot === undefined ? [] : [`--user-data-dir=${dataRoot}`])];
 	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot ?? "宿主默认"}）\n`, "utf8");
@@ -159,22 +146,15 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
 		if (child.exitCode !== null) {
-			if (child.exitCode === 0) {
-				const target = await waitHost(exe, dataRoot, 10_000);
-				if (target !== null) return target;
-				throw new Error(`Electron 退出（code 0，单实例锁）：已有实例在运行但未记录状态；关闭其窗口后重试${logTail()}`);
-			}
+			if (child.exitCode === 0) throw new Error(`Electron 退出（code 0，单实例锁）：已有实例在运行但无宿主记录；关闭其窗口后重试${logTail()}`);
 			throw new Error(`Electron 退出（code ${child.exitCode}）${logTail()}`);
 		}
 		const target = await targetOf(port);
 		const root = target === null ? null : await hostRoot(target).catch(() => null);
 		if (target !== null && root !== null) {
-			if (dataRoot !== undefined && !samePath(root, dataRoot)) {
-				child.kill();
-				throw new Error(`宿主未采用指定数据根（期望 ${dataRoot}，实际 ${root}）`);
-			}
-			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot: root });
-			return target;
+			const host = { pid: child.pid ?? 0, port, exe, dataRoot: root };
+			writeHost(host);
+			return { target, host };
 		}
 		await sleep(150);
 	}
@@ -182,14 +162,14 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell.env 不可达${logTail()}`);
 }
 
-async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<Target> {
+async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<{ target: Target; host: Host }> {
 	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
 	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
 	const host = readHost();
 	if (host !== null) {
 		if (host.exe !== binary || (dataRoot !== undefined && !samePath(host.dataRoot, dataRoot))) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot}）：先 stop 再以当前参数运行`);
 		const target = await targetOf(host.port);
-		if (target !== null) return target;
+		if (target !== null) return { target, host };
 		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
 		discardHost();
 	}
@@ -274,14 +254,12 @@ async function hostRoot(target: Target): Promise<string> {
 	return face.root;
 }
 
-/** 路径同一性：解析后比较 */
 function samePath(a: string, b: string): boolean {
 	const x = resolve(a);
 	const y = resolve(b);
 	return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
-/** 主窗是否已在该游戏界面 */
 async function onGameFace(target: Target, game: string): Promise<boolean> {
 	const href = await evaluate<unknown>(target, "location.href", PROBE_MS).catch(() => undefined);
 	if (typeof href !== "string") return false;
@@ -293,25 +271,25 @@ async function onGameFace(target: Target, game: string): Promise<boolean> {
 }
 
 /** 主窗切到游戏界面：已在即不动，无界面即返回告警，装载失败即抛。 */
-async function showGame(target: Target, game: string, timeout: number): Promise<string | null> {
+async function showGame(target: Target, game: string): Promise<string | null> {
 	if (await onGameFace(target, game)) return null;
-	const uis = await evaluate<unknown>(target, "window.shell.uis()", timeout);
+	const uis = await evaluate<unknown>(target, "window.shell.uis()", UI_MS);
 	if (!Array.isArray(uis) || !uis.includes(game)) return `游戏 ${game} 无界面（games/${game}/index.html 缺席），窗口未切换到该游戏`;
 	// 导航替换页面并销毁求值上下文：发起不等结果，落定由页面 URL 判定
 	await evaluate(target, `void window.shell.navigate(${js(game)}).catch(() => {})`, PROBE_MS).catch(() => undefined);
-	const deadline = Date.now() + timeout;
+	const deadline = Date.now() + UI_MS;
 	while (Date.now() < deadline) {
 		if (await onGameFace(target, game)) return null;
 		await sleep(150);
 	}
-	throw new Error(`等待游戏界面 ${game} 装载超时`);
+	throw new Error(`等待游戏界面 ${game} 装载超时（${UI_MS / 1000}s）`);
 }
 
 /** 打开运行并把主窗切到该游戏界面：装载告警与无界面告警一并返回。 */
 async function openFace(target: Target, game: string, run: string, timeout: number): Promise<{ face: RunFace; warnings: string[] }> {
-	const face = await evaluate<RunFace>(target, openExpr(game, run), timeout);
+	const face = await evaluate<RunFace>(target, `window.shell.open(${js(game)},${js(run)})`, timeout);
 	const warnings = [...(face.warnings ?? [])];
-	const missing = await showGame(target, game, timeout);
+	const missing = await showGame(target, game);
 	if (missing !== null) warnings.push(missing);
 	return { face, warnings };
 }
@@ -445,10 +423,9 @@ async function main(): Promise<void> {
 		return;
 	}
 	if (cmd === "restart") await stopHost();
-	const target = await ensureHost(exe, dataRoot);
+	const { target, host } = await ensureHost(exe, dataRoot);
 	if (cmd === "start" || cmd === "restart") {
-		const host = readHost();
-		if (host !== null) console.log(`宿主${cmd === "restart" ? "已重启" : "已就绪"}（pid ${host.pid}，debug port ${host.port}，data-dir ${host.dataRoot}）：窗口保活，stop 关闭`);
+		console.log(`宿主${cmd === "restart" ? "已重启" : "已就绪"}（pid ${host.pid}，debug port ${host.port}，data-dir ${host.dataRoot}）：窗口保活，stop 关闭`);
 		return;
 	}
 	await dispatch(cmd, a.positionals, target, timeout);
