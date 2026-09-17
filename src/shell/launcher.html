@@ -91,7 +91,6 @@
 		<button id="back" type="button" hidden></button>
 	</header>
 	<p id="error" class="err" hidden></p>
-	<p id="settingsError" class="err" hidden></p>
 	<section id="uiSection">
 		<h2 id="uiTitle"></h2>
 		<ul id="uiList"></ul>
@@ -102,7 +101,6 @@
 		<h2 id="modelTitle"></h2>
 		<p id="current"></p>
 		<p id="currentError" class="err" hidden></p>
-		<p id="currentWarning" class="muted" hidden></p>
 		<div id="thinking" hidden><span id="thinkingLabel" class="tag"></span></div>
 		<div id="providers"></div>
 		<div id="flow" hidden>
@@ -176,7 +174,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	const bootError = new URLSearchParams(location.search).get("error");
 	if (bootError !== null) showError(bootError);
 	const env = await shell.env();
-	let settings = {};
 	let allModels = [];
 	let showAll = false;
 	let face = null;
@@ -202,17 +199,12 @@ document.documentElement.lang = zh ? "zh" : "en";
 		drawModels();
 	};
 
-	await refreshSettings();
 	await renderUis();
 	await refreshCurrent();
 	await renderProviders();
 	await renderModels();
 
-	function currentRef() {
-		return typeof settings.model === "string" ? settings.model : "";
-	}
-
-	/** 解析在壳内完成（与 SDK 同一解析器）：UI 不猜后缀，只渲染解析面。 */
+	/** 解析在壳内完成：UI 只渲染解析面。 */
 	async function currentFace() {
 		try {
 			return await shell.currentModel();
@@ -238,20 +230,11 @@ document.documentElement.lang = zh ? "zh" : "en";
 		for (const b of buttons) b.classList.toggle("on", b.dataset.level === current);
 	}
 
-	async function refreshSettings() {
-		const read = await shell.settings();
-		settings = read.settings;
-		const error = read.error ?? null;
-		$("settingsError").hidden = error === null;
-		if (error !== null) $("settingsError").textContent = error;
-	}
-
-	async function applyModel(model) {
+	async function applyModel(provider, id, level) {
 		if (busy) return;
 		busy = true;
 		try {
-			await shell.setSettings({ model });
-			await refreshSettings();
+			await shell.setModel(provider, id, level);
 			await refreshCurrent();
 			drawModels();
 		} finally {
@@ -262,21 +245,19 @@ document.documentElement.lang = zh ? "zh" : "en";
 	async function applyLevel(level) {
 		if (face === null || face.error !== undefined) return;
 		try {
-			await applyModel(level === "" ? face.ref : `${face.ref}:${level}`);
+			await applyModel(face.provider, face.id, level === "" ? null : level);
 		} catch (e) {
 			alert(reason(e));
 		}
 	}
 
 	async function refreshCurrent() {
-		$("current").textContent = t("model.current", { model: currentRef() || t("unconfigured") });
 		face = await currentFace();
+		const ref = face !== null && face.error === undefined ? face.ref : "";
+		$("current").textContent = t("model.current", { model: ref || t("unconfigured") });
 		const error = face !== null && face.error !== undefined ? face.error : null;
 		$("currentError").hidden = error === null;
 		if (error !== null) $("currentError").textContent = t("model.error", { error });
-		const warning = face !== null && face.error === undefined ? (face.warning ?? null) : null;
-		$("currentWarning").hidden = warning === null;
-		if (warning !== null) $("currentWarning").textContent = `⚠ ${warning}`;
 		renderThinking();
 	}
 
@@ -332,7 +313,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	}
 
 	async function refreshProvidersAndModels() {
-		await refreshSettings();
 		await refreshCurrent();
 		await renderProviders();
 		await renderModels();
@@ -421,8 +401,8 @@ document.documentElement.lang = zh ? "zh" : "en";
 			if (!m.available) li.append(el("span", t("model.noCredentials"), "tag"));
 			li.append(button(t("use"), async () => {
 				try {
-					const keep = face?.level !== undefined && m.thinkingLevels.includes(face.level) ? `:${face.level}` : "";
-					await applyModel(`${m.ref}${keep}`);
+					const keep = face?.level !== undefined && m.thinkingLevels.includes(face.level) ? face.level : null;
+					await applyModel(m.provider, m.id, keep);
 				} catch (e) {
 					alert(reason(e));
 				}

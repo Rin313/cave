@@ -1,6 +1,6 @@
 import { ipcMain, type Event, type WebContents, type WebContentsDidStartNavigationEventParams } from "electron";
 import { join } from "node:path";
-import { ModelRuntime, resolveCliModel, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import type { AgentSpec } from "../core/engine.ts";
 
 type Interaction = Parameters<ModelRuntime["login"]>[2];
@@ -19,7 +19,7 @@ interface ProviderInfo {
 	oauth?: { label: string; subscription: boolean };
 }
 
-type ThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
+export type ThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
 
 interface ModelRef {
 	ref: string;
@@ -33,6 +33,10 @@ interface ModelRef {
 /** pi 的思考档全序；实际子集由 reasoning 与 thinkingLevelMap 决定。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+	return (THINKING_LEVELS as readonly unknown[]).includes(value);
+}
+
 /** 与 pi-ai getSupportedThinkingLevels 同义（SDK 根不导出，pi-ai 非直接依赖）：非推理模型仅 off；null 隐藏；xhigh/max 须显式开启。 */
 export function supportedThinkingLevels(model: AgentSpec["model"]): readonly ThinkingLevel[] {
 	if (!model.reasoning) return ["off"];
@@ -45,14 +49,14 @@ export function supportedThinkingLevels(model: AgentSpec["model"]): readonly Thi
 
 export const modelRef = (model: AgentSpec["model"]): string => `${model.provider}/${model.id}`;
 
-/** 当前模型的解析面：规范化 ref、显式档位与受支持档位；供配置面渲染思考档。 */
+/** 当前模型的解析面：身份、显式档位与受支持档位；供配置面渲染思考档。 */
 export interface ModelFace {
+	provider: string;
+	id: string;
 	ref: string;
-	/** 显式档位；缺席即无偏好（由 SDK 缺省与模型能力收敛）。 */
+	/** 显式档位；缺席即用全局缺省。 */
 	level?: ThinkingLevel;
 	thinkingLevels: readonly ThinkingLevel[];
-	/** 解析告警（如非法档位回落）：呈现面直用。 */
-	warning?: string;
 }
 
 /** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄（AuthPrompt 是 union，直接 Omit 会塌成公共键）。 */
@@ -80,21 +84,6 @@ export function openModelRuntime(root: string): Promise<ModelRuntime> {
 		modelsPath: join(root, "models.json"),
 		modelsStorePath: join(root, "models-store.json"),
 	});
-}
-
-/** SDK 的错误提示以 pi CLI 旗标收尾（--list-models/--provider）；本项目没有这些旗标，只保留原因。 */
-function modelErrorReason(error: string | undefined): string {
-	return (error ?? "未解析到模型").replace(/ Use --[\s\S]*$/, "");
-}
-
-export type ModelResolution =
-	| { ok: true; model: AgentSpec["model"]; thinkingLevel?: AgentSpec["thinkingLevel"]; warning?: string }
-	| { ok: false; reason: string };
-
-export function resolveModelRef(ref: string, modelRuntime: ModelRuntime): ModelResolution {
-	const { model, thinkingLevel, warning, error } = resolveCliModel({ cliModel: ref, modelRuntime });
-	if (!model || error) return { ok: false, reason: modelErrorReason(error) };
-	return { ok: true, model, ...(thinkingLevel !== undefined && { thinkingLevel }), ...(warning !== undefined && { warning }) };
 }
 
 function providerInfo(runtime: ModelRuntime): ProviderInfo[] {

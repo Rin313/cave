@@ -1,12 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openArchive } from "../core/archive.ts";
 import { Engine, type ActOutcome, type AgentSpec, type NarrationOutcome } from "../core/engine.ts";
 import * as sim from "../core/sim.ts";
-import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace, type ModelResolution } from "./model.ts";
+import { installModel, isThinkingLevel, modelRef, openModelRuntime, supportedThinkingLevels, type ModelFace, type ThinkingLevel } from "./model.ts";
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
 
@@ -62,44 +62,6 @@ function subdirs(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-type JsonObject = Record<string, unknown>;
-
-/** 读 JSON 对象：缺席与破损都按空对象；破损原因不含文件名，由调用方补全语境。 */
-function readJsonObject(file: string): { value: JsonObject; error?: string } {
-	if (!existsSync(file)) return { value: {} };
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(readFileSync(file, "utf8"));
-	} catch (e) {
-		return { value: {}, error: `JSON 解析失败：${String(e)}` };
-	}
-	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { value: {}, error: "须为 JSON 对象" };
-	return { value: parsed as JsonObject };
-}
-
-/** 设置快照：缺席与破损都按空对象；error 随数据透出，由消费处呈现或报错。 */
-function readSettings(): { settings: JsonObject; error?: string } {
-	const read = readJsonObject(SETTINGS_FILE);
-	if (read.error === undefined) return { settings: read.value };
-	return { settings: read.value, error: `设置文件不可读（按空处理，${SETTINGS_FILE}）：${read.error}` };
-}
-
-/** 写补丁并返回写入后的设置；原件破损先改名为 .bad，不静默覆盖。 */
-function patchSettings(patch: JsonObject): JsonObject {
-	const read = readSettings();
-	if (read.error !== undefined) renameSync(SETTINGS_FILE, `${SETTINGS_FILE}.bad`);
-	const settings = { ...read.settings, ...patch };
-	mkdirSync(ROOT, { recursive: true });
-	writeFileSync(SETTINGS_FILE, `${JSON.stringify(settings, null, "\t")}\n`, "utf8");
-	return settings;
-}
-
-/** 字符串键：非字符串即未定（不做回退）。 */
-function stringSetting(settings: JsonObject, key: string): string | undefined {
-	const v = settings[key];
-	return typeof v === "string" ? v : undefined;
-}
-
 /** 内容应用面：存在即为主面（启动、home 与游戏界面失败回落的落点）；启动器仅在缺席、故障或内容显式调用时出现。 */
 const APP_FILE = join(ROOT, "ui", "index.html");
 /** 壳内启动器：配置与界面清单。 */
@@ -127,27 +89,35 @@ function listFaces(root: string): string[] {
 	return listGames(root).filter((game) => faceFile(root, game) !== null);
 }
 
-/** 设置中解析出的当前模型：未配置即 null；告警随解析面透出。 */
-async function configuredModel(settings: JsonObject): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
-	const ref = stringSetting(settings, "model");
-	if (ref === undefined || ref.trim() === "") return null;
-	const runtime = await modelRuntime();
-	return { ref, runtime, resolved: resolveModelRef(ref, runtime) };
+/** 全局设置（ROOT/settings.json 即 SDK 的全局设置路径）：每次新建即每次重读；载入错误即抛。 */
+function settings(): SettingsManager {
+	const manager = SettingsManager.create(ROOT, ROOT, { projectTrusted: false });
+	const broken = manager.drainErrors().find((e) => e.scope === "global");
+	if (broken !== undefined) throw new Error(`设置文件不可读（${broken.path ?? SETTINGS_FILE}）：${broken.error.message}`);
+	return manager;
+}
+
+/** 当前模型：defaultProvider/defaultModel，档位取该模型的显式档或全局缺省；未配置即 null。 */
+function storedModel(): { provider: string; id: string; level?: ThinkingLevel } | null {
+	const manager = settings();
+	const provider = manager.getDefaultProvider();
+	const id = manager.getDefaultModel();
+	if (provider === undefined || id === undefined) return null;
+	const level = manager.getModelThinkingLevel(provider, id) ?? manager.getDefaultThinkingLevel();
+	return { provider, id, ...(level !== undefined && { level }) };
 }
 
 /** 会话规格惰性解析：模型与凭据只在 act/narrate 建会话时求值，设置每次都重读。 */
 async function agent(): Promise<AgentSpec> {
-	const read = readSettings();
-	if (read.error !== undefined) throw new Error(read.error);
-	const current = await configuredModel(read.settings);
-	if (current === null) throw new Error(`模型未配置：在 ${SETTINGS_FILE} 写入 { "model": "provider/model[:thinking]" }`);
-	const { ref, runtime, resolved } = current;
-	if (!resolved.ok) throw new Error(`模型 "${ref}"（${SETTINGS_FILE}）不可用：${resolved.reason}`);
-	const { model, thinkingLevel } = resolved;
+	const stored = storedModel();
+	if (stored === null) throw new Error(`模型未配置：在启动器选择模型，或在 ${SETTINGS_FILE} 写入 defaultProvider 与 defaultModel`);
+	const runtime = await modelRuntime();
+	const model = runtime.getModel(stored.provider, stored.id);
+	if (model === undefined) throw new Error(`模型 ${stored.provider}/${stored.id} 不存在（${SETTINGS_FILE}）：在启动器选择可用模型`);
 	if (!(await runtime.checkAuth(model.provider))) {
 		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(ROOT, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
 	}
-	return { model, modelRuntime: runtime, agentDir: ROOT, ...(thinkingLevel !== undefined && { thinkingLevel }) };
+	return { model, modelRuntime: runtime, agentDir: ROOT, ...(stored.level !== undefined && { thinkingLevel: stored.level }) };
 }
 
 function windowOptions(): BrowserWindowConstructorOptions {
@@ -439,20 +409,34 @@ ipcMain.handle("launcher:open", async () => {
 	if (failure !== null && !w.isDestroyed()) await loadHome(w, failure);
 });
 
-ipcMain.handle("settings", () => readSettings());
-
-/** 当前模型的解析面：规范化 ref、显式档位、受支持档位与解析告警；未配置即 null，解析失败即 error。 */
 ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } | null> => {
-	const current = await configuredModel(readSettings().settings);
-	if (current === null) return null;
-	const { resolved } = current;
-	if (!resolved.ok) return { error: resolved.reason };
+	const stored = storedModel();
+	if (stored === null) return null;
+	const runtime = await modelRuntime();
+	const model = runtime.getModel(stored.provider, stored.id);
+	if (model === undefined) return { error: `模型 ${stored.provider}/${stored.id} 不存在` };
 	return {
-		ref: modelRef(resolved.model),
-		...(resolved.thinkingLevel !== undefined && { level: resolved.thinkingLevel }),
-		thinkingLevels: supportedThinkingLevels(resolved.model),
-		...(resolved.warning !== undefined && { warning: resolved.warning }),
+		provider: stored.provider,
+		id: stored.id,
+		ref: modelRef(model),
+		...(stored.level !== undefined && { level: stored.level }),
+		thinkingLevels: supportedThinkingLevels(model),
 	};
+});
+
+/** 写当前模型（provider 与 id 同为必填）：level 缺席或 null 即清除该模型的显式档。 */
+ipcMain.handle("model:set", async (_event, req: { provider?: unknown; id?: unknown; level?: unknown }) => {
+	const provider = strIn(req?.provider, "model:set", "provider");
+	const id = strIn(req?.id, "model:set", "id");
+	const level = req?.level ?? null;
+	if (level !== null && !isThinkingLevel(level)) throw new Error("model:set 的 level 须为思考档或 null");
+	const manager = settings();
+	manager.setDefaultModelAndProvider(provider, id);
+	if (level === null) manager.removeModelThinkingLevel(provider, id);
+	else manager.setModelThinkingLevel(provider, id, level);
+	await manager.flush();
+	const failed = manager.drainErrors().find((e) => e.scope === "global");
+	if (failed !== undefined) throw new Error(`设置写入失败（${failed.path ?? SETTINGS_FILE}）：${failed.error.message}`);
 });
 
 ipcMain.handle("env", () => ({ root: ROOT, home: launcherHome() ? "launcher" : "app" }));
@@ -464,13 +448,6 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	const path = join(ROOT, dir);
 	mkdirSync(path, { recursive: true });
 	return shell.openPath(path);
-});
-
-/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（建会话报错）。 */
-ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
-	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
-	const patch = { ...(req.patch as JsonObject) };
-	return { settings: patchSettings(patch) };
 });
 
 ipcMain.handle("open", async (_event, req: RunRequest) => {
