@@ -53,12 +53,11 @@ function freePort(): Promise<number> {
 	});
 }
 
-/** 保活宿主的状态记录：参数随记录（dataRoot 为声明值，null 即宿主默认），供重连判定。 */
+/** 保活宿主的状态记录：exe 随记录，供重连判定。 */
 interface Host {
 	pid: number;
 	port: number;
 	exe: string;
-	dataRoot: string | null;
 }
 
 /** 单实例锁使全局至多一个宿主 */
@@ -73,9 +72,9 @@ function readHost(): Host | null {
 		return null;
 	}
 	if (parsed === null || typeof parsed !== "object") return null;
-	const { pid, port, exe, dataRoot } = parsed as Record<string, unknown>;
-	if (typeof pid !== "number" || typeof port !== "number" || typeof exe !== "string" || (typeof dataRoot !== "string" && dataRoot !== null)) return null;
-	return { pid, port, exe, dataRoot };
+	const { pid, port, exe } = parsed as Record<string, unknown>;
+	if (typeof pid !== "number" || typeof port !== "number" || typeof exe !== "string") return null;
+	return { pid, port, exe };
 }
 
 function writeHost(host: Host): void {
@@ -117,10 +116,10 @@ function discardHost(): void {
 }
 
 /** 脱离父进程启动宿主；就绪后才落盘状态。 */
-async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<Target> {
+async function spawnHost(exe: string, dev: boolean): Promise<Target> {
 	const port = await freePort();
-	const flags = [`--remote-debugging-port=${port}`, ...(dataRoot === undefined ? [] : [`--user-data-dir=${dataRoot}`])];
-	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot ?? "宿主默认"}）\n`, "utf8");
+	const flags = [`--remote-debugging-port=${port}`];
+	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}\n`, "utf8");
 	const fd = openSync(HOST_LOG, "a");
 	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd] });
 	closeSync(fd);
@@ -133,7 +132,7 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 		}
 		const target = await targetOf(port);
 		if (target !== null && (await shellReady(target))) {
-			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot: dataRoot ?? null });
+			writeHost({ pid: child.pid ?? 0, port, exe });
 			return target;
 		}
 		await sleep(150);
@@ -142,18 +141,18 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell 不可达${logTail()}`);
 }
 
-async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<Target> {
+async function ensureHost(exe: string | undefined): Promise<Target> {
 	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
 	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
 	const host = readHost();
 	if (host !== null) {
-		if (host.exe !== binary || (dataRoot !== undefined && (host.dataRoot === null || !samePath(host.dataRoot, dataRoot)))) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot ?? "宿主默认"}）：先 stop 再以当前参数运行`);
+		if (host.exe !== binary) throw new Error(`已有宿主的 exe 不符（pid ${host.pid}，exe ${host.exe}）：先 stop 再以 ${binary} 运行`);
 		const target = await targetOf(host.port);
 		if (target !== null) return target;
 		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
 		discardHost();
 	}
-	return await spawnHost(binary, exe === undefined, dataRoot);
+	return await spawnHost(binary, exe === undefined);
 }
 
 /** 主窗关闭即 app.quit：请求关页即可收束，顽固进程补杀。 */
@@ -218,12 +217,6 @@ async function evaluate<T>(target: Target, expression: string, timeoutMs: number
 /** 装载就绪判据：preload 已暴露 window.shell。 */
 async function shellReady(target: Target): Promise<boolean> {
 	return (await evaluate<unknown>(target, `typeof window.shell === "object"`, PROBE_MS).catch(() => false)) === true;
-}
-
-function samePath(a: string, b: string): boolean {
-	const x = resolve(a);
-	const y = resolve(b);
-	return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 async function onGameFace(target: Target, game: string): Promise<boolean> {
@@ -526,15 +519,13 @@ async function main(): Promise<void> {
 	const a = parseArgs(argv);
 	const rawExe = flagStr(a, "exe");
 	const exe = rawExe === undefined ? undefined : resolve(rawExe);
-	const rawDataRoot = flagStr(a, "data-dir");
-	const dataRoot = rawDataRoot === undefined ? undefined : resolve(rawDataRoot);
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
 	if (cmd === "stop") {
 		console.log(JSON.stringify({ pid: await stopHost() }));
 		return;
 	}
-	const target = await ensureHost(exe, dataRoot);
+	const target = await ensureHost(exe);
 	const result = await dispatch(cmd, a, target, timeout);
 	if (result !== undefined) console.log(typeof result === "string" ? result : JSON.stringify(result));
 }
