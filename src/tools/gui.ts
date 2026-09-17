@@ -23,28 +23,26 @@ interface CdpReply {
 }
 
 interface RunFace {
-	game: string;
-	run: string;
 	time: number;
 	view: unknown;
 	warnings?: string[];
-}
-
-interface RecordsFace {
-	broken: number;
-	records: { narration?: string }[];
 }
 
 interface ActFace extends RunFace {
 	lines: string[];
 	reveals: unknown[];
 	narration: string;
-	warnings: string[];
 }
 
 interface NarrateFace {
 	narration: string;
 	warnings: string[];
+}
+
+interface RecordsFace {
+	records: unknown[];
+	broken: number;
+	incomplete: boolean;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -135,7 +133,7 @@ function discardHost(): void {
 }
 
 /** 脱离父进程启动宿主；就绪后才落盘状态。 */
-async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<{ target: Target; host: Host }> {
+async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<Target> {
 	const port = await freePort();
 	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*", ...(dataRoot === undefined ? [] : [`--user-data-dir=${dataRoot}`])];
 	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot ?? "宿主默认"}）\n`, "utf8");
@@ -152,9 +150,8 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 		const target = await targetOf(port);
 		const root = target === null ? null : await hostRoot(target).catch(() => null);
 		if (target !== null && root !== null) {
-			const host = { pid: child.pid ?? 0, port, exe, dataRoot: root };
-			writeHost(host);
-			return { target, host };
+			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot: root });
+			return target;
 		}
 		await sleep(150);
 	}
@@ -162,14 +159,14 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell.env 不可达${logTail()}`);
 }
 
-async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<{ target: Target; host: Host }> {
+async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<Target> {
 	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
 	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
 	const host = readHost();
 	if (host !== null) {
 		if (host.exe !== binary || (dataRoot !== undefined && !samePath(host.dataRoot, dataRoot))) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot}）：先 stop 再以当前参数运行`);
 		const target = await targetOf(host.port);
-		if (target !== null) return { target, host };
+		if (target !== null) return target;
 		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
 		discardHost();
 	}
@@ -196,12 +193,10 @@ function requestClose(target: Target): Promise<void> {
 	});
 }
 
-async function stopHost(): Promise<void> {
+/** 主窗关闭即 app.quit：页面全关即可收束，顽固进程补杀。 */
+async function stopHost(): Promise<number | null> {
 	const host = readHost();
-	if (host === null) {
-		console.log("宿主：无运行记录");
-		return;
-	}
+	if (host === null) return null;
 	const targets = await targetsOf(host.port);
 	await Promise.all(targets.map((t) => requestClose(t)));
 	const deadline = Date.now() + 5000;
@@ -214,7 +209,7 @@ async function stopHost(): Promise<void> {
 		}
 	}
 	discardHost();
-	console.log(`宿主已停止（pid ${host.pid}${targets.length === 0 ? "，界面本不可达" : ""}）`);
+	return host.pid;
 }
 
 async function evaluate<T>(target: Target, expression: string, timeoutMs: number): Promise<T> {
@@ -294,19 +289,8 @@ async function openFace(target: Target, game: string, run: string, timeout: numb
 	return { face, warnings };
 }
 
-function printWarnings(warnings: string[]): void {
-	for (const w of warnings) console.log(`  ⚠ ${w}`);
-}
-
-function printAct(utterance: string, r: ActFace): void {
-	console.log(`\n【${r.game}/${r.run} t=${r.time} act】${utterance}`);
-	for (const line of r.lines) console.log(`  ${line}`);
-	for (const item of r.reveals) console.log(`  + ${js(item)}`);
-	printWarnings(r.warnings);
-	console.log(`  ┈ ${r.narration.replace(/\n/g, "\n  ")}`);
-}
-
-async function dispatch(cmd: string, positionals: string[], target: Target, timeout: number): Promise<void> {
+/** 命令分派：不重述入参，不加工呈现；告警只在所属命令处报。 */
+async function dispatch(cmd: string, positionals: string[], target: Target, timeout: number): Promise<unknown> {
 	const [g, r, ...rest] = positionals;
 	const requireRun = (): [string, string] => {
 		if (g === undefined || r === undefined) throw new Error(`${cmd} 需要 <game> <run>`);
@@ -314,51 +298,44 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 	};
 	switch (cmd) {
 		case "games":
-			console.log(JSON.stringify(await evaluate(target, "window.shell.games()", timeout), null, 1));
-			return;
+			return await evaluate(target, "window.shell.games()", timeout);
+		case "runs":
+			return await evaluate(target, g === undefined ? "window.shell.runs()" : `window.shell.runs(${js(g)})`, timeout);
 		case "state": {
 			const [game, run] = requireRun();
 			const { face, warnings } = await openFace(target, game, run, timeout);
-			console.log(`【${game}/${run}】t=${face.time}`);
-			printWarnings(warnings);
-			console.log(JSON.stringify(face.view, null, 1));
-			return;
+			return { time: face.time, view: face.view, warnings };
 		}
 		case "records": {
 			const [game, run] = requireRun();
 			const face = await evaluate<RecordsFace>(target, `window.shell.records(${js(game)},${js(run)})`, timeout);
-			const narrated = face.records.reduce((n, r) => n + (r.narration === undefined ? 0 : 1), 0);
-			console.log(`【${game}/${run}】${face.records.length} 回合${narrated ? `，${narrated} 表达` : ""}${face.broken ? `，${face.broken} 条形状损坏` : ""}`);
-			console.log(JSON.stringify(face.records, null, 1));
-			return;
+			return { records: face.records, broken: face.broken, incomplete: face.incomplete };
 		}
 		case "close": {
 			const [game, run] = requireRun();
 			await evaluate(target, `window.shell.close(${js(game)},${js(run)})`, timeout);
-			console.log(`【${game}/${run}】已关闭`);
 			return;
 		}
 		case "act": {
 			const [game, run] = requireRun();
 			const utterance = rest.join(" ").trim();
 			if (utterance === "") throw new Error("act 需要话语");
-			const { warnings } = await openFace(target, game, run, timeout);
-			const result = await evaluate<ActFace>(target, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`, timeout);
-			printWarnings(warnings);
-			printAct(utterance, result);
-			return;
+			await openFace(target, game, run, timeout);
+			const out = await evaluate<ActFace>(target, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`, timeout);
+			return { time: out.time, lines: out.lines, reveals: out.reveals, narration: out.narration, warnings: out.warnings };
 		}
 		case "narrate": {
 			const [game, run] = requireRun();
 			const instruction = rest.join(" ").trim();
 			if (instruction === "") throw new Error("narrate 需要指令");
-			const { warnings } = await openFace(target, game, run, timeout);
-			const result = await evaluate<NarrateFace>(target, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`, timeout);
-			console.log(`\n【${game}/${run} narrate】${instruction}`);
-			printWarnings(warnings);
-			printWarnings(result.warnings);
-			console.log(result.narration);
-			return;
+			await openFace(target, game, run, timeout);
+			const out = await evaluate<NarrateFace>(target, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`, timeout);
+			return { narration: out.narration, warnings: out.warnings };
+		}
+		case "eval": {
+			const expr = positionals.join(" ").trim();
+			if (expr === "") throw new Error("eval 需要表达式");
+			return await evaluate(target, expr, timeout);
 		}
 		default:
 			throw new Error(`未知命令: ${cmd}`);
@@ -402,16 +379,16 @@ function flagStr(a: ParsedArgs, name: string): string | undefined {
 }
 
 function runMain(main: () => Promise<void>): void {
-	main().catch((err) => {
-		console.error(err);
+	main().catch((err: unknown) => {
+		console.error(err instanceof Error ? err.message : String(err));
 		process.exit(1);
 	});
 }
 
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
+	if (cmd === undefined) throw new Error("需要命令");
 	const a = parseArgs(argv);
-	if (!cmd) throw new Error("需要命令");
 	const rawExe = flagStr(a, "exe");
 	const exe = rawExe === undefined ? undefined : resolve(rawExe);
 	const rawDataRoot = flagStr(a, "data-dir");
@@ -419,16 +396,12 @@ async function main(): Promise<void> {
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
 	if (cmd === "stop") {
-		await stopHost();
+		console.log(JSON.stringify({ pid: await stopHost() }));
 		return;
 	}
-	if (cmd === "restart") await stopHost();
-	const { target, host } = await ensureHost(exe, dataRoot);
-	if (cmd === "start" || cmd === "restart") {
-		console.log(`宿主${cmd === "restart" ? "已重启" : "已就绪"}（pid ${host.pid}，debug port ${host.port}，data-dir ${host.dataRoot}）：窗口保活，stop 关闭`);
-		return;
-	}
-	await dispatch(cmd, a.positionals, target, timeout);
+	const target = await ensureHost(exe, dataRoot);
+	const result = await dispatch(cmd, a.positionals, target, timeout);
+	if (result !== undefined) console.log(typeof result === "string" ? result : JSON.stringify(result));
 }
 
 runMain(main);
