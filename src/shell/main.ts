@@ -167,7 +167,6 @@ async function agent(): Promise<AgentSpec> {
 	return { model, modelRuntime: runtime, agentDir: ROOT, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
-/** 初始界面：settings.ui 优先（非空且须在注册表内）；否则唯一的游戏默认界面（name 即 game 的 ui/index.html）；具名界面永不自动启动；无解即抛，由装载处显形为引导选择面。 */
 function bootUi(): UiSite {
 	const named = stringSetting(readSettings().settings, "ui");
 	const sites = uiRegistry();
@@ -276,7 +275,7 @@ function listGames(root: string): string[] {
 	return subdirs(join(root, "games")).filter((id) => gameFile(root, id) !== null).sort();
 }
 
-/** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂；模块缓存按进程，改文件后须重启壳生效。 */
+/** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂 */
 async function loadGame(root: string, id: string): Promise<sim.GameDef> {
 	const file = gameFile(root, id);
 	if (file === null) throw new Error(`未知游戏：${id}（可用：${listGames(root).join(", ") || "无"}）`);
@@ -298,7 +297,7 @@ interface RunFace {
 	mtime: number;
 }
 
-/** 枚举存档（按记录文件 mtime 降序）；game 缺席即扫全部游戏目录。 */
+/** 枚举存档（按记录文件 mtime 降序） */
 function listRuns(root: string, game?: string): RunFace[] {
 	const games = game !== undefined ? [game] : subdirs(runsDir(root));
 	const out: RunFace[] = [];
@@ -409,13 +408,6 @@ function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: s
 	return { game, run: req.run };
 }
 
-/** 注册槽静态面：核心 SlotDef 加内部键；界面据此生成控件。 */
-type SlotFace = sim.SlotDef & { key: string };
-
-function slotFace(slots: Record<string, sim.SlotDef> | undefined): SlotFace[] {
-	return Object.entries(slots ?? {}).map(([key, d]) => ({ key, ...d }));
-}
-
 const uiFace = (site: UiSite): { name: string; ref: string; game: string } => ({ name: site.name, ref: uiRef(site), game: site.game });
 
 /** 跨游戏的管理/启动面归内容：壳只提供枚举与会话协议；游戏自述与资产由内容自持，壳不设通道。 */
@@ -444,13 +436,6 @@ ipcMain.handle("sessions", (): SessionFace[] => [...sessions.values()].map((slot
 	if (session === null) return { game: slot.game, run: slot.run, state: "opening" };
 	return { ...coords(session), state: session.engine.busy ?? "idle" };
 }));
-
-/** 游戏的静态派生面：动词目录与注册槽名字；界面据此生成控件，不必硬编码。 */
-ipcMain.handle("def", async (_event, req: GameRequest | undefined) => {
-	const game = gameIn(req, "def");
-	const def = await loadGame(ROOT, game);
-	return { game, verbs: sim.verbFace(def.verbs), props: slotFace(def.props), relTypes: slotFace(def.relTypes) };
-});
 
 /** 界面清单：带 game 即按作用域过滤（启动器菜单）；注册表已按 ref 升序。 */
 ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {

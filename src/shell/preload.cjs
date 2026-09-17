@@ -20,7 +20,6 @@ contextBridge.exposeInMainWorld("shell", {
 	runs: (game) => invoke("runs", { game }),
 	records: (game, run) => invoke("records", { game, run }),
 	sessions: () => invoke("sessions"),
-	def: (game) => invoke("def", { game }),
 	open: (game, run) => invoke("open", { game, run }),
 	close: (game, run) => invoke("close", { game, run }),
 	act: (game, run, utterance) => invoke("act", { game, run, utterance }),
