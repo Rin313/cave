@@ -287,14 +287,12 @@ function printWarnings(warnings: string[]): void {
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 }
 
-function printAct(utterance: string, r: ActFace, brief = false): void {
+function printAct(utterance: string, r: ActFace): void {
 	console.log(`\n【${r.game}/${r.run} t=${r.time} act】${utterance}`);
 	for (const line of r.lines) console.log(`  ${line}`);
 	for (const item of r.reveals) console.log(`  + ${js(item)}`);
 	printWarnings(r.warnings);
-	const text = brief ? (r.narration.split(/\n/).find((l) => l.trim()) ?? "") : r.narration;
-	const shown = brief && text.length > 100 ? `${text.slice(0, 100)}…` : text;
-	console.log(`  ┈ ${shown.replace(/\n/g, "\n  ")}`);
+	console.log(`  ┈ ${r.narration.replace(/\n/g, "\n  ")}`);
 }
 
 async function dispatch(cmd: string, positionals: string[], target: Target, timeout: number): Promise<void> {
@@ -337,18 +335,6 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const { warnings, result } = await evaluate<{ warnings: string[]; result: ActFace }>(target, expr, timeout);
 			printWarnings(warnings);
 			printAct(utterance, result);
-			return;
-		}
-		case "batch": {
-			const [game, run] = requireRun();
-			const file = rest[0];
-			if (file === undefined) throw new Error("batch 需要话语文件");
-			const lines = readFileSync(file, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
-			if (!lines.length) throw new Error(`话语文件 ${file} 为空`);
-			const expr = openThen(game, run, `(async()=>{const results=[];for(const u of ${js(lines)})results.push(await window.shell.act(${js(game)},${js(run)},u));return results})()`);
-			const { warnings, result } = await evaluate<{ warnings: string[]; result: ActFace[] }>(target, expr, timeout);
-			printWarnings(warnings);
-			result.forEach((face, i) => printAct(lines[i] ?? "", face, true));
 			return;
 		}
 		case "narrate": {
