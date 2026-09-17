@@ -19,7 +19,9 @@ interface CdpReply {
 	result?: {
 		result?: { value?: unknown };
 		exceptionDetails?: { text?: string; exception?: { description?: string } };
+		data?: string;
 	};
+	error?: { message?: string };
 }
 
 interface RunFace {
@@ -45,11 +47,26 @@ interface RecordsFace {
 	incomplete: boolean;
 }
 
+interface UiControl {
+	role: string;
+	name: string;
+	value: string;
+	disabled: boolean;
+	checked: boolean;
+}
+
+interface UiFace {
+	url: string;
+	title: string;
+	text: string;
+	controls: UiControl[];
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const js = (v: unknown): string => JSON.stringify(v);
 /** 求值探测时限 */
 const PROBE_MS = 5_000;
-/** 界面等待时限 */
+/** 界面装载与清单时限 */
 const UI_MS = 15_000;
 
 function freePort(): Promise<number> {
@@ -212,34 +229,44 @@ async function stopHost(): Promise<number | null> {
 	return host.pid;
 }
 
-async function evaluate<T>(target: Target, expression: string, timeoutMs: number): Promise<T> {
+async function cdp<T>(target: Target, method: string, params: unknown, timeoutMs: number): Promise<T> {
 	const ws = new WebSocket(target.webSocketDebuggerUrl);
 	await new Promise<void>((resolve, reject) => {
 		ws.onopen = () => resolve();
 		ws.onerror = () => reject(new Error("CDP 连接失败"));
 	});
 	try {
-		const id = 1;
 		const reply = await new Promise<CdpReply>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error(`CDP 求值超时（${Math.round(timeoutMs / 1000)}s）`)), timeoutMs);
+			const timer = setTimeout(() => reject(new Error(`CDP 超时（${method}，${Math.round(timeoutMs / 1000)}s）`)), timeoutMs);
 			ws.onmessage = (e) => {
 				const m = JSON.parse(String(e.data)) as CdpReply;
-				if (m.id !== id) return;
+				if (m.id !== 1) return;
 				clearTimeout(timer);
 				resolve(m);
 			};
 			ws.onerror = () => { clearTimeout(timer); reject(new Error("CDP 通道中断")); };
-			ws.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
+			ws.send(JSON.stringify({ id: 1, method, params }));
 		});
-		const details = reply.result?.exceptionDetails;
-		if (details !== undefined) {
-			const desc = details.exception?.description ?? details.text ?? "CDP 异常";
-			throw new Error(desc.startsWith("Error: ") ? desc.slice(7) : desc);
-		}
-		return reply.result?.result?.value as T;
+		if (reply.error !== undefined) throw new Error(reply.error.message ?? `CDP 错误（${method}）`);
+		return (reply.result ?? {}) as T;
 	} finally {
 		ws.close();
 	}
+}
+
+interface EvalResult {
+	result?: { value?: unknown };
+	exceptionDetails?: { text?: string; exception?: { description?: string } };
+}
+
+async function evaluate<T>(target: Target, expression: string, timeoutMs: number): Promise<T> {
+	const out = await cdp<EvalResult>(target, "Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
+	const details = out.exceptionDetails;
+	if (details !== undefined) {
+		const desc = details.exception?.description ?? details.text ?? "CDP 异常";
+		throw new Error(desc.startsWith("Error: ") ? desc.slice(7) : desc);
+	}
+	return out.result?.value as T;
 }
 
 /** 宿主自报的数据根：工具侧的唯一权威，不镜像 Electron 的默认值。 */
@@ -265,33 +292,211 @@ async function onGameFace(target: Target, game: string): Promise<boolean> {
 	}
 }
 
-/** 主窗切到游戏界面：已在即不动，无界面即返回告警，装载失败即抛。 */
-async function showGame(target: Target, game: string): Promise<string | null> {
-	if (await onGameFace(target, game)) return null;
-	const uis = await evaluate<unknown>(target, "window.shell.uis()", UI_MS);
-	if (!Array.isArray(uis) || !uis.includes(game)) return `游戏 ${game} 无界面（games/${game}/index.html 缺席），窗口未切换到该游戏`;
-	// 导航替换页面并销毁求值上下文：发起不等结果，落定由页面 URL 判定
-	await evaluate(target, `void window.shell.navigate(${js(game)}).catch(() => {})`, PROBE_MS).catch(() => undefined);
-	const deadline = Date.now() + UI_MS;
-	while (Date.now() < deadline) {
-		if (await onGameFace(target, game)) return null;
+async function poll(timeout: number, what: string, probe: () => Promise<boolean>): Promise<void> {
+	const deadline = Date.now() + timeout;
+	for (;;) {
+		if (await probe().catch(() => false)) return;
+		if (Date.now() >= deadline) throw new Error(`等待${what}超时（${Math.round(timeout / 1000)}s）`);
 		await sleep(150);
 	}
-	throw new Error(`等待游戏界面 ${game} 装载超时（${UI_MS / 1000}s）`);
 }
 
-/** 打开运行并把主窗切到该游戏界面：装载告警与无界面告警一并返回。 */
-async function openFace(target: Target, game: string, run: string, timeout: number): Promise<{ face: RunFace; warnings: string[] }> {
-	const face = await evaluate<RunFace>(target, `window.shell.open(${js(game)},${js(run)})`, timeout);
-	const warnings = [...(face.warnings ?? [])];
-	const missing = await showGame(target, game);
-	if (missing !== null) warnings.push(missing);
-	return { face, warnings };
+/** 只导航主窗到游戏界面，不开会话、不动引擎；已在即空操作。 */
+async function go(target: Target, game: string): Promise<void> {
+	if (await onGameFace(target, game)) return;
+	const uis = await evaluate<unknown>(target, "window.shell.uis()", UI_MS);
+	if (!Array.isArray(uis) || !uis.includes(game)) throw new Error(`游戏 ${game} 无界面（games/${game}/index.html 缺席）`);
+	// 导航替换页面并销毁求值上下文：发起不等结果，落定由页面 URL 判定
+	await evaluate(target, `void window.shell.navigate(${js(game)}).catch(() => {})`, PROBE_MS).catch(() => undefined);
+	await poll(UI_MS, `游戏界面 ${game}`, () => onGameFace(target, game));
 }
 
-/** 命令分派：不重述入参，不加工呈现；告警只在所属命令处报。 */
-async function dispatch(cmd: string, positionals: string[], target: Target, timeout: number): Promise<unknown> {
-	const [g, r, ...rest] = positionals;
+/** 打开或附着运行并返回装载面；不导航窗口。 */
+async function openRun(target: Target, game: string, run: string, timeout: number): Promise<RunFace> {
+	return await evaluate<RunFace>(target, `window.shell.open(${js(game)},${js(run)})`, timeout);
+}
+
+/** 页面内交互元素扫描：ui 与 click 共用同一规则，编号即文档序位置。 */
+const SCAN = `
+	const collapse = (s) => String(s ?? "").replace(/\\s+/g, " ").trim();
+	const vis = (el) => {
+		const r = el.getBoundingClientRect();
+		if (r.width === 0 || r.height === 0) return false;
+		const st = getComputedStyle(el);
+		return st.display !== "none" && st.visibility !== "hidden";
+	};
+	const roleOf = (el) => {
+		const role = el.getAttribute("role");
+		if (role) return role;
+		const t = el.tagName.toLowerCase();
+		if (t === "a") return "link";
+		if (t === "select") return "combobox";
+		if (t === "textarea" || el.isContentEditable) return "textbox";
+		if (t === "input") {
+			const k = (el.type || "text").toLowerCase();
+			if (k === "checkbox" || k === "radio") return k;
+			if (k === "range") return "slider";
+			if (k === "button" || k === "submit" || k === "reset") return "button";
+			return "textbox";
+		}
+		return "button";
+	};
+	const nameOf = (el) => collapse(el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || el.textContent);
+	const valueOf = (el) => ("value" in el && typeof el.value === "string" ? el.value : "");
+	const scan = () => Array.from(document.querySelectorAll("button,input,select,textarea,a[href],summary,[tabindex]:not([tabindex='-1']),[onclick],[contenteditable],[role=button],[role=link],[role=textbox],[role=checkbox],[role=radio],[role=switch],[role=slider],[role=combobox],[role=tab],[role=menuitem],[role=option]")).filter(vis).map((el) => ({ el, role: roleOf(el), name: nameOf(el), value: valueOf(el), disabled: !!el.disabled, checked: !!el.checked }));
+`;
+
+const UI_EXPRESSION = `(() => {
+${SCAN}
+	const list = scan();
+	return {
+		url: location.href,
+		title: document.title,
+		text: collapse(document.body.innerText).slice(0, 2000),
+		controls: list.map((c) => ({ role: c.role, name: c.name, value: c.value, disabled: c.disabled, checked: c.checked })),
+	};
+})()`;
+
+/** 文本目标：先精确后包含；交互元素之外再落到最小可见文本宿主（无角色的 div 按钮）。 */
+function pickExpression(text: string): string {
+	return `((l) => {
+		const hit = l.find((c) => c.name === ${js(text)}) ?? l.find((c) => c.name.includes(${js(text)}));
+		if (hit) return hit.el;
+		const all = Array.from(document.querySelectorAll("*")).filter((el) => el.getClientRects().length > 0);
+		const exact = all.filter((el) => collapse(el.textContent) === ${js(text)});
+		if (exact.length > 0) return exact[exact.length - 1];
+		const loose = all.filter((el) => collapse(el.textContent).includes(${js(text)}));
+		return loose.length > 0 ? loose[loose.length - 1] : null;
+	})(scan())`;
+}
+
+function clickExpression(pick: string): string {
+	return `(() => {
+${SCAN}
+	const el = ${pick};
+	if (!el) return null;
+	el.scrollIntoView({ block: "center", inline: "center" });
+	const r = el.getBoundingClientRect();
+	const x = r.x + r.width / 2;
+	const y = r.y + r.height / 2;
+	return { x, y, off: x < 0 || y < 0 || x > innerWidth || y > innerHeight };
+})()`;
+}
+
+function renderUi(face: UiFace): string {
+	const lines = [`url ${face.url}`];
+	if (face.title !== "") lines.push(`title ${face.title}`);
+	if (face.text !== "") lines.push(`text ${face.text}`);
+	face.controls.forEach((c, i) => {
+		let line = `#${i} ${c.role} ${JSON.stringify(c.name)}`;
+		if (c.value !== "") line += ` = ${JSON.stringify(c.value)}`;
+		const marks = [c.disabled ? "disabled" : "", c.checked ? "checked" : ""].filter((m) => m !== "");
+		if (marks.length > 0) line += ` [${marks.join(",")}]`;
+		lines.push(line);
+	});
+	return lines.join("\n");
+}
+
+/** 真事件点击：坐标取自元素中心，命中判定与焦点交给渲染器。 */
+async function click(target: Target, args: ParsedArgs, timeout: number): Promise<void> {
+	const [first] = args.positionals;
+	const text = flagStr(args, "text");
+	const css = flagStr(args, "css");
+	const at = flagStr(args, "at");
+	let point: { x: number; y: number };
+	if (at !== undefined) {
+		const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(at);
+		if (m === null) throw new Error("click --at 需要 x,y 坐标");
+		point = { x: Number(m[1]), y: Number(m[2]) };
+	} else {
+		const pick = text !== undefined
+			? pickExpression(text)
+			: css !== undefined
+				? `document.querySelector(${js(css)})`
+				: first !== undefined && /^\d+$/.test(first)
+					? `scan()[${first}]?.el`
+					: null;
+		if (pick === null) throw new Error("click 需要目标：<序号> | --text <文本> | --css <选择器> | --at <x,y>");
+		const hit = await evaluate<{ x: number; y: number; off: boolean } | null>(target, clickExpression(pick), timeout);
+		if (hit === null) throw new Error("click 目标不存在或不可见");
+		if (hit.off) throw new Error(`click 目标不在视口内（${Math.round(hit.x)},${Math.round(hit.y)}）`);
+		point = hit;
+	}
+	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, PROBE_MS);
+	await cdp(target, "Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, PROBE_MS);
+	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, PROBE_MS);
+}
+
+interface KeySpec {
+	key: string;
+	code: string;
+	keyCode: number;
+	text?: string;
+}
+
+const KEYS: Record<string, KeySpec> = {
+	Enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
+	Tab: { key: "Tab", code: "Tab", keyCode: 9 },
+	Escape: { key: "Escape", code: "Escape", keyCode: 27 },
+	Backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+	Delete: { key: "Delete", code: "Delete", keyCode: 46 },
+	ArrowUp: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+	ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+	ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+	ArrowRight: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+	Space: { key: " ", code: "Space", keyCode: 32, text: " " },
+};
+
+function keySpec(name: string): KeySpec {
+	const known = KEYS[name];
+	if (known !== undefined) return known;
+	if (!/^[a-zA-Z0-9]$/.test(name)) throw new Error(`未知按键：${name}（可用：${Object.keys(KEYS).join("/")} 或单个字母数字）`);
+	const upper = name.toUpperCase();
+	return { key: name, code: `${/^[a-z]$/i.test(name) ? "Key" : "Digit"}${upper}`, keyCode: upper.charCodeAt(0), text: name };
+}
+
+async function pressKey(target: Target, name: string, timeout: number): Promise<void> {
+	const k = keySpec(name);
+	await cdp(target, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: k.key, code: k.code, windowsVirtualKeyCode: k.keyCode }, timeout);
+	if (k.text !== undefined) await cdp(target, "Input.dispatchKeyEvent", { type: "char", key: k.key, text: k.text, unmodifiedText: k.text }, timeout);
+	await cdp(target, "Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.keyCode }, timeout);
+}
+
+/** 空闲须稳定 500ms：点击后 UI 可能尚未发起回合。 */
+async function waitIdle(target: Target, timeout: number): Promise<void> {
+	const deadline = Date.now() + timeout;
+	let since: number | null = null;
+	for (;;) {
+		const list = await evaluate<{ state: string }[]>(target, "window.shell.sessions()", PROBE_MS).catch(() => []);
+		since = list.every((s) => s.state === "idle") ? (since ?? Date.now()) : null;
+		if (since !== null && Date.now() - since >= 500) return;
+		if (Date.now() >= deadline) throw new Error(`等待空闲超时（${Math.round(timeout / 1000)}s）`);
+		await sleep(150);
+	}
+}
+
+async function waitFace(target: Target, args: ParsedArgs, timeout: number): Promise<void> {
+	const text = flagStr(args, "text");
+	const idle = args.flags.has("idle");
+	if ((text === undefined ? 0 : 1) + (idle ? 1 : 0) !== 1) throw new Error("wait 需要 --text <文本> | --idle 之一");
+	if (text !== undefined) {
+		await poll(timeout, `文本 ${js(text)}`, () => evaluate<boolean>(target, `document.body.innerText.includes(${js(text)})`, PROBE_MS));
+		return;
+	}
+	await waitIdle(target, timeout);
+}
+
+async function shot(target: Target, timeout: number): Promise<string> {
+	const file = join(tmpdir(), `cave-${Date.now()}.png`);
+	const out = await cdp<{ data?: string }>(target, "Page.captureScreenshot", { format: "png" }, timeout);
+	if (out.data === undefined || out.data === "") throw new Error("截图无数据");
+	writeFileSync(file, Buffer.from(out.data, "base64"));
+	return file;
+}
+
+/** 命令分派：UI 通道（go/ui/click/type/key/wait/shot）走真实交互；shell 通道是无头与断言面。 */
+async function dispatch(cmd: string, args: ParsedArgs, target: Target, timeout: number): Promise<unknown> {
+	const [g, r, ...rest] = args.positionals;
 	const requireRun = (): [string, string] => {
 		if (g === undefined || r === undefined) throw new Error(`${cmd} 需要 <game> <run>`);
 		return [g, r];
@@ -301,10 +506,39 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			return await evaluate(target, "window.shell.games()", timeout);
 		case "runs":
 			return await evaluate(target, g === undefined ? "window.shell.runs()" : `window.shell.runs(${js(g)})`, timeout);
+		case "go": {
+			if (g === undefined) throw new Error("go 需要 <game>");
+			await go(target, g);
+			return;
+		}
+		case "ui":
+			return renderUi(await evaluate<UiFace>(target, UI_EXPRESSION, timeout));
+		case "click": {
+			await click(target, args, timeout);
+			return;
+		}
+		case "type": {
+			const text = args.positionals.join(" ").trim();
+			if (text === "") throw new Error("type 需要文本");
+			await cdp(target, "Input.insertText", { text }, timeout);
+			return;
+		}
+		case "key": {
+			const name = args.positionals[0];
+			if (name === undefined) throw new Error("key 需要按键名");
+			await pressKey(target, name, timeout);
+			return;
+		}
+		case "wait": {
+			await waitFace(target, args, timeout);
+			return;
+		}
+		case "shot":
+			return await shot(target, timeout);
 		case "state": {
 			const [game, run] = requireRun();
-			const { face, warnings } = await openFace(target, game, run, timeout);
-			return { time: face.time, view: face.view, warnings };
+			const face = await openRun(target, game, run, timeout);
+			return { time: face.time, view: face.view, warnings: face.warnings ?? [] };
 		}
 		case "records": {
 			const [game, run] = requireRun();
@@ -320,7 +554,7 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const utterance = rest.join(" ").trim();
 			if (utterance === "") throw new Error("act 需要话语");
-			await openFace(target, game, run, timeout);
+			await openRun(target, game, run, timeout);
 			const out = await evaluate<ActFace>(target, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`, timeout);
 			return { time: out.time, lines: out.lines, reveals: out.reveals, narration: out.narration, warnings: out.warnings };
 		}
@@ -328,12 +562,12 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const instruction = rest.join(" ").trim();
 			if (instruction === "") throw new Error("narrate 需要指令");
-			await openFace(target, game, run, timeout);
+			await openRun(target, game, run, timeout);
 			const out = await evaluate<NarrateFace>(target, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`, timeout);
 			return { narration: out.narration, warnings: out.warnings };
 		}
 		case "eval": {
-			const expr = positionals.join(" ").trim();
+			const expr = args.positionals.join(" ").trim();
 			if (expr === "") throw new Error("eval 需要表达式");
 			return await evaluate(target, expr, timeout);
 		}
@@ -387,7 +621,7 @@ function runMain(main: () => Promise<void>): void {
 
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
-	if (cmd === undefined) throw new Error("需要命令");
+	if (cmd === undefined) throw new Error("需要命令：games|go|ui|click|type|key|wait|shot|state|records|close|act|narrate|eval|stop");
 	const a = parseArgs(argv);
 	const rawExe = flagStr(a, "exe");
 	const exe = rawExe === undefined ? undefined : resolve(rawExe);
@@ -400,7 +634,7 @@ async function main(): Promise<void> {
 		return;
 	}
 	const target = await ensureHost(exe, dataRoot);
-	const result = await dispatch(cmd, a.positionals, target, timeout);
+	const result = await dispatch(cmd, a, target, timeout);
 	if (result !== undefined) console.log(typeof result === "string" ? result : JSON.stringify(result));
 }
 
