@@ -4,13 +4,13 @@ import {
 	defineTool,
 	SessionManager,
 	SettingsManager,
+	type ContextEvent,
 	type CreateAgentSessionOptions,
 	type InlineExtension,
 	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { recentEntries, pruneContext } from "./context.ts";
 import type { ArchiveStore } from "./archive.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, recentEntries, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
@@ -321,6 +321,19 @@ function promptText(name: string, render: () => string): string {
 	const text = render();
 	if (typeof text !== "string" || text.trim() === "") throw new Error(`${name} 须返回非空字符串`);
 	return text;
+}
+
+/** 裁为最后一条 user 起：工具结果是独立消息，回合内该锚恒为回合提示，续行保住裁决前缀。 */
+function pruneContext(messages: ContextEvent["messages"]): ContextEvent["messages"] {
+	let last = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i]?.role === "user") {
+			last = i;
+			break;
+		}
+	}
+	if (last < 0) return messages;
+	return messages.slice(last);
 }
 
 function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): InlineExtension {
