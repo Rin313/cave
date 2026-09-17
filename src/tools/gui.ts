@@ -73,7 +73,7 @@ interface Host {
 	dataRoot: string;
 }
 
-/** 单实例锁使全局至多一个宿主，故状态与日志全局唯一。 */
+/** 单实例锁使全局至多一个宿主 */
 const HOST_FILE = join(tmpdir(), "gui-host.json");
 const HOST_LOG = join(tmpdir(), "gui-host.log");
 
@@ -119,7 +119,6 @@ async function targetOf(port: number): Promise<Target | null> {
 	return (await targetsOf(port))[0] ?? null;
 }
 
-/** 宿主日志尾：启动与崩溃诊断。 */
 function logTail(): string {
 	try {
 		const lines = readFileSync(HOST_LOG, "utf8").trimEnd().split(/\r?\n/).filter((l) => l !== "");
@@ -183,7 +182,6 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell.env 不可达${logTail()}`);
 }
 
-/** 重连或启动宿主：参数不符时报错，进程已死则清理残留后重启。 */
 async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<Target> {
 	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
 	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
@@ -276,7 +274,7 @@ async function hostRoot(target: Target): Promise<string> {
 	return face.root;
 }
 
-/** 路径同一性：解析后比较；Windows 大小写不敏感。 */
+/** 路径同一性：解析后比较 */
 function samePath(a: string, b: string): boolean {
 	const x = resolve(a);
 	const y = resolve(b);
