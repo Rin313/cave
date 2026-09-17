@@ -1,10 +1,10 @@
-// GUI e2e host：经 CDP 调 window.shell 的 IPC 面
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 
@@ -50,8 +50,8 @@ interface NarrateFace {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const js = (v: unknown): string => JSON.stringify(v);
 const openExpr = (game: string, run: string): string => `window.shell.open(${js(game)},${js(run)})`;
-/** 打开（必要时建会话）再求值：装载告警与结果一并回传。 */
-const openThen = (game: string, run: string, call: string): string => `(async()=>{const o=await ${openExpr(game, run)};return {warnings:o.warnings??[],result:await (${call})}})()`;
+/** 求值探测时限：界面切换中的失败应快速落到重试，而不是占满命令时限。 */
+const PROBE_MS = 5_000;
 
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
@@ -281,6 +281,41 @@ function samePath(a: string, b: string): boolean {
 	return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
+/** 主窗是否已在该游戏界面 */
+async function onGameFace(target: Target, game: string): Promise<boolean> {
+	const href = await evaluate<unknown>(target, "location.href", PROBE_MS).catch(() => undefined);
+	if (typeof href !== "string") return false;
+	try {
+		return fileURLToPath(href).endsWith(join("games", game, "index.html"));
+	} catch {
+		return false;
+	}
+}
+
+/** 主窗切到游戏界面：已在即不动，无界面即返回告警，装载失败即抛。 */
+async function showGame(target: Target, game: string, timeout: number): Promise<string | null> {
+	if (await onGameFace(target, game)) return null;
+	const uis = await evaluate<unknown>(target, "window.shell.uis()", timeout);
+	if (!Array.isArray(uis) || !uis.includes(game)) return `游戏 ${game} 无界面（games/${game}/index.html 缺席），窗口未切换到该游戏`;
+	// 导航替换页面并销毁求值上下文：发起不等结果，落定由页面 URL 判定
+	await evaluate(target, `void window.shell.navigate(${js(game)}).catch(() => {})`, PROBE_MS).catch(() => undefined);
+	const deadline = Date.now() + timeout;
+	while (Date.now() < deadline) {
+		if (await onGameFace(target, game)) return null;
+		await sleep(150);
+	}
+	throw new Error(`等待游戏界面 ${game} 装载超时`);
+}
+
+/** 打开运行并把主窗切到该游戏界面：装载告警与无界面告警一并返回。 */
+async function openFace(target: Target, game: string, run: string, timeout: number): Promise<{ face: RunFace; warnings: string[] }> {
+	const face = await evaluate<RunFace>(target, openExpr(game, run), timeout);
+	const warnings = [...(face.warnings ?? [])];
+	const missing = await showGame(target, game, timeout);
+	if (missing !== null) warnings.push(missing);
+	return { face, warnings };
+}
+
 function printWarnings(warnings: string[]): void {
 	for (const w of warnings) console.log(`  ⚠ ${w}`);
 }
@@ -305,9 +340,9 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			return;
 		case "state": {
 			const [game, run] = requireRun();
-			const face = await evaluate<RunFace>(target, openExpr(game, run), timeout);
+			const { face, warnings } = await openFace(target, game, run, timeout);
 			console.log(`【${game}/${run}】t=${face.time}`);
-			printWarnings(face.warnings ?? []);
+			printWarnings(warnings);
 			console.log(JSON.stringify(face.view, null, 1));
 			return;
 		}
@@ -329,8 +364,8 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const utterance = rest.join(" ").trim();
 			if (utterance === "") throw new Error("act 需要话语");
-			const expr = openThen(game, run, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`);
-			const { warnings, result } = await evaluate<{ warnings: string[]; result: ActFace }>(target, expr, timeout);
+			const { warnings } = await openFace(target, game, run, timeout);
+			const result = await evaluate<ActFace>(target, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`, timeout);
 			printWarnings(warnings);
 			printAct(utterance, result);
 			return;
@@ -339,8 +374,8 @@ async function dispatch(cmd: string, positionals: string[], target: Target, time
 			const [game, run] = requireRun();
 			const instruction = rest.join(" ").trim();
 			if (instruction === "") throw new Error("narrate 需要指令");
-			const expr = openThen(game, run, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`);
-			const { warnings, result } = await evaluate<{ warnings: string[]; result: NarrateFace }>(target, expr, timeout);
+			const { warnings } = await openFace(target, game, run, timeout);
+			const result = await evaluate<NarrateFace>(target, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`, timeout);
 			console.log(`\n【${game}/${run} narrate】${instruction}`);
 			printWarnings(warnings);
 			printWarnings(result.warnings);
