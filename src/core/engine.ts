@@ -9,8 +9,8 @@ import {
 	type InlineExtension,
 	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import type { ArchiveStore } from "./archive.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, recentEntries, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import type { ArchiveSnapshot, ArchiveStore } from "./archive.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, denialReasonText, lawOf, recentEntries, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
@@ -22,7 +22,7 @@ export interface AgentSpec {
 
 export interface EngineOptions {
 	agent: () => Promise<AgentSpec>;
-	/** 回合记录档案；缺省只留进程内存。 */
+	/** 回合记录档案端口；缺省只留进程内存。 */
 	archive?: ArchiveStore;
 }
 
@@ -104,10 +104,29 @@ export class Engine {
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 
-		const loaded = options.archive?.load(def);
-		const ledger: Ledger = { records: loaded?.records ?? [], dead: null };
-		const sim = loaded?.sim ?? new Simulation(def);
-		const loadWarnings = loaded?.warnings ?? [];
+		const snapshot: ArchiveSnapshot = options.archive?.read() ?? { records: [], broken: 0, incomplete: false };
+		const loadWarnings: string[] = [];
+		if (snapshot.broken > 0) loadWarnings.push(`档案条目 ${snapshot.broken} 条形状损坏`);
+		if (snapshot.incomplete) loadWarnings.push("档案末尾不完整（无换行）：截断至最后完整条目");
+		// 装载即重放：不重裁决、不掷骰；首个不可应用的记录起与近况同界截断
+		const sim = new Simulation(def);
+		const records: ChronicleEntry[] = [];
+		let truncated = false;
+		for (let i = 0; i < snapshot.records.length; i++) {
+			const record = snapshot.records[i]!;
+			const reason = sim.replayRecord(record);
+			if (reason !== null) {
+				loadWarnings.push(`档案记录不可应用（第 ${i + 1} 条：${reason}）：世界与近况同界截断`);
+				truncated = true;
+				break;
+			}
+			records.push(record);
+		}
+		options.archive?.keep(records);
+		if (truncated) loadWarnings.push(`档案截断：续写自第 ${records.length + 1} 回合起（旧尾部不再进入装载）`);
+		const denied = sim.admit();
+		if (denied !== null) throw new Error(`装载拒绝：当前世界违反 ${lawOf(denied.point)}（${denialReasonText(denied)}）`);
+		const ledger: Ledger = { records, dead: null };
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [], warnings: [] };

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { openArchive, readRecords } from "../core/archive.ts";
+import { openArchive } from "../core/archive.ts";
 import { Engine, type ActOutcome, type AgentSpec, type NarrationOutcome } from "../core/engine.ts";
 import * as sim from "../core/sim.ts";
 import { installModel, modelRef, openModelRuntime, resolveModelRef, supportedThinkingLevels, type ModelFace, type ModelResolution } from "./model.ts";
@@ -427,7 +427,7 @@ ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
-	return { game, run, ...readRecords(recordsPath(ROOT, game, run)) };
+	return { game, run, ...openArchive(recordsPath(ROOT, game, run)).read() };
 });
 
 /** 活实例面：opening 即装载中，其余即引擎单飞态；time 仅在已落定时给出。 */

@@ -1,21 +1,22 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Simulation, deepFreeze, denialReasonText, isCommit, lawOf, type ChronicleEntry, type Commit, type GameDef } from "./sim.ts";
+import { deepFreeze, isCommit, type ChronicleEntry, type Commit } from "./sim.ts";
 
-export interface LoadedArchive {
-	sim: Simulation;
+export interface ArchiveSnapshot {
 	records: ChronicleEntry[];
-	warnings: string[];
+	broken: number;
+	incomplete: boolean;
 }
 
-/** 回合档案：单一追加日志，每回合一行（回合与表达同条目）；回合在表达落定后一次追加，装载即重放（不重裁决、不掷骰），表达不进重放。崩溃或落盘失败只可能伤末尾半行（装载截断并在续写前重写修复），已落前缀不被触碰；截断以重写落地为存活回合前缀（表达随其回合保留，旧全文移存 `<path>.orphan`）。 */
+/** 回合档案：单一追加日志，每回合一行（回合与表达同条目）。`read` 是纯读；`keep` 声明装载存活前缀（截断与半行的修复延迟到首次 `append`：旧全文原样移存 `<path>.orphan`）。 */
 export interface ArchiveStore {
-	load(def: GameDef): LoadedArchive;
+	read(): ArchiveSnapshot;
+	keep(records: readonly ChronicleEntry[]): void;
 	append(record: ChronicleEntry): void;
 }
 
 /** 档案行：回合（含可选表达）或坏行。 */
-export type ArchiveLine =
+type ArchiveLine =
 	| { kind: "record"; record: ChronicleEntry }
 	| { kind: "broken" };
 
@@ -35,8 +36,8 @@ function parseArchiveLine(raw: string): ArchiveLine | null {
 	return { kind: "record", record: deepFreeze({ time: r.time, utterance: r.utterance as string, steps: r.steps as Commit[], ...(narration !== undefined && { narration }) }) };
 }
 
-/** 档案全读：缺席即空档案（新运行）；坏行、末尾半行、回合（表达随记录）一并返回，装载与诊断共用同一读法。 */
-export function readRecords(path: string): { records: ChronicleEntry[]; broken: number; incomplete: boolean } {
+/** 档案全读：缺席即空档案（新运行）；坏行只计数，末尾无换行即不完整。 */
+function readRecords(path: string): ArchiveSnapshot {
 	if (!existsSync(path)) return { records: [], broken: 0, incomplete: false };
 	const text = readFileSync(path, "utf8");
 	const records: ChronicleEntry[] = [];
@@ -62,40 +63,27 @@ function writeRecords(path: string, records: readonly ChronicleEntry[]): void {
 	replaceFile(path, records.map((r) => `${JSON.stringify(r)}\n`).join(""));
 }
 
-/** 截断与半行只改内存；续写前才重写档案（装载保持只读）。旧全文原样移存 `.orphan`，不再进入装载。 */
+/** 装载保持只读：`read` 取快照，`keep` 记存活前缀；截断与半行只在续写前重写落地（旧全文原样移存 `.orphan`，不再进入装载）。 */
 export function openArchive(path: string): ArchiveStore {
-	let repair: ChronicleEntry[] | null = null;
+	let parsed: ArchiveSnapshot | null = null;
+	let repair: readonly ChronicleEntry[] | null = null;
 	const appendLine = (value: unknown): void => {
 		mkdirSync(dirname(path), { recursive: true });
 		appendFileSync(path, `${JSON.stringify(value)}\n`, "utf8");
 	};
 	return {
-		load(def) {
-			const warnings: string[] = [];
-			const read = readRecords(path);
-			if (read.broken) warnings.push(`档案条目 ${read.broken} 条形状损坏`);
-			if (read.incomplete) warnings.push("档案末尾不完整（无换行）：截断至最后完整条目");
-			const sim = new Simulation(def);
-			const records: ChronicleEntry[] = [];
-			let truncated = false;
-			for (let i = 0; i < read.records.length; i++) {
-				const record = read.records[i]!;
-				const reason = sim.replayRecord(record);
-				if (reason) {
-					warnings.push(`档案记录不可应用（第 ${i + 1} 条：${reason}）：世界与近况同界截断`);
-					truncated = true;
-					break;
-				}
-				records.push(record);
-			}
-			repair = truncated || read.incomplete ? records : null;
-			if (truncated) warnings.push(`档案截断：续写自第 ${records.length + 1} 回合起（旧尾部不再进入装载）`);
-			const denied = sim.admit();
-			if (denied) throw new Error(`装载拒绝：当前世界违反 ${lawOf(denied.point)}（${denialReasonText(denied)}）`);
-			return { sim, records, warnings };
+		read() {
+			parsed = readRecords(path);
+			return parsed;
+		},
+		keep(records) {
+			if (parsed === null) throw new Error("keep 须在 read 之后调用");
+			const snapshot = parsed;
+			const intact = records.length === snapshot.records.length && records.every((r, i) => r === snapshot.records[i]);
+			repair = intact && !snapshot.incomplete ? null : [...records];
 		},
 		append(record) {
-			if (repair) {
+			if (repair !== null) {
 				if (existsSync(path)) copyFileSync(path, `${path}.orphan`);
 				writeRecords(path, repair);
 				repair = null;
