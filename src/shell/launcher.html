@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
 <meta charset="utf-8">
-<title>Settings</title>
+<title>Launcher</title>
 <style>
 	:root {
 		color-scheme: light dark;
@@ -12,7 +12,6 @@
 		--chip: #ece7d6;
 		--wash: #dff7ff;
 		--amber: #ffd43b;
-		--pink: #ff9ed2;
 		--cyan: #7ae7ff;
 		--danger: #ffa8a8;
 		--shadow: #141414;
@@ -29,7 +28,6 @@
 			--chip: #33302a;
 			--wash: #16323a;
 			--amber: #eecf45;
-			--pink: #e483b9;
 			--cyan: #66c6e3;
 			--danger: #d96a6a;
 			--shadow: #d6cfbc;
@@ -54,7 +52,7 @@
 	.tag { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; background: var(--chip); border: 2px solid var(--ink); padding: 2px 7px; }
 	.err { padding: 9px 11px; background: var(--danger); color: #141414; border: 2px solid var(--ink); box-shadow: 4px 4px 0 var(--shadow); white-space: pre-wrap; overflow-wrap: anywhere; }
 	.muted { color: var(--dim); }
-	.row { display: flex; gap: 8px; margin: 12px 0; }
+	.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 	.row input { flex: 1; min-width: 0; }
 	button, input { box-sizing: border-box; font: inherit; color: var(--ink); background: var(--surface); border: 2px solid var(--ink); border-radius: 0; padding: 6px 12px; box-shadow: 3px 3px 0 var(--shadow); }
 	button { font-weight: 700; cursor: pointer; transition: transform 80ms ease, box-shadow 80ms ease, background-color 120ms ease; }
@@ -62,8 +60,6 @@
 	button:active { transform: translate(3px, 3px); box-shadow: none; }
 	input::placeholder { color: var(--dim); }
 	input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid var(--cyan); outline-offset: 2px; }
-	#close { background: var(--pink); color: #141414; }
-	#close:hover { background: var(--amber); }
 	#current { width: fit-content; max-width: 100%; padding: 4px 10px 5px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; background: var(--chip); border: 2px solid var(--ink); }
 	#thinking:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 0; }
 	#thinking button { padding: 3px 9px; font-size: 12px; box-shadow: 2px 2px 0 var(--shadow); }
@@ -92,14 +88,15 @@
 <main>
 	<header>
 		<h1 id="title"></h1>
-		<button id="close" type="button"></button>
+		<button id="back" type="button" hidden></button>
 	</header>
-	<p id="boot" class="err" hidden></p>
+	<p id="error" class="err" hidden></p>
 	<p id="settingsError" class="err" hidden></p>
-	<section id="uiSection" hidden>
+	<section id="uiSection">
 		<h2 id="uiTitle"></h2>
 		<ul id="uiList"></ul>
 		<p id="uiNone" class="muted" hidden></p>
+		<p id="uiHint" class="muted" hidden></p>
 	</section>
 	<section>
 		<h2 id="modelTitle"></h2>
@@ -120,7 +117,7 @@
 			<ul id="modelList"></ul>
 		</div>
 	</section>
-	<footer><p id="advanced" class="muted"></p><div class="row"><button id="openRoot" type="button"></button><button id="openGames" type="button"></button></div></footer>
+	<footer><p id="advanced" class="muted"></p><div class="row"><button id="openRoot" type="button"></button><button id="openGames" type="button"></button><button id="openUi" type="button"></button></div></footer>
 </main>
 <script>
 (() => {
@@ -131,15 +128,17 @@ const el = (tag, text, cls) => { const n = document.createElement(tag); if (text
 const button = (label, onClick) => { const b = el("button", label); b.type = "button"; b.onclick = onClick; return b; };
 const link = (url, label) => { const a = el("a", label); a.href = url; a.target = "_blank"; a.rel = "noreferrer"; return a; };
 const reason = (e) => String(e?.message ?? e);
+const showError = (message) => { const box = $("error"); box.hidden = false; box.textContent = message; };
 
 const zh = (navigator.language || "en").toLowerCase().startsWith("zh");
 const text = {
-	"title": ["配置", "Settings"],
-	"close": ["完成", "Done"],
+	"title": ["启动器", "Launcher"],
+	"back": ["返回应用面", "Back to app"],
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
-	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json", "Advanced: edit settings.json and auth.json under {dir} directly."],
+	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json；内容主面放于 {dir}/ui/index.html", "Advanced: edit settings.json and auth.json under {dir} directly; the app face lives at {dir}/ui/index.html."],
 	"open.root": ["打开根目录", "Open root folder"],
 	"open.games": ["打开 games 目录", "Open games folder"],
+	"open.ui": ["打开 ui 目录", "Open ui folder"],
 	"current": ["当前", "Current"],
 	"use": ["使用", "Use"],
 	"thinking.label": ["思考档", "Thinking"],
@@ -148,8 +147,8 @@ const text = {
 	"unconfigured": ["未配置", "Not configured"],
 	"ui.section": ["界面", "Interface"],
 	"ui.scope": ["（{game}）", " ({game})"],
-	"ui.preferred": ["偏好", "Preferred"],
 	"ui.none": ["没有可用界面：在 games/<id>/ui/index.html 或 games/<id>/ui/<name>/index.html 放置界面。", "No user interface available: add games/<id>/ui/index.html or games/<id>/ui/<name>/index.html."],
+	"ui.hint": ["游戏中 Cmd/Ctrl+Shift+H 回到此处", "Press Cmd/Ctrl+Shift+H in a game to return here."],
 	"model.section": ["模型与凭据", "Models & credentials"],
 	"model.current": ["当前模型：{model}", "Current model: {model}"],
 	"model.error": ["模型不可用：{error}", "Model unavailable: {error}"],
@@ -174,11 +173,11 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 (async () => {
 	if (!shell) {
-		$("boot").hidden = false;
-		$("boot").textContent = t("bridge");
+		showError(t("bridge"));
 		return;
 	}
-	const params = new URLSearchParams(location.search);
+	const bootError = new URLSearchParams(location.search).get("error");
+	if (bootError !== null) showError(bootError);
 	const env = await shell.env();
 	let settings = {};
 	let allModels = [];
@@ -188,12 +187,16 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 	document.title = t("title");
 	$("title").textContent = t("title");
-	$("close").textContent = t("close");
-	$("close").onclick = () => window.close();
+	$("back").textContent = t("back");
+	$("back").hidden = env.home !== "app";
+	$("back").onclick = () => shell.home();
+	$("uiTitle").textContent = t("ui.section");
 	$("openRoot").textContent = t("open.root");
 	$("openRoot").onclick = () => shell.reveal();
 	$("openGames").textContent = t("open.games");
 	$("openGames").onclick = () => shell.reveal("games");
+	$("openUi").textContent = t("open.ui");
+	$("openUi").onclick = () => shell.reveal("ui");
 	$("modelTitle").textContent = t("model.section");
 	$("advanced").textContent = t("advanced", { dir: env.root });
 	$("thinkingLabel").textContent = t("thinking.label");
@@ -207,16 +210,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 	};
 
 	await refreshSettings();
-	const bootError = params.get("error");
-	if (bootError !== null) {
-		$("boot").hidden = false;
-		$("boot").textContent = bootError;
-	}
-	if (params.get("boot") === "1") {
-		$("uiSection").hidden = false;
-		$("uiTitle").textContent = t("ui.section");
-		await renderUis();
-	}
+	await renderUis();
 	await refreshCurrent();
 	await renderProviders();
 	await renderModels();
@@ -295,30 +289,27 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 	async function renderUis() {
 		const none = $("uiNone");
+		const hint = $("uiHint");
 		none.textContent = t("ui.none");
+		hint.textContent = t("ui.hint");
 		let uis;
 		try {
 			uis = await shell.uis();
 		} catch (e) {
-			none.hidden = false;
-			none.textContent = reason(e);
+			showError(reason(e));
+			hint.hidden = true;
 			return;
 		}
 		none.hidden = uis.length > 0;
+		hint.hidden = uis.length === 0 || env.home !== "launcher";
 		$("uiList").replaceChildren(...uis.map((u) => {
 			const scope = u.game !== u.name ? t("ui.scope", { game: u.game }) : "";
-			const mark = u.ref === settings.ui ? ` · ${t("ui.preferred")}` : "";
 			const li = document.createElement("li");
-			li.append(el("span", `${u.name}${scope}${mark}`, "name"), button(t("use"), async () => {
+			li.append(el("span", `${u.name}${scope}`, "name"), button(t("use"), async () => {
 				try {
-					await shell.setSettings({ ui: u.ref });
 					await shell.navigate(u.ref);
-					await refreshSettings();
-					await renderUis();
 				} catch (e) {
-					none.hidden = false;
-					none.className = "err";
-					none.textContent = reason(e);
+					showError(reason(e));
 				}
 			}));
 			return li;

@@ -27,11 +27,12 @@ contextBridge.exposeInMainWorld("shell", {
 	state: (game, run) => invoke("state", { game, run }),
 	uis: (game) => invoke("uis", { game }),
 	navigate: (ref) => invoke("navigate", { ref }),
+	home: () => invoke("home"),
 	settings: () => invoke("settings"),
 	env: () => invoke("env"),
 	reveal: (dir) => invoke("reveal", { dir }),
 	setSettings: (patch) => invoke("settings:set", { patch }),
-	openSettings: () => invoke("settings:open"),
+	openLauncher: () => invoke("launcher:open"),
 	models: () => invoke("models"),
 	currentModel: () => invoke("model:current"),
 	auth: {

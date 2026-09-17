@@ -180,7 +180,7 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 		await sleep(150);
 	}
 	child.kill();
-	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：需在数据根的 games/<id>/ui/index.html 提供界面，且该界面经 preload 暴露 window.shell${logTail()}`);
+	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell.env 不可达${logTail()}`);
 }
 
 /** 重连或启动宿主：参数不符时报错，进程已死则清理残留后重启。 */

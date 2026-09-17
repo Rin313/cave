@@ -30,7 +30,6 @@ const sessions = new Map<string, SessionSlot>();
 const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 
 let win: BrowserWindow | null = null;
-let settingsWin: BrowserWindow | null = null;
 
 /** 第二实例聚焦主窗（主窗缺席即应用正在收束）；写者唯一由单实例锁保证。 */
 app.on("second-instance", () => {
@@ -101,8 +100,12 @@ function stringSetting(settings: JsonObject, key: string): string | undefined {
 	return typeof v === "string" ? v : undefined;
 }
 
-/** 壳内引导面 */
-const SETUP_FILE = join(import.meta.dirname, "setup.html");
+/** 内容应用面：存在即为主面（启动、home 与游戏界面失败回落的落点）；启动器仅在缺席、故障或内容显式调用时出现。 */
+const APP_FILE = join(ROOT, "ui", "index.html");
+/** 壳内启动器：配置与界面清单；--launcher 或内容显式调用时出现。 */
+const LAUNCHER_FILE = join(import.meta.dirname, "launcher.html");
+/** --launcher：本次会话强制以启动器为主面（应用面故障时的恢复口）。 */
+const FORCE_LAUNCHER = process.argv.includes("--launcher");
 
 let sharedRuntime: Promise<ModelRuntime> | null = null;
 /** 壳、配置协议与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败弃置，下次重试。 */
@@ -126,7 +129,7 @@ interface UiSite {
 /** 界面 ref：`<game>/<name>`；两段均来自目录名，不含斜杠。 */
 const uiRef = (site: UiSite): string => `${site.game}/${site.name}`;
 
-/** 全部界面（ref 去重，按 ref 升序）：games/<id>/ui/index.html 为名即 id 的缺省界面，games/<id>/ui/<name>/index.html 为具名界面。 */
+/** 全部界面（ref 去重，按 ref 升序）：games/<id>/ui/index.html 记为 <id>/<id>，games/<id>/ui/<name>/index.html 记为 <id>/<name>。 */
 function uiRegistry(): ReadonlyMap<string, UiSite> {
 	const sites = new Map<string, UiSite>();
 	const add = (site: UiSite): void => {
@@ -167,21 +170,6 @@ async function agent(): Promise<AgentSpec> {
 	return { model, modelRuntime: runtime, agentDir: ROOT, ...(thinkingLevel !== undefined && { thinkingLevel }) };
 }
 
-function bootUi(): UiSite {
-	const named = stringSetting(readSettings().settings, "ui");
-	const sites = uiRegistry();
-	if (named !== undefined && named.trim() !== "") {
-		const site = sites.get(named);
-		if (site === undefined) throw new Error(`设置的界面 ${named} 不存在：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
-		return site;
-	}
-	const defaults = [...sites.values()].filter((site) => site.name === site.game);
-	if (defaults.length === 1) return defaults[0]!;
-	if (sites.size === 0) throw new Error(`没有可用界面：在 ${join(ROOT, "games")} 下任一 <id>/ui 放置 index.html 或 <name>/index.html`);
-	if (defaults.length > 1) throw new Error(`多个默认界面：${defaults.map(uiRef).join(", ")}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
-	throw new Error(`未指定界面：可用 ${uiList(sites)}；在 ${SETTINGS_FILE} 写入 { "ui": "<game>/<name>" }`);
-}
-
 function windowOptions(): BrowserWindowConstructorOptions {
 	return {
 		show: false,
@@ -215,53 +203,57 @@ function bindWindow(w: BrowserWindow): void {
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
-/** 建窗即定尺寸并绑纪律。 */
-function newWindow(width: number, height: number): BrowserWindow {
-	const w = new BrowserWindow({ ...windowOptions(), width, height });
-	bindWindow(w);
-	return w;
+/** 内容之外的兜底出口：Cmd/Ctrl+Shift+H 回主面（应用面或启动器）。 */
+function bindHomeKey(w: BrowserWindow): void {
+	w.webContents.on("before-input-event", (event, input) => {
+		if (input.type !== "keyDown" || input.isAutoRepeat || !(input.control || input.meta) || !input.shift || input.key.toLowerCase() !== "h") return;
+		event.preventDefault();
+		void loadHome(w);
+	});
 }
 
-function loadPage(w: BrowserWindow, file: string, query?: Record<string, string>): Promise<void> {
-	return query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
+/** 导航代（按窗口）：末位导航胜出，被取代的装载无论成败（ERR_ABORTED 即其一）都不算本次意图的结果。 */
+const navSeq = new WeakMap<BrowserWindow, number>();
+
+function load(w: BrowserWindow, file: string, error?: string): Promise<void> {
+	const seq = (navSeq.get(w) ?? 0) + 1;
+	navSeq.set(w, seq);
+	const job = error === undefined ? w.loadFile(file) : w.loadFile(file, { query: { error } });
+	return job.catch((e: unknown) => {
+		if (navSeq.get(w) === seq) throw e;
+	});
 }
 
-/** 引导面亦失败：桌面级告知；主窗无面可救即退出，其余窗只弃自身。 */
-function setupFailed(w: BrowserWindow, message: string): void {
-	dialog.showErrorBox("cave", message);
-	if (w === win) app.exit(1);
-	else w.destroy();
+/** 主面为启动器：--launcher 强制，或应用面缺席。 */
+function launcherHome(): boolean {
+	return FORCE_LAUNCHER || !existsSync(APP_FILE);
 }
 
-/** 装载引导面；error 非空即显形并附界面清单（失败驱动的到达才列清单），并强制显示（正常路径留给 ready-to-show，不闪底色）。 */
-function loadSetup(w: BrowserWindow, error?: string): void {
-	if (w.isDestroyed()) return;
-	const job = error === undefined ? loadPage(w, SETUP_FILE) : loadPage(w, SETUP_FILE, { boot: "1", error });
-	job.then(
-		() => {
-			if (error !== undefined && !w.isDestroyed()) w.show();
-		},
-		(e: unknown) => {
-			if (!w.isDestroyed()) setupFailed(w, `${error === undefined ? "" : `${error}\n`}引导面装载失败（${SETUP_FILE}）：${String(e)}`);
-		},
+/** 装载内置启动器：成功或被取代即 null，失败即原因文本（含来因）。 */
+function loadLauncher(w: BrowserWindow, error?: string): Promise<string | null> {
+	if (w.isDestroyed()) return Promise.resolve(null);
+	return load(w, LAUNCHER_FILE, error).then(
+		() => null,
+		(e: unknown) => `${error === undefined ? "" : `${error}\n`}启动器装载失败（${LAUNCHER_FILE}）：${String(e)}`,
 	);
 }
 
-/** 装载内容界面；失败即回落引导面并显形原因（引导面自身失败即无窗口面）。 */
-function loadSite(w: BrowserWindow, site: UiSite): void {
-	loadPage(w, site.file).catch((e: unknown) => loadSetup(w, `界面 ${uiRef(site)} 装载失败（${site.file}）：${String(e)}`));
+/** 启动器是最后落点：失败即无窗口面。 */
+async function requireLauncher(w: BrowserWindow, error?: string): Promise<void> {
+	const failure = await loadLauncher(w, error);
+	if (failure === null || w.isDestroyed()) return;
+	dialog.showErrorBox("cave", failure);
+	app.exit(1);
 }
 
-function openSettings(): void {
-	if (settingsWin !== null && !settingsWin.isDestroyed()) {
-		settingsWin.focus();
-		return;
-	}
-	settingsWin = newWindow(720, 640);
-	settingsWin.on("closed", () => {
-		settingsWin = null;
+/** 装载主面；error 非空即经查询参数透出。应用面自身失败即降启动器携因（唯一自动降级），启动器亦失败即无窗口面。 */
+function loadHome(w: BrowserWindow, error?: string): Promise<void> {
+	if (w.isDestroyed()) return Promise.resolve();
+	if (launcherHome()) return requireLauncher(w, error);
+	return load(w, APP_FILE, error).catch((e: unknown) => {
+		if (w.isDestroyed()) return;
+		return requireLauncher(w, `${error === undefined ? "" : `${error}\n`}应用面装载失败（${APP_FILE}）：${String(e)}`);
 	});
-	loadSetup(settingsWin);
 }
 
 function gameFile(root: string, id: string): string | null {
@@ -443,13 +435,33 @@ ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
 	return [...uiRegistry().values()].filter((s) => game === undefined || s.game === game).map(uiFace);
 });
 
-/** 呈现面切换：只导航主窗，不动引擎，不写偏好；持久偏好即 settings.ui（哑写；bootUi 解析，失效即引导面）。 */
+/** 进游戏：只导航主窗，不动引擎，不写设置；装载失败即携因回主面。 */
 ipcMain.handle("navigate", async (_event, req: { ref?: unknown }) => {
 	const ref = strIn(req?.ref, "navigate", "ref");
 	const sites = uiRegistry();
 	const site = sites.get(ref);
 	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
-	if (win !== null && !win.isDestroyed()) await loadPage(win, site.file);
+	const w = win;
+	if (w === null || w.isDestroyed()) return;
+	try {
+		await load(w, site.file);
+	} catch (e) {
+		if (w.isDestroyed()) return;
+		await loadHome(w, `界面 ${ref} 装载失败（${site.file}）：${String(e)}`);
+	}
+});
+
+/** 回主面：内容自建的出口（按钮等）与快捷键走同一路径。 */
+ipcMain.handle("home", async () => {
+	if (win !== null) await loadHome(win);
+});
+
+/** 显式打开内置启动器（配置与界面清单）：内容侧入口；失败即回主面携因。 */
+ipcMain.handle("launcher:open", async () => {
+	const w = win;
+	if (w === null || w.isDestroyed()) return;
+	const failure = await loadLauncher(w);
+	if (failure !== null && !w.isDestroyed()) await loadHome(w, failure);
 });
 
 ipcMain.handle("settings", () => readSettings());
@@ -468,7 +480,7 @@ ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } 
 	};
 });
 
-ipcMain.handle("env", () => ({ root: ROOT }));
+ipcMain.handle("env", () => ({ root: ROOT, home: launcherHome() ? "launcher" : "app" }));
 
 /** 打开根下目录（不存在即建）：界面据此暴露内容与配置的可写位置。 */
 ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
@@ -479,14 +491,12 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（bootUi 显形、建会话报错）。 */
+/** 写入是哑的：patch 原样落用户层（原件破损先改名 .bad）；宿主键的有效性由消费处解析（建会话报错）。 */
 ipcMain.handle("settings:set", (_event, req: { patch?: unknown }) => {
 	if (req?.patch === null || typeof req?.patch !== "object" || Array.isArray(req.patch)) throw new Error("settings:set 需要 patch 对象");
 	const patch = { ...(req.patch as JsonObject) };
 	return { settings: patchSettings(patch) };
 });
-
-ipcMain.handle("settings:open", () => openSettings());
 
 ipcMain.handle("open", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "open");
@@ -523,15 +533,13 @@ ipcMain.handle("state", async (_event, req: RunRequest) => {
 
 app.whenReady().then(() => {
 	installModel(modelRuntime);
-	win = newWindow(1200, 820);
+	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
+	bindWindow(win);
+	bindHomeKey(win);
 	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
 	win.on("closed", () => {
 		win = null;
 		app.quit();
 	});
-	try {
-		loadSite(win, bootUi());
-	} catch (e) {
-		loadSetup(win, e instanceof Error ? e.message : String(e));
-	}
+	void loadHome(win);
 });
