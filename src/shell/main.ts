@@ -102,10 +102,8 @@ function stringSetting(settings: JsonObject, key: string): string | undefined {
 
 /** 内容应用面：存在即为主面（启动、home 与游戏界面失败回落的落点）；启动器仅在缺席、故障或内容显式调用时出现。 */
 const APP_FILE = join(ROOT, "ui", "index.html");
-/** 壳内启动器：配置与界面清单；--launcher 或内容显式调用时出现。 */
+/** 壳内启动器：配置与界面清单。 */
 const LAUNCHER_FILE = join(import.meta.dirname, "launcher.html");
-/** --launcher：本次会话强制以启动器为主面（应用面故障时的恢复口）。 */
-const FORCE_LAUNCHER = process.argv.includes("--launcher");
 
 let sharedRuntime: Promise<ModelRuntime> | null = null;
 /** 壳、配置协议与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败弃置，下次重试。 */
@@ -224,9 +222,9 @@ function load(w: BrowserWindow, file: string, error?: string): Promise<void> {
 	});
 }
 
-/** 主面为启动器：--launcher 强制，或应用面缺席。 */
+/** 主面为启动器：应用面缺席。 */
 function launcherHome(): boolean {
-	return FORCE_LAUNCHER || !existsSync(APP_FILE);
+	return !existsSync(APP_FILE);
 }
 
 /** 装载内置启动器：成功或被取代即 null，失败即原因文本（含来因）。 */
