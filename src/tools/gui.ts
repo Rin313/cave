@@ -10,17 +10,12 @@ const REPO_ROOT = join(import.meta.dirname, "..", "..");
 
 interface Target {
 	type: string;
-	url: string;
 	webSocketDebuggerUrl: string;
 }
 
 interface CdpReply {
 	id?: number;
-	result?: {
-		result?: { value?: unknown };
-		exceptionDetails?: { text?: string; exception?: { description?: string } };
-		data?: string;
-	};
+	result?: unknown;
 	error?: { message?: string };
 }
 
@@ -96,20 +91,15 @@ function pidAlive(pid: number): boolean {
 	}
 }
 
-/** 宿主的全部页面目标（窗口可不止一个）；不可达（未起／已死／界面已关）即空。 */
-async function targetsOf(port: number): Promise<Target[]> {
+/** 命令求值面：任一页面等价（同一 preload）；不可达（未起／已死／界面已关）即 null。 */
+async function targetOf(port: number): Promise<Target | null> {
 	try {
 		const list = (await (await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(1500) })).json()) as unknown;
-		if (!Array.isArray(list)) return [];
-		return (list as Target[]).filter((t) => t.type === "page" && typeof t.webSocketDebuggerUrl === "string");
+		if (!Array.isArray(list)) return null;
+		return (list as Target[]).find((t) => t.type === "page" && typeof t.webSocketDebuggerUrl === "string") ?? null;
 	} catch {
-		return [];
+		return null;
 	}
-}
-
-/** 命令求值面：任一页面等价（同一 preload）；不可达即 null。 */
-async function targetOf(port: number): Promise<Target | null> {
-	return (await targetsOf(port))[0] ?? null;
 }
 
 function logTail(): string {
@@ -129,7 +119,7 @@ function discardHost(): void {
 /** 脱离父进程启动宿主；就绪后才落盘状态。 */
 async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined): Promise<Target> {
 	const port = await freePort();
-	const flags = [`--remote-debugging-port=${port}`, "--remote-allow-origins=*", ...(dataRoot === undefined ? [] : [`--user-data-dir=${dataRoot}`])];
+	const flags = [`--remote-debugging-port=${port}`, ...(dataRoot === undefined ? [] : [`--user-data-dir=${dataRoot}`])];
 	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}（data-dir=${dataRoot ?? "宿主默认"}）\n`, "utf8");
 	const fd = openSync(HOST_LOG, "a");
 	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd] });
@@ -350,7 +340,6 @@ function renderUi(face: UiFace): string {
 async function click(target: Target, args: ParsedArgs, timeout: number): Promise<void> {
 	const [first] = args.positionals;
 	const text = flagStr(args, "text");
-	const css = flagStr(args, "css");
 	const at = flagStr(args, "at");
 	let point: { x: number; y: number };
 	if (at !== undefined) {
@@ -360,12 +349,10 @@ async function click(target: Target, args: ParsedArgs, timeout: number): Promise
 	} else {
 		const pick = text !== undefined
 			? pickExpression(text)
-			: css !== undefined
-				? `document.querySelector(${js(css)})`
-				: first !== undefined && /^\d+$/.test(first)
-					? `scan()[${first}]?.el`
-					: null;
-		if (pick === null) throw new Error("click 需要目标：<序号> | --text <文本> | --css <选择器> | --at <x,y>");
+			: first !== undefined && /^\d+$/.test(first)
+				? `scan()[${first}]?.el`
+				: null;
+		if (pick === null) throw new Error("click 需要目标：<序号> | --text <文本> | --at <x,y>");
 		const hit = await evaluate<{ x: number; y: number; off: boolean } | null>(target, clickExpression(pick), timeout);
 		if (hit === null) throw new Error("click 目标不存在或不可见");
 		if (hit.off) throw new Error(`click 目标不在视口内（${Math.round(hit.x)},${Math.round(hit.y)}）`);
@@ -401,7 +388,7 @@ function keySpec(name: string): KeySpec {
 	if (known !== undefined) return known;
 	if (!/^[a-zA-Z0-9]$/.test(name)) throw new Error(`未知按键：${name}（可用：${Object.keys(KEYS).join("/")} 或单个字母数字）`);
 	const upper = name.toUpperCase();
-	return { key: name, code: `${/^[a-z]$/i.test(name) ? "Key" : "Digit"}${upper}`, keyCode: upper.charCodeAt(0), text: name };
+	return { key: name, code: `${/[a-z]/i.test(name) ? "Key" : "Digit"}${upper}`, keyCode: upper.charCodeAt(0), text: name };
 }
 
 async function pressKey(target: Target, name: string, timeout: number): Promise<void> {

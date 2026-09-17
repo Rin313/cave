@@ -69,7 +69,6 @@
 	#flow a:hover { background: var(--amber); }
 	#promptArea > button { margin: 2px 8px 2px 0; }
 	footer { margin-top: 34px; padding-top: 12px; border-top: 3px solid var(--ink); }
-	#advanced { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
 	::-webkit-scrollbar { width: 12px; height: 12px; }
 	::-webkit-scrollbar-track { background: var(--paper); border-left: 2px solid var(--ink); }
 	::-webkit-scrollbar-thumb { background: var(--ink); border: 3px solid var(--paper); }
@@ -115,7 +114,7 @@
 			<ul id="modelList"></ul>
 		</div>
 	</section>
-	<footer><p id="advanced" class="muted"></p><div class="row"><button id="openRoot" type="button"></button></div></footer>
+	<footer><div class="row"><button id="openRoot" type="button"></button></div></footer>
 </main>
 <script>
 (() => {
@@ -133,7 +132,6 @@ const text = {
 	"title": ["启动器", "Launcher"],
 	"back": ["返回应用面", "Back to app"],
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
-	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json；内容主面放于 {dir}/ui/index.html", "Advanced: edit settings.json and auth.json under {dir} directly; the app face lives at {dir}/ui/index.html."],
 	"open.root": ["打开根目录", "Open root folder"],
 	"current": ["当前", "Current"],
 	"use": ["使用", "Use"],
@@ -188,7 +186,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("openRoot").textContent = t("open.root");
 	$("openRoot").onclick = () => shell.reveal();
 	$("modelTitle").textContent = t("model.section");
-	$("advanced").textContent = t("advanced", { dir: env.root });
 	$("thinkingLabel").textContent = t("thinking.label");
 	$("search").placeholder = t("model.filter");
 	$("all").textContent = t("model.all");
