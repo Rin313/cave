@@ -24,29 +24,6 @@ interface CdpReply {
 	error?: { message?: string };
 }
 
-interface RunFace {
-	time: number;
-	view: unknown;
-	warnings?: string[];
-}
-
-interface ActFace extends RunFace {
-	lines: string[];
-	reveals: unknown[];
-	narration: string;
-}
-
-interface NarrateFace {
-	narration: string;
-	warnings: string[];
-}
-
-interface RecordsFace {
-	records: unknown[];
-	broken: number;
-	incomplete: boolean;
-}
-
 interface UiControl {
 	role: string;
 	name: string;
@@ -81,12 +58,12 @@ function freePort(): Promise<number> {
 	});
 }
 
-/** 保活宿主的状态记录：参数随记录，供重连判定；dataRoot 为宿主自报的实际数据根。 */
+/** 保活宿主的状态记录：参数随记录（dataRoot 为声明值，null 即宿主默认），供重连判定。 */
 interface Host {
 	pid: number;
 	port: number;
 	exe: string;
-	dataRoot: string;
+	dataRoot: string | null;
 }
 
 /** 单实例锁使全局至多一个宿主 */
@@ -102,7 +79,7 @@ function readHost(): Host | null {
 	}
 	if (parsed === null || typeof parsed !== "object") return null;
 	const { pid, port, exe, dataRoot } = parsed as Record<string, unknown>;
-	if (typeof pid !== "number" || typeof port !== "number" || typeof exe !== "string" || typeof dataRoot !== "string") return null;
+	if (typeof pid !== "number" || typeof port !== "number" || typeof exe !== "string" || (typeof dataRoot !== "string" && dataRoot !== null)) return null;
 	return { pid, port, exe, dataRoot };
 }
 
@@ -165,15 +142,14 @@ async function spawnHost(exe: string, dev: boolean, dataRoot: string | undefined
 			throw new Error(`Electron 退出（code ${child.exitCode}）${logTail()}`);
 		}
 		const target = await targetOf(port);
-		const root = target === null ? null : await hostRoot(target).catch(() => null);
-		if (target !== null && root !== null) {
-			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot: root });
+		if (target !== null && (await shellReady(target))) {
+			writeHost({ pid: child.pid ?? 0, port, exe, dataRoot: dataRoot ?? null });
 			return target;
 		}
 		await sleep(150);
 	}
 	child.kill();
-	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell.env 不可达${logTail()}`);
+	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell 不可达${logTail()}`);
 }
 
 async function ensureHost(exe: string | undefined, dataRoot: string | undefined): Promise<Target> {
@@ -181,7 +157,7 @@ async function ensureHost(exe: string | undefined, dataRoot: string | undefined)
 	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
 	const host = readHost();
 	if (host !== null) {
-		if (host.exe !== binary || (dataRoot !== undefined && !samePath(host.dataRoot, dataRoot))) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot}）：先 stop 再以当前参数运行`);
+		if (host.exe !== binary || (dataRoot !== undefined && (host.dataRoot === null || !samePath(host.dataRoot, dataRoot)))) throw new Error(`已有宿主参数不符（pid ${host.pid}，exe ${host.exe}，data-dir ${host.dataRoot ?? "宿主默认"}）：先 stop 再以当前参数运行`);
 		const target = await targetOf(host.port);
 		if (target !== null) return target;
 		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
@@ -190,32 +166,12 @@ async function ensureHost(exe: string | undefined, dataRoot: string | undefined)
 	return await spawnHost(binary, exe === undefined, dataRoot);
 }
 
-function requestClose(target: Target): Promise<void> {
-	return new Promise((resolve) => {
-		const ws = new WebSocket(target.webSocketDebuggerUrl);
-		const finish = (): void => {
-			ws.close();
-			resolve();
-		};
-		const timer = setTimeout(finish, 1000);
-		ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Page.close" }));
-		ws.onmessage = () => {
-			clearTimeout(timer);
-			finish();
-		};
-		ws.onerror = () => {
-			clearTimeout(timer);
-			finish();
-		};
-	});
-}
-
-/** 主窗关闭即 app.quit：页面全关即可收束，顽固进程补杀。 */
+/** 主窗关闭即 app.quit：请求关页即可收束，顽固进程补杀。 */
 async function stopHost(): Promise<number | null> {
 	const host = readHost();
 	if (host === null) return null;
-	const targets = await targetsOf(host.port);
-	await Promise.all(targets.map((t) => requestClose(t)));
+	const target = await targetOf(host.port);
+	if (target !== null) await cdp(target, "Page.close", {}, 1000).catch(() => undefined);
 	const deadline = Date.now() + 5000;
 	while (Date.now() < deadline && pidAlive(host.pid)) await sleep(150);
 	if (pidAlive(host.pid)) {
@@ -269,11 +225,9 @@ async function evaluate<T>(target: Target, expression: string, timeoutMs: number
 	return out.result?.value as T;
 }
 
-/** 宿主自报的数据根：工具侧的唯一权威，不镜像 Electron 的默认值。 */
-async function hostRoot(target: Target): Promise<string> {
-	const face = await evaluate<{ root?: unknown }>(target, "window.shell.env()", 10_000);
-	if (typeof face?.root !== "string" || face.root === "") throw new Error("宿主未报告数据根（window.shell.env）");
-	return face.root;
+/** 装载就绪判据：preload 已暴露 window.shell。 */
+async function shellReady(target: Target): Promise<boolean> {
+	return (await evaluate<unknown>(target, `typeof window.shell === "object"`, PROBE_MS).catch(() => false)) === true;
 }
 
 function samePath(a: string, b: string): boolean {
@@ -309,11 +263,6 @@ async function go(target: Target, game: string): Promise<void> {
 	// 导航替换页面并销毁求值上下文：发起不等结果，落定由页面 URL 判定
 	await evaluate(target, `void window.shell.navigate(${js(game)}).catch(() => {})`, PROBE_MS).catch(() => undefined);
 	await poll(UI_MS, `游戏界面 ${game}`, () => onGameFace(target, game));
-}
-
-/** 打开或附着运行并返回装载面；不导航窗口。 */
-async function openRun(target: Target, game: string, run: string, timeout: number): Promise<RunFace> {
-	return await evaluate<RunFace>(target, `window.shell.open(${js(game)},${js(run)})`, timeout);
 }
 
 /** 页面内交互元素扫描：ui 与 click 共用同一规则，编号即文档序位置。 */
@@ -494,21 +443,13 @@ async function shot(target: Target, timeout: number): Promise<string> {
 	return file;
 }
 
-/** 命令分派：UI 通道（go/ui/click/type/key/wait/shot）走真实交互；shell 通道是无头与断言面。 */
+/** 分派：真实交互（go/ui/click/type/key/wait/shot）走 CDP 输入；协议面不设转发命令，经 eval 直达 window.shell。 */
 async function dispatch(cmd: string, args: ParsedArgs, target: Target, timeout: number): Promise<unknown> {
-	const [g, r, ...rest] = args.positionals;
-	const requireRun = (): [string, string] => {
-		if (g === undefined || r === undefined) throw new Error(`${cmd} 需要 <game> <run>`);
-		return [g, r];
-	};
 	switch (cmd) {
-		case "games":
-			return await evaluate(target, "window.shell.games()", timeout);
-		case "runs":
-			return await evaluate(target, g === undefined ? "window.shell.runs()" : `window.shell.runs(${js(g)})`, timeout);
 		case "go": {
-			if (g === undefined) throw new Error("go 需要 <game>");
-			await go(target, g);
+			const game = args.positionals[0];
+			if (game === undefined) throw new Error("go 需要 <game>");
+			await go(target, game);
 			return;
 		}
 		case "ui":
@@ -535,37 +476,6 @@ async function dispatch(cmd: string, args: ParsedArgs, target: Target, timeout: 
 		}
 		case "shot":
 			return await shot(target, timeout);
-		case "state": {
-			const [game, run] = requireRun();
-			const face = await openRun(target, game, run, timeout);
-			return { time: face.time, view: face.view, warnings: face.warnings ?? [] };
-		}
-		case "records": {
-			const [game, run] = requireRun();
-			const face = await evaluate<RecordsFace>(target, `window.shell.records(${js(game)},${js(run)})`, timeout);
-			return { records: face.records, broken: face.broken, incomplete: face.incomplete };
-		}
-		case "close": {
-			const [game, run] = requireRun();
-			await evaluate(target, `window.shell.close(${js(game)},${js(run)})`, timeout);
-			return;
-		}
-		case "act": {
-			const [game, run] = requireRun();
-			const utterance = rest.join(" ").trim();
-			if (utterance === "") throw new Error("act 需要话语");
-			await openRun(target, game, run, timeout);
-			const out = await evaluate<ActFace>(target, `window.shell.act(${js(game)},${js(run)},${js(utterance)})`, timeout);
-			return { time: out.time, lines: out.lines, reveals: out.reveals, narration: out.narration, warnings: out.warnings };
-		}
-		case "narrate": {
-			const [game, run] = requireRun();
-			const instruction = rest.join(" ").trim();
-			if (instruction === "") throw new Error("narrate 需要指令");
-			await openRun(target, game, run, timeout);
-			const out = await evaluate<NarrateFace>(target, `window.shell.narrate(${js(game)},${js(run)},${js(instruction)})`, timeout);
-			return { narration: out.narration, warnings: out.warnings };
-		}
 		case "eval": {
 			const expr = args.positionals.join(" ").trim();
 			if (expr === "") throw new Error("eval 需要表达式");
@@ -586,6 +496,10 @@ function parseArgs(argv: string[]): ParsedArgs {
 	const positionals: string[] = [];
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i]!;
+		if (a === "--") {
+			positionals.push(...argv.slice(i + 1));
+			break;
+		}
 		if (a.startsWith("--")) {
 			const key = a.slice(2);
 			const eq = key.indexOf("=");
@@ -621,7 +535,7 @@ function runMain(main: () => Promise<void>): void {
 
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
-	if (cmd === undefined) throw new Error("需要命令：games|go|ui|click|type|key|wait|shot|state|records|close|act|narrate|eval|stop");
+	if (cmd === undefined) throw new Error("需要命令：go|ui|click|type|key|wait|shot|eval|stop（协议面：eval 'window.shell.*'）");
 	const a = parseArgs(argv);
 	const rawExe = flagStr(a, "exe");
 	const exe = rawExe === undefined ? undefined : resolve(rawExe);
