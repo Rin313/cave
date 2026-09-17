@@ -117,33 +117,15 @@ function modelRuntime(): Promise<ModelRuntime> {
 	return sharedRuntime;
 }
 
-interface UiSite {
-	name: string;
-	file: string;
-	/** 作用域由位置给出：games/<id>/ui 下即绑定 id。 */
-	game: string;
+function faceFile(root: string, game: string): string | null {
+	if (gameFile(root, game) === null) return null;
+	const file = join(root, "games", game, "index.html");
+	return existsSync(file) ? file : null;
 }
 
-/** 界面 ref：`<game>/<name>`；两段均来自目录名，不含斜杠。 */
-const uiRef = (site: UiSite): string => `${site.game}/${site.name}`;
-
-/** 全部界面（ref 去重，按 ref 升序）：games/<id>/ui/index.html 记为 <id>/<id>，games/<id>/ui/<name>/index.html 记为 <id>/<name>。 */
-function uiRegistry(): ReadonlyMap<string, UiSite> {
-	const sites = new Map<string, UiSite>();
-	const add = (site: UiSite): void => {
-		const ref = uiRef(site);
-		if (existsSync(site.file) && !sites.has(ref)) sites.set(ref, site);
-	};
-	for (const game of subdirs(join(ROOT, "games"))) {
-		const ui = join(ROOT, "games", game, "ui");
-		add({ name: game, file: join(ui, "index.html"), game });
-		for (const name of subdirs(ui)) add({ name, file: join(ui, name, "index.html"), game });
-	}
-	return new Map([...sites].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+function listFaces(root: string): string[] {
+	return listGames(root).filter((game) => faceFile(root, game) !== null);
 }
-
-/** 界面 ref 清单（诊断文案用）。 */
-const uiList = (sites: ReadonlyMap<string, UiSite>): string => [...sites.keys()].join(", ") || "无";
 
 /** 设置中解析出的当前模型：未配置即 null；告警随解析面透出。 */
 async function configuredModel(settings: JsonObject): Promise<{ ref: string; runtime: ModelRuntime; resolved: ModelResolution } | null> {
@@ -398,8 +380,6 @@ function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: s
 	return { game, run: req.run };
 }
 
-const uiFace = (site: UiSite): { name: string; ref: string; game: string } => ({ name: site.name, ref: uiRef(site), game: site.game });
-
 /** 跨游戏的管理/启动面归内容：壳只提供枚举与会话协议；游戏自述与资产由内容自持，壳不设通道。 */
 ipcMain.handle("games", () => listGames(ROOT));
 
@@ -427,25 +407,22 @@ ipcMain.handle("sessions", (): SessionFace[] => [...sessions.values()].map((slot
 	return { ...coords(session), state: session.engine.busy ?? "idle" };
 }));
 
-/** 界面清单：带 game 即按作用域过滤（启动器菜单）；注册表已按 ref 升序。 */
-ipcMain.handle("uis", (_event, req: GameRequest | undefined) => {
-	const game = idIn(req, "uis");
-	return [...uiRegistry().values()].filter((s) => game === undefined || s.game === game).map(uiFace);
-});
+/** 界面清单 */
+ipcMain.handle("uis", () => listFaces(ROOT));
 
 /** 进游戏：只导航主窗，不动引擎，不写设置；装载失败即携因回主面。 */
-ipcMain.handle("navigate", async (_event, req: { ref?: unknown }) => {
-	const ref = strIn(req?.ref, "navigate", "ref");
-	const sites = uiRegistry();
-	const site = sites.get(ref);
-	if (site === undefined) throw new Error(`未知界面：${ref}（可用：${uiList(sites)}）`);
+ipcMain.handle("navigate", async (_event, req: GameRequest | undefined) => {
+	const game = gameIn(req, "navigate");
+	if (gameFile(ROOT, game) === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
+	const file = faceFile(ROOT, game);
+	if (file === null) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
 	const w = win;
 	if (w === null || w.isDestroyed()) return;
 	try {
-		await load(w, site.file);
+		await load(w, file);
 	} catch (e) {
 		if (w.isDestroyed()) return;
-		await loadHome(w, `界面 ${ref} 装载失败（${site.file}）：${String(e)}`);
+		await loadHome(w, `界面 ${game} 装载失败（${file}）：${String(e)}`);
 	}
 });
 

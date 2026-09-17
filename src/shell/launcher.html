@@ -144,8 +144,7 @@ const text = {
 	"configured": ["已配置", "Configured"],
 	"unconfigured": ["未配置", "Not configured"],
 	"ui.section": ["界面", "Interface"],
-	"ui.scope": ["（{game}）", " ({game})"],
-	"ui.none": ["没有可用界面：在 games/<id>/ui/index.html 或 games/<id>/ui/<name>/index.html 放置界面。", "No user interface available: add games/<id>/ui/index.html or games/<id>/ui/<name>/index.html."],
+	"ui.none": ["没有可用界面：在 games/<id>/index.html 放置界面。", "No user interface available: add games/<id>/index.html."],
 	"ui.hint": ["游戏中 Cmd/Ctrl+Shift+H 回到此处", "Press Cmd/Ctrl+Shift+H in a game to return here."],
 	"model.section": ["模型与凭据", "Models & credentials"],
 	"model.current": ["当前模型：{model}", "Current model: {model}"],
@@ -296,12 +295,11 @@ document.documentElement.lang = zh ? "zh" : "en";
 		}
 		none.hidden = uis.length > 0;
 		hint.hidden = uis.length === 0 || env.home !== "launcher";
-		$("uiList").replaceChildren(...uis.map((u) => {
-			const scope = u.game !== u.name ? t("ui.scope", { game: u.game }) : "";
+		$("uiList").replaceChildren(...uis.map((game) => {
 			const li = document.createElement("li");
-			li.append(el("span", `${u.name}${scope}`, "name"), button(t("use"), async () => {
+			li.append(el("span", game, "name"), button(t("use"), async () => {
 				try {
-					await shell.navigate(u.ref);
+					await shell.navigate(game);
 				} catch (e) {
 					showError(reason(e));
 				}
