@@ -117,7 +117,7 @@
 			<ul id="modelList"></ul>
 		</div>
 	</section>
-	<footer><p id="advanced" class="muted"></p><div class="row"><button id="openRoot" type="button"></button><button id="openGames" type="button"></button><button id="openUi" type="button"></button></div></footer>
+	<footer><p id="advanced" class="muted"></p><div class="row"><button id="openRoot" type="button"></button></div></footer>
 </main>
 <script>
 (() => {
@@ -137,8 +137,6 @@ const text = {
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
 	"advanced": ["高级：直接编辑 {dir} 下的 settings.json 与 auth.json；内容主面放于 {dir}/ui/index.html", "Advanced: edit settings.json and auth.json under {dir} directly; the app face lives at {dir}/ui/index.html."],
 	"open.root": ["打开根目录", "Open root folder"],
-	"open.games": ["打开 games 目录", "Open games folder"],
-	"open.ui": ["打开 ui 目录", "Open ui folder"],
 	"current": ["当前", "Current"],
 	"use": ["使用", "Use"],
 	"thinking.label": ["思考档", "Thinking"],
@@ -193,10 +191,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("uiTitle").textContent = t("ui.section");
 	$("openRoot").textContent = t("open.root");
 	$("openRoot").onclick = () => shell.reveal();
-	$("openGames").textContent = t("open.games");
-	$("openGames").onclick = () => shell.reveal("games");
-	$("openUi").textContent = t("open.ui");
-	$("openUi").onclick = () => shell.reveal("ui");
 	$("modelTitle").textContent = t("model.section");
 	$("advanced").textContent = t("advanced", { dir: env.root });
 	$("thinkingLabel").textContent = t("thinking.label");
