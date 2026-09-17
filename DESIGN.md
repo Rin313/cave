@@ -166,6 +166,5 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 
 ## 架构决策
 
-- 进程内集成 pi agent SDK（`node_modules/@earendil-works/pi-coding-agent/docs/`）。
 - **上下文裁剪**：每次调用经 `context` 扩展裁剪为最后一条 user 消息起的后缀（工具结果存为独立 toolResult 角色、不并入 user 消息，回合内该锚恒为回合提示，叙述续行因此保住裁决前缀；context 事件的消息是深拷贝）。
 - **缓存稳定性**：[tools+system] 放置于开头，系统提示与工具数组字节级稳定，不做 setActiveTools 相位切换；回合内（act 裁决后的描写续行）前缀 [tools+system+user] 逐字节稳定（近况头并入的 user 消息在回合内不变）。

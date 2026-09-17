@@ -15,7 +15,6 @@ import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPromp
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
 	modelRuntime: ModelRuntime;
-	/** 宿主全局资源目录（资源发现全部关停，仅用于隔离 pi agent 的 ~/.pi/agent）。 */
 	agentDir: string;
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
 }
