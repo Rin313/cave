@@ -478,9 +478,9 @@ export function defaultNarratePrompt(kit: NarrateKit): string {
 export interface GameDef {
 	verbs: Record<string, VerbDef>;
 	world: World;
-	/** 属性注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册键即字面（无契约、无缺省名），词法纪律归作者。 */
+	/** 属性注册表：注册即获值域契约、引用生命周期与呈现名（label）；未注册键即字面（无契约、无缺省名），词法纪律归作者。 */
 	props?: Record<string, SlotDef>;
-	/** 边类型注册表（部分，可缺席）：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
+	/** 边类型注册表：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
 	relTypes?: Record<string, SlotDef>;
 	/** 常驻规则表：每刻按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
@@ -488,7 +488,7 @@ export interface GameDef {
 	perspective?: (world: World) => Partial<Access>;
 	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第二参数传入；声明即接管，可委托 base。 */
 	name?: (world: World, base: (cell: Addr) => string | null) => (cell: Addr) => string | null;
-	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回记录子序列（须取自传入记录且保持账本序）。此钩子只做选择，投影与言默判据归引擎。 */
+	/** 近况选择：收全账本记录（账本序、已冻结）与缺省选择 base，返回记录子序列（须取自传入记录且保持账本序）。 */
 	recent?: (records: readonly ChronicleEntry[], base: readonly ChronicleEntry[]) => readonly ChronicleEntry[];
 	/** 缺省近况选择的窗口大小（回合记录数）；recent 缺席时必填，recent 在时作为 base 的参数（缺省即 base = 全量记录）。 */
 	recentWindow?: number;
@@ -500,11 +500,11 @@ export interface GameDef {
 	messages: Messages;
 	prompt: {
 		system: string;
-		/** act 工具描述：base = 协议约束 + 派生动词目录（catalog）；可委托或覆盖（本地化、分区、删减）。 */
+		/** act 工具描述：base = 协议约束 + 派生动词目录（catalog）。 */
 		tool?: (base: string) => string;
-		/** act 回合提示：base = 缺省数据排版；可委托或整段覆盖。 */
+		/** act 回合提示：base = 缺省数据排版。 */
 		turn?: (kit: TurnKit, base: (kit: TurnKit) => string) => string;
-		/** 渲染调用提示：base = 缺省数据排版；可委托或整段覆盖。 */
+		/** 渲染调用提示：base = 缺省数据排版。 */
 		narrate?: (kit: NarrateKit, base: (kit: NarrateKit) => string) => string;
 		context?: (messages: ContextEvent["messages"], kit: PromptKit) => ContextEvent["messages"];
 	};

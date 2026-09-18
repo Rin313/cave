@@ -268,7 +268,6 @@ export class Engine {
 			this.recent.length = 0;
 			this.recent.push(...next);
 		} catch (e) {
-			// 呈现缺陷不得丢弃已定稿的账目：保留上一版近况并显形
 			this.run.warnings.push(`近况投影抛错（保留上一版）：${String(e)}`);
 		}
 	}
