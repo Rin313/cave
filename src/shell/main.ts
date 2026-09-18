@@ -359,7 +359,7 @@ ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
-	return { game, run, ...openArchive(recordsPath(ROOT, game, run)).read() };
+	return { game, run, ...openArchive(recordsPath(ROOT, game, run)).snapshot };
 });
 
 /** 活实例面：opening 即装载中，其余即引擎单飞态；time 仅在已落定时给出。 */

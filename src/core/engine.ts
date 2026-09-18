@@ -103,10 +103,10 @@ export class Engine {
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 
-		const snapshot: ArchiveSnapshot = options.archive?.read() ?? { records: [], broken: 0, incomplete: false };
+		const snapshot: ArchiveSnapshot = options.archive?.snapshot ?? { records: [], broken: 0, incomplete: false };
 		const loadWarnings: string[] = [];
 		if (snapshot.broken > 0) loadWarnings.push(`档案条目 ${snapshot.broken} 条形状损坏`);
-		if (snapshot.incomplete) loadWarnings.push("档案末尾不完整（无换行）：截断至最后完整条目");
+		if (snapshot.incomplete) loadWarnings.push("档案末尾未收尾（无换行）");
 		// 装载即重放：不重裁决、不掷骰；首个不可应用的记录起与近况同界截断
 		const sim = new Simulation(def);
 		const records: ChronicleEntry[] = [];

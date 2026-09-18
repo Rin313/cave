@@ -1,6 +1,6 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { deepFreeze, isCommit, type ChronicleEntry, type Commit } from "./sim.ts";
+import { deepFreeze, isChronicleEntry, type ChronicleEntry } from "./sim.ts";
 
 export interface ArchiveSnapshot {
 	records: ChronicleEntry[];
@@ -8,9 +8,9 @@ export interface ArchiveSnapshot {
 	incomplete: boolean;
 }
 
-/** 回合档案：单一追加日志，每回合一行（回合与表达同条目）。`read` 是纯读；`keep` 声明装载存活前缀（截断与半行的修复延迟到首次 `append`：旧全文原样移存 `<path>.orphan`）。 */
+/** 回合档案：单一追加日志，每回合一行（回合与表达同条目）。`keep` 声明装载存活前缀（截断、坏行与半行的修复延迟到首次 `append`：旧全文原样移存 `<path>.orphan`）。 */
 export interface ArchiveStore {
-	read(): ArchiveSnapshot;
+	readonly snapshot: ArchiveSnapshot;
 	keep(records: readonly ChronicleEntry[]): void;
 	append(record: ChronicleEntry): void;
 }
@@ -29,11 +29,7 @@ function parseArchiveLine(raw: string): ArchiveLine | null {
 	} catch {
 		return { kind: "broken" };
 	}
-	if (v === null || typeof v !== "object") return { kind: "broken" };
-	const r = v as Record<string, unknown>;
-	if (typeof r.time !== "number" || typeof r.utterance !== "string" || !Array.isArray(r.steps) || !r.steps.every(isCommit)) return { kind: "broken" };
-	const narration = typeof r.narration === "string" && r.narration !== "" ? r.narration : undefined;
-	return { kind: "record", record: deepFreeze({ time: r.time, utterance: r.utterance as string, steps: r.steps as Commit[], ...(narration !== undefined && { narration }) }) };
+	return isChronicleEntry(v) ? { kind: "record", record: deepFreeze(v) } : { kind: "broken" };
 }
 
 /** 档案全读：缺席即空档案（新运行）；坏行只计数，末尾无换行即不完整。 */
@@ -63,24 +59,15 @@ function writeRecords(path: string, records: readonly ChronicleEntry[]): void {
 	replaceFile(path, records.map((r) => `${JSON.stringify(r)}\n`).join(""));
 }
 
-/** 装载保持只读：`read` 取快照，`keep` 记存活前缀；截断与半行只在续写前重写落地（旧全文原样移存 `.orphan`，不再进入装载）。 */
+/** `keep` 记存活前缀；任何损坏（截断、坏行、半行）都在续写前重写落地（旧全文移存 `.orphan`）。 */
 export function openArchive(path: string): ArchiveStore {
-	let parsed: ArchiveSnapshot | null = null;
-	let repair: readonly ChronicleEntry[] | null = null;
-	const appendLine = (value: unknown): void => {
-		mkdirSync(dirname(path), { recursive: true });
-		appendFileSync(path, `${JSON.stringify(value)}\n`, "utf8");
-	};
+	const snapshot = readRecords(path);
+	let repair: readonly ChronicleEntry[] | null = snapshot.broken > 0 || snapshot.incomplete ? snapshot.records : null;
 	return {
-		read() {
-			parsed = readRecords(path);
-			return parsed;
-		},
+		snapshot,
 		keep(records) {
-			if (parsed === null) throw new Error("keep 须在 read 之后调用");
-			const snapshot = parsed;
 			const intact = records.length === snapshot.records.length && records.every((r, i) => r === snapshot.records[i]);
-			repair = intact && !snapshot.incomplete ? null : [...records];
+			repair = intact && snapshot.broken === 0 && !snapshot.incomplete ? null : [...records];
 		},
 		append(record) {
 			if (repair !== null) {
@@ -88,7 +75,8 @@ export function openArchive(path: string): ArchiveStore {
 				writeRecords(path, repair);
 				repair = null;
 			}
-			appendLine(record);
+			mkdirSync(dirname(path), { recursive: true });
+			appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
 		},
 	};
 }

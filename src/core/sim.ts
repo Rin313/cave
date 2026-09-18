@@ -787,6 +787,12 @@ export interface ChronicleEntry {
 	narration?: string;
 }
 
+export function isChronicleEntry(v: unknown): v is ChronicleEntry {
+	if (v === null || typeof v !== "object") return false;
+	const r = v as { time?: unknown; utterance?: unknown; steps?: unknown; narration?: unknown };
+	return typeof r.time === "number" && typeof r.utterance === "string" && Array.isArray(r.steps) && r.steps.every(isCommit) && (r.narration === undefined || typeof r.narration === "string");
+}
+
 export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
