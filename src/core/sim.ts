@@ -21,8 +21,6 @@ export type Value = Scalar | Scalar[];
 export type Payload = Value | null;
 
 /** 值的序列视图：标量视作单元素序列；数组原样返回。 */
-function seq(v: Value): readonly Scalar[];
-function seq(v: unknown): readonly unknown[];
 function seq(v: unknown): readonly unknown[] {
 	return Array.isArray(v) ? v : [v];
 }
@@ -1140,7 +1138,7 @@ export class Simulation {
 	}
 
 	/** steps 之前的世界：自终态逆推变更（与投影同法）；rewind 不触钟，故钟取首步边界。步空即当前世界。 */
-	beforeWorld(steps: readonly Commit[]): World {
+	private beforeWorld(steps: readonly Commit[]): World {
 		const w = this.snapshot();
 		rewind(w, steps);
 		if (steps[0] !== undefined) w.time = steps[0].at;
@@ -1325,7 +1323,8 @@ export class Simulation {
 		deepFreeze(action);
 		const s0 = this.readState();
 		try {
-			const res = this.applyInner(action, s0);
+			const step = this.attempt(s0, action, "act");
+			const res = { step, elapsed: this.pump(step.price) };
 			// 序位随账目一同提交：apply 失败（钩子/投影崩溃）时世界回滚，未入账的尝试不得移动地址
 			this.markAttempt(res.step.at, res.step.trigger, res.step.action.verb);
 			for (const c of res.elapsed) this.markAttempt(c.at, c.trigger, c.action.verb);
@@ -1335,11 +1334,6 @@ export class Simulation {
 			this.restore(s0);
 			throw e;
 		}
-	}
-
-	private applyInner(action: Action, s0: World): Resolution {
-		const step = this.attempt(s0, action, "act");
-		return { step, elapsed: this.pump(step.price) };
 	}
 
 	private attempt(s0: World, action: Action, trigger: Trigger): Commit {
