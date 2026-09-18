@@ -1,12 +1,9 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-const REPO_ROOT = join(import.meta.dirname, "..", "..");
 
 interface Target {
 	type: string;
@@ -116,19 +113,19 @@ function discardHost(): void {
 }
 
 /** 脱离父进程启动宿主；就绪后才落盘状态。 */
-async function spawnHost(exe: string, dev: boolean): Promise<Target> {
+async function spawnHost(exe: string): Promise<Target> {
 	const port = await freePort();
 	const flags = [`--remote-debugging-port=${port}`];
-	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}${dev ? ` ${REPO_ROOT}` : ""}\n`, "utf8");
+	appendFileSync(HOST_LOG, `\n=== ${new Date().toISOString()} spawn ${exe}\n`, "utf8");
 	const fd = openSync(HOST_LOG, "a");
-	const child = spawn(exe, dev ? [REPO_ROOT, ...flags] : flags, { detached: true, stdio: ["ignore", fd, fd] });
+	const child = spawn(exe, flags, { detached: true, stdio: ["ignore", fd, fd] });
 	closeSync(fd);
 	child.unref();
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
 		if (child.exitCode !== null) {
-			if (child.exitCode === 0) throw new Error(`Electron 退出（code 0，单实例锁）：已有实例在运行但无宿主记录；关闭其窗口后重试${logTail()}`);
-			throw new Error(`Electron 退出（code ${child.exitCode}）${logTail()}`);
+			if (child.exitCode === 0) throw new Error(`宿主退出（code 0，单实例锁）：已有实例在运行但无宿主记录；关闭其窗口后重试${logTail()}`);
+			throw new Error(`宿主退出（code ${child.exitCode}）${logTail()}`);
 		}
 		const target = await targetOf(port);
 		if (target !== null && (await shellReady(target))) {
@@ -141,9 +138,8 @@ async function spawnHost(exe: string, dev: boolean): Promise<Target> {
 	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell 不可达${logTail()}`);
 }
 
-async function ensureHost(exe: string | undefined): Promise<Target> {
-	const binary = exe ?? (createRequire(import.meta.url)("electron") as string);
-	if (!existsSync(binary)) throw new Error(`找不到 Electron：${binary}`);
+async function ensureHost(binary: string): Promise<Target> {
+	if (!existsSync(binary)) throw new Error(`找不到可执行文件：${binary}`);
 	const host = readHost();
 	if (host !== null) {
 		if (host.exe !== binary) throw new Error(`已有宿主的 exe 不符（pid ${host.pid}，exe ${host.exe}）：先 stop 再以 ${binary} 运行`);
@@ -152,7 +148,7 @@ async function ensureHost(exe: string | undefined): Promise<Target> {
 		if (pidAlive(host.pid)) throw new Error(`宿主进程存活（pid ${host.pid}）但界面不可达（debug port ${host.port}）：stop 后重试${logTail()}`);
 		discardHost();
 	}
-	return await spawnHost(binary, exe === undefined);
+	return await spawnHost(binary);
 }
 
 /** 主窗关闭即 app.quit：请求关页即可收束，顽固进程补杀。 */
@@ -515,17 +511,17 @@ function runMain(main: () => Promise<void>): void {
 
 async function main(): Promise<void> {
 	const [cmd, ...argv] = process.argv.slice(2);
-	if (cmd === undefined) throw new Error("需要命令：go|ui|click|type|key|wait|shot|eval|stop（协议面：eval 'window.shell.*'）");
+	if (cmd === undefined) throw new Error("需要命令：go|ui|click|type|key|wait|shot|eval|stop；除 stop 外均需 --exe <可执行文件>（协议面：eval 'window.shell.*'）");
 	const a = parseArgs(argv);
-	const rawExe = flagStr(a, "exe");
-	const exe = rawExe === undefined ? undefined : resolve(rawExe);
 	const seconds = Number(flagStr(a, "timeout") ?? "");
 	const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 600_000;
 	if (cmd === "stop") {
 		console.log(JSON.stringify({ pid: await stopHost() }));
 		return;
 	}
-	const target = await ensureHost(exe);
+	const rawExe = flagStr(a, "exe");
+	if (rawExe === undefined) throw new Error("需要 --exe <可执行文件>：宿主只由显式指定的二进制启动（npm run dist 的产物）");
+	const target = await ensureHost(resolve(rawExe));
 	const result = await dispatch(cmd, a, target, timeout);
 	if (result !== undefined) console.log(typeof result === "string" ? result : JSON.stringify(result));
 }
