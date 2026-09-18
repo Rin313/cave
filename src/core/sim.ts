@@ -14,7 +14,7 @@ export function clone<T>(value: T): T {
 
 export type Scalar = string | number | boolean;
 
-/** 存储值：标量或其有限序列；缺席由键不在表达，故无 none。 */
+/** 存储值：标量或其有限序列；缺席由键不在表达 */
 export type Value = Scalar | Scalar[];
 
 /** 格写载荷：none（null）即删除。 */
@@ -47,20 +47,20 @@ export interface World {
 	relations: Rel[];
 }
 
-/** 账本格：顶点（存在）／属性／边（关系）——写与记录的共同坐标。 */
+/** 账本格：顶点（存在）／属性／边（关系） */
 export type VertexAddr = { cell: "vertex"; id: string };
 export type PropAddr = { cell: "prop"; entity: string; prop: string };
 export type EdgeAddr = { cell: "edge"; from: string; to: string; type: string };
 export type SlotAddr = PropAddr | EdgeAddr;
 export type Addr = VertexAddr | SlotAddr;
 
-/** δ：绝对写，后态自含；顶点格的 id 取自 next（生）或自身（灭）。 */
+/** δ：绝对写，后态自含；顶点格的 id 取自 next 或自身 */
 export type Delta =
 	| { cell: "vertex"; next: Entity }
 	| { cell: "vertex"; id: string; next: null }
 	| (SlotAddr & { next: Payload });
 
-/** 𝒞：记录是补全前态的 δ。顶点记录恰一侧为 ⊥（生/灭，不另存 id）；属性/边记录前后态相异。 */
+/** 𝒞：记录是补全前态的 δ。顶点记录恰一侧为 ⊥；属性/边记录前后态相异。 */
 export type Change =
 	| { cell: "vertex"; prev: null; next: Entity }
 	| { cell: "vertex"; prev: Entity; next: null }
@@ -72,9 +72,9 @@ export interface Action {
 }
 
 export interface Messages {
-	/** 引擎文本缺省：除 gate（invisibleEntity）外一切场合回落到此。 */
+	/** 引擎文本缺省 */
 	noResponse: string;
-	/** 指称门否决的缺省文案（say 的 base）；动词 invisible 更具体，优先。 */
+	/** 指称门否决的缺省文案（say 的 base） */
 	invisibleEntity?: string;
 	/** 静默刻聚合文案 */
 	timePassed: string;
@@ -86,14 +86,14 @@ export type LitType = "string" | "number" | "boolean";
 /** 值域与解释的一根轴：字面标量，或以实体 id 为值的指称。 */
 export type SlotType = LitType | "ref";
 
-/** 值声明：值域 × 重数；属性的值、边载荷与动词参数共用这根轴。 */
+/** 值声明：值域 × 重数 */
 interface ValueDecl {
 	type: SlotType;
 	/** 重数：缺省 one（标量），true 为非空序列。 */
 	many?: true;
 }
 
-/** 注册槽：值声明 + 呈现名；ref 另携生命周期。 */
+/** 注册槽：值声明 + 呈现名 */
 interface SlotCommon extends ValueDecl {
 	/** 呈现名；非空串即该名，null 即无名，缺席即该格类缺省（属性无名、边 τ）。 */
 	label?: string | null;
@@ -126,13 +126,13 @@ export type Reason =
 	| { fault: "world"; reply?: string }
 	| { fault: "engine"; debug: string };
 
-/** 否决的公共记录形状；engine 受众必携文本。 */
+/** 否决的公共记录形状 */
 export interface Denial {
 	point: Point;
 	text?: string;
 }
 
-/** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse）。引擎违约走抛出。 */
+/** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse） */
 export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: string };
 
 /** 引擎合成读者侧文本的场合：记录点的 (point, verb) 与两种边界情形。 */
@@ -153,7 +153,7 @@ export class ProtocolViolation extends Error {
 	}
 }
 
-/** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状。判定输入只含内容、参数与骰子。 */
+/** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状 */
 export interface Q<P = Record<string, Value>> {
 	readonly world: World;
 	readonly params: P;
@@ -301,7 +301,7 @@ export interface VerbDef extends RuleDecl {
 	description: string;
 	params: Record<string, ParamSpec>;
 	cost: number;
-	/** 门否决文案（词表缺省，位于 say 的 base 之下，不进入记录）：无指称参数时不可能被消费；缺省回落 messages.invisibleEntity。 */
+	/** 门否决文案（词表缺省，位于 say 的 base 之下，不进入记录） */
 	invisible?: string;
 }
 
@@ -347,7 +347,7 @@ export function verbFace(verbs: Readonly<Record<string, VerbDef>>): readonly Ver
 	}));
 }
 
-/** 缺省广告排版：id、label、description、cost 与逐参数（类型、重数、可选、过门注记）。 */
+/** 缺省广告排版 */
 export function catalog(verbs: Readonly<Record<string, VerbDef>>): string {
 	const rows: string[] = [];
 	for (const v of verbFace(verbs)) {
@@ -421,16 +421,13 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 	return out;
 }
 
-/** 近况内一条回合的呈现切片 */
 export interface RecentEntry {
 	time: number;
 	utterance: string;
 	moves: string[];
 }
 
-/** 近况的公共数据面：context 钩子与两种回合提示共用。 */
 export interface PromptKit {
-	/** 近况 */
 	recent: RecentEntry[];
 }
 
@@ -443,13 +440,11 @@ export interface TurnKit extends PromptKit {
 /** 渲染调用提示数据：状态视图 + 事件骨架 + 指令 + 近况。 */
 export interface NarrateKit extends PromptKit {
 	view: ViewValue;
-	/** 事件骨架行 */
 	events: string[];
-	/** 渲染指令 */
 	instruction: string;
 }
 
-/** 近况缺省排版：回合坐标、话语与事件行；无事件即显式标记，沉默可读。 */
+/** 近况缺省排版 */
 function recentBlock(recent: readonly RecentEntry[]): string {
 	if (recent.length === 0) return "";
 	const lines = ["[Recent turns, newest last]"];
@@ -461,7 +456,6 @@ function recentBlock(recent: readonly RecentEntry[]): string {
 	return lines.join("\n");
 }
 
-/** turn 缺省：只有数据通道；表达纪律与回合协议归 prompt.system 与工具描述。 */
 export function defaultTurnPrompt(kit: TurnKit): string {
 	const blocks: string[] = [];
 	const recent = recentBlock(kit.recent);
@@ -471,7 +465,6 @@ export function defaultTurnPrompt(kit: TurnKit): string {
 	return blocks.join("\n\n");
 }
 
-/** narrate 缺省：渲染调用无动作窗口，act 工具仍挂载而调用被吞，故标记必须显式。 */
 export function defaultNarratePrompt(kit: NarrateKit): string {
 	const blocks: string[] = ["[Rendering service] This call has no action window; do not call act; write the prose text directly."];
 	const recent = recentBlock(kit.recent);
@@ -778,12 +771,11 @@ export function isCommit(s: unknown): boolean {
 	return isDenial(c.denial);
 }
 
-/** 回合定稿记录（档案每行的载荷）：time 是回合末钟，narration 是可有可无的表达（不进重放）。 */
+/** 回合定稿记录：time 是回合末钟，narration 允许缺失 */
 export interface ChronicleEntry {
 	time: number;
 	utterance: string;
 	steps: Commit[];
-	/** 表达：落定后合并入本记录；缺席即该回合无表达。 */
 	narration?: string;
 }
 
