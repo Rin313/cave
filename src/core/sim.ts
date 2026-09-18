@@ -139,18 +139,6 @@ export type Speech =
 	| { kind: "noProposal" }
 	| { kind: "interrupted"; phase: "adjudicate" | "project" };
 
-/** 静态形态违约（未知动词 / schema 不符）：正常拒绝点在工具边界，内核收到即调用方违约。 */
-export class ProtocolViolation extends Error {
-	readonly code: "action.unknown" | "action.schema";
-	readonly debug: string;
-
-	constructor(code: "action.unknown" | "action.schema", debug: string) {
-		super(`Protocol violation ${code}: ${debug}`);
-		this.code = code;
-		this.debug = debug;
-	}
-}
-
 /** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状 */
 export interface Q<P = Record<string, Value>> {
 	readonly world: World;
@@ -1210,9 +1198,9 @@ export class Simulation {
 
 	private staticForm(action: Action): VerbDef {
 		const verb = this.def.verbs[action.verb];
-		if (!verb) throw new ProtocolViolation("action.unknown", `verb:${action.verb}`);
+		if (!verb) throw new Error(`动作形态违约：未知动词 ${action.verb}`);
 		const problems = paramProblems(verb, action.params);
-		if (problems.length) throw new ProtocolViolation("action.schema", problems.join("; "));
+		if (problems.length) throw new Error(`动作形态违约：${problems.join("; ")}`);
 		return verb;
 	}
 
