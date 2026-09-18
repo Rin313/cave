@@ -775,22 +775,18 @@ export function entity(world: World, id: string): Entity | undefined {
 	return world.entities.find((e) => e.id === id);
 }
 
-/** 场合缺省：gate 先取动词 invisible 再取 invisibleEntity（词表缺省，不越级 say），其余一律 noResponse。 */
-function baseSpeech(def: GameDef, speech: Speech): string {
-	if (speech.kind !== "point" || speech.point.kind !== "gate") return def.messages.noResponse;
-	return def.verbs[speech.verb]?.invisible ?? def.messages.invisibleEntity ?? def.messages.noResponse;
-}
-
-function speechTag(speech: Speech): string {
-	return speech.kind === "point" ? lawOf(speech.point) : speech.kind;
-}
-
-/** 引擎文本解析：声明 say 即接管总函数，base 即缺省绑定。 */
+/** 引擎文本解析：声明 say 即接管总函数；base 即场合缺省——gate 先取动词 invisible 再取 invisibleEntity（词表缺省，不越级 say），其余一律 noResponse。 */
 export function speak(def: GameDef, speech: Speech): string {
-	const base = (s: Speech): string => baseSpeech(def, s);
+	const base = (s: Speech): string => {
+		if (s.kind !== "point" || s.point.kind !== "gate") return def.messages.noResponse;
+		return def.verbs[s.verb]?.invisible ?? def.messages.invisibleEntity ?? def.messages.noResponse;
+	};
 	if (def.say === undefined) return base(speech);
 	const text = def.say(speech, base);
-	if (typeof text !== "string" || text.trim() === "") throw new Error(`GameDef.say 须返回非空字符串（场合 ${speechTag(speech)}）`);
+	if (typeof text !== "string" || text.trim() === "") {
+		const tag = speech.kind === "point" ? lawOf(speech.point) : speech.kind;
+		throw new Error(`GameDef.say 须返回非空字符串（场合 ${tag}）`);
+	}
 	return text;
 }
 
@@ -867,27 +863,19 @@ function assertRules(where: string, rules: readonly Rule[]): void {
 	}
 }
 
-/** 值是否含指称 id：弱载荷随目标删除级联的判据。 */
-function valueHasRef(v: Value, id: string): boolean {
-	return seq(v).includes(id);
-}
-
-/** 弱引用级联：从值中移除亡者引用；值因此为空（或本来只有该引用）即 null（删格）。 */
+/** 弱引用级联：从值中移除亡者引用；值因此为空（或本来只有该引用）即 null（删格）；未提及即原值（身份不变）。 */
 function withoutRef(v: Value, id: string): Value | null {
 	if (!Array.isArray(v)) return v === id ? null : v;
 	const rest = v.filter((x) => x !== id);
+	if (rest.length === v.length) return v;
 	return rest.length > 0 ? rest : null;
 }
 
-/** 指称集须落在给定域内：目标不在即整值不披露——披露的指称必有句柄。 */
-function valueRefsWithin(v: Value, vis: ReadonlySet<string>): boolean {
+/** 指称槽的值须落在给定域内：目标不在即整值不披露——披露的指称必有句柄；非指称槽恒真。 */
+function refsWithin(d: SlotDef | undefined, v: Value, vis: ReadonlySet<string>): boolean {
+	if (d?.type !== "ref") return true;
 	for (const item of seq(v)) if (typeof item === "string" && !vis.has(item)) return false;
 	return true;
-}
-
-/** 值位的指称过已知域。 */
-function refsWithin(d: SlotDef | undefined, v: Value, vis: ReadonlySet<string>): boolean {
-	return d?.type !== "ref" || valueRefsWithin(v, vis);
 }
 
 function fmtChange(sim: Simulation, c: Change, face: Face, sides: { prev: boolean; next: boolean }, name: string): string {
@@ -1018,15 +1006,10 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	return lines;
 }
 
-/** 缺省近况选择：最后 recentWindow 条；recentWindow 缺席即全量（作者接管选择时的 base）。 */
-function baseRecent(def: GameDef, records: readonly ChronicleEntry[]): readonly ChronicleEntry[] {
-	const n = def.recentWindow;
-	return n !== undefined ? records.slice(Math.max(0, records.length - n)) : records;
-}
-
-/** 近况选择：作者钩子收全账本记录与缺省选择；抛错或非账本序子序列回落 base 并告警。 */
+/** 近况选择：作者钩子收全账本记录与缺省选择（最后 recentWindow 条，缺席即全量）；抛错或非账本序子序列回落 base 并告警。 */
 function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings: string[]): readonly ChronicleEntry[] {
-	const base = baseRecent(def, records);
+	const n = def.recentWindow;
+	const base = n !== undefined ? records.slice(Math.max(0, records.length - n)) : records;
 	if (def.recent === undefined) return base;
 	let picked: readonly ChronicleEntry[];
 	try {
@@ -1464,7 +1447,7 @@ export class Simulation {
 			.filter((r) => {
 				const cell: EdgeAddr = { cell: "edge", from: r.from, to: r.to, type: r.type };
 				const rd = this.def.relTypes?.[r.type];
-				return field.present(cell) && field.known.has(r.from) && field.known.has(r.to) && (rd?.type !== "ref" || valueRefsWithin(r.value, field.known));
+				return field.present(cell) && field.known.has(r.from) && field.known.has(r.to) && refsWithin(rd, r.value, field.known);
 			})
 			.map((r) => ({ from: r.from, to: r.to, name: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
 		const out: ViewBase = { time: w.time, relations, entities };
@@ -1543,16 +1526,18 @@ export class Simulation {
 								existing.splice(j, 1);
 								continue;
 							}
-							if (!isWeakSlot(this.def.relTypes?.[r.type]) || !valueHasRef(r.value, d.id)) continue;
+							if (!isWeakSlot(this.def.relTypes?.[r.type])) continue;
 							const next = withoutRef(r.value, d.id);
+							if (next === r.value) continue;
 							edgeChanges.unshift({ from: r.from, to: r.to, type: r.type, prev: r.value, next });
 							if (next === null) existing.splice(j, 1);
 							else r.value = next;
 						}
 						for (const ent of this.world.entities) {
 							for (const [k, v] of Object.entries(ent.props)) {
-								if (!isWeakSlot(this.def.props?.[k]) || !valueHasRef(v, d.id)) continue;
+								if (!isWeakSlot(this.def.props?.[k])) continue;
 								const next = withoutRef(v, d.id);
+								if (next === v) continue;
 								propChanges.push({ entity: ent.id, prop: k, prev: v, next });
 								if (next === null) delete ent.props[k];
 								else ent.props[k] = next;
