@@ -10,7 +10,7 @@ import {
 	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import type { ArchiveSnapshot, ArchiveStore } from "./archive.ts";
-import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, denialReasonText, lawOf, recentEntries, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
+import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, denialReasonText, lawOf, recentEntries, report, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface AgentSpec {
 	model: NonNullable<CreateAgentSessionOptions["model"]>;
@@ -33,12 +33,15 @@ export interface ActOutcome {
 	lines: string[];
 	reveals: (Card | Handle)[];
 	narration: string;
-	warnings: string[];
 }
 
-export interface NarrationOutcome {
-	narration: string;
-	warnings: string[];
+export interface LoadOutcome {
+	/** 形状损坏的档案行数。 */
+	broken: number;
+	/** 档案末尾未收尾（无换行）。 */
+	incomplete: boolean;
+	/** 不可应用而未进入世界的尾部记录数（0 即全量）。 */
+	dropped: number;
 }
 
 /** 只承载叙述相位的实时正文；narration_reset 镜像 pi 的重试作废语义。 */
@@ -54,7 +57,6 @@ interface RunState {
 	steps: Commit[];
 	lines: string[];
 	reveals: (Card | Handle)[];
-	warnings: string[];
 }
 
 /** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源，表达随记录） */
@@ -72,20 +74,19 @@ export class Engine {
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（表达落定）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly ledger: Ledger;
-	/** 装载期诊断：形状损坏条目、末尾不完整与记录不可应用的显形出口。 */
-	readonly loadWarnings: readonly string[];
+	readonly load: LoadOutcome;
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
 	/** 单飞窗口：act/narrate 共享同一 run 槽，入口即占；dispose 同受此拒。 */
 	private running: "act" | "narrate" | null = null;
 
-	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState, loadWarnings: string[]) {
+	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState, load: LoadOutcome) {
 		this.sim = sim;
 		this.options = options;
 		this.ledger = ledger;
 		this.recent = recent;
 		this.run = run;
-		this.loadWarnings = loadWarnings;
+		this.load = load;
 		this.updateRecent();
 	}
 
@@ -104,33 +105,27 @@ export class Engine {
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 
 		const snapshot: ArchiveSnapshot = options.archive?.snapshot ?? { records: [], broken: 0, incomplete: false };
-		const loadWarnings: string[] = [];
-		if (snapshot.broken > 0) loadWarnings.push(`档案条目 ${snapshot.broken} 条形状损坏`);
-		if (snapshot.incomplete) loadWarnings.push("档案末尾未收尾（无换行）");
 		// 装载即重放：不重裁决、不掷骰；首个不可应用的记录起与近况同界截断
 		const sim = new Simulation(def);
 		const records: ChronicleEntry[] = [];
-		let truncated = false;
-		for (let i = 0; i < snapshot.records.length; i++) {
-			const record = snapshot.records[i]!;
+		for (const record of snapshot.records) {
 			const reason = sim.replayRecord(record);
 			if (reason !== null) {
-				loadWarnings.push(`档案记录不可应用（第 ${i + 1} 条：${reason}）：世界与近况同界截断`);
-				truncated = true;
+				report(`档案记录不可应用（第 ${records.length + 1} 条）：${reason}`);
 				break;
 			}
 			records.push(record);
 		}
 		options.archive?.keep(records);
-		if (truncated) loadWarnings.push(`档案截断：续写自第 ${records.length + 1} 回合起（旧尾部不再进入装载）`);
 		const denied = sim.admit();
 		if (denied !== null) throw new Error(`装载拒绝：当前世界违反 ${lawOf(denied.point)}（${denialReasonText(denied)}）`);
 		const ledger: Ledger = { records, dead: null };
+		const load: LoadOutcome = { broken: snapshot.broken, incomplete: snapshot.incomplete, dropped: snapshot.records.length - records.length };
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
-		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [], warnings: [] };
+		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [] };
 		const recent: RecentEntry[] = [];
-		return new Engine(sim, options, ledger, recent, run, loadWarnings);
+		return new Engine(sim, options, ledger, recent, run, load);
 	}
 
 	/** 会话按需建立：并发首调共享同一次建立；解析失败原样上抛（配置出口在宿主），世界与档案均未动。 */
@@ -200,7 +195,6 @@ export class Engine {
 		r.phase = phase;
 		r.utterance = utterance;
 		r.messageStart = session.messages.length;
-		r.warnings = [];
 		r.steps = [];
 		r.lines = [];
 		r.reveals = [];
@@ -226,21 +220,20 @@ export class Engine {
 			} catch (e) {
 				// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 裁决已完成，表达中断只降级呈现，回合仍将在表达落定时定稿
 				if (this.run.phase === "mapping") throw e;
-				this.run.warnings.push(`表达中断（呈现回落，回合照常定稿）：${String(e)}`);
+				report(e);
 			}
 
 			let narration: string;
 			if (this.run.phase === "mapping") {
 				// 未调 act 的文本未经裁决，回落确定性摘要
-				this.run.warnings.push("模型未调用 act 工具，本回合无裁决");
-				narration = this.fallbackSummary([]);
+				narration = skeletonSummary(this.sim, []);
 			} else {
 				try {
 					narration = this.settleNarration(session, this.run.steps);
 				} catch (e) {
 					// 叙述读取是呈现，定稿不依赖它
-					this.run.warnings.push(`叙述读取抛错（回落骨架）：${String(e)}`);
-					narration = this.fallbackSummary(this.run.steps);
+					report(e);
+					narration = skeletonSummary(this.sim, this.run.steps);
 				}
 				this.finalizeTurn(narration);
 			}
@@ -250,7 +243,6 @@ export class Engine {
 				lines: this.run.lines,
 				reveals: this.run.reveals,
 				narration,
-				warnings: this.run.warnings,
 			};
 		} finally {
 			this.running = null;
@@ -264,15 +256,15 @@ export class Engine {
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
 		try {
-			const next = recentEntries(this.sim, this.ledger.records, this.run.warnings);
+			const next = recentEntries(this.sim, this.ledger.records);
 			this.recent.length = 0;
 			this.recent.push(...next);
 		} catch (e) {
-			this.run.warnings.push(`近况投影抛错（保留上一版）：${String(e)}`);
+			report(e);
 		}
 	}
 
-	async narrate(instruction: string, steps: Commit[] = []): Promise<NarrationOutcome> {
+	async narrate(instruction: string, steps: Commit[] = []): Promise<string> {
 		this.enter("narrate");
 		try {
 			const session = await this.ensureSession();
@@ -281,7 +273,7 @@ export class Engine {
 			const kit: NarrateKit = { view, events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 			const prompt = this.sim.def.prompt;
 			await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
-			return { narration: this.settleNarration(session, steps), warnings: this.run.warnings };
+			return this.settleNarration(session, steps);
 		} finally {
 			this.running = null;
 		}
@@ -289,11 +281,7 @@ export class Engine {
 
 	private settleNarration(session: SessionHandle, steps: Commit[]): string {
 		const text = this.narrationText(session);
-		if (text.trim() === "") {
-			this.run.warnings.push("散文为空。");
-			return this.fallbackSummary(steps);
-		}
-		return text;
+		return text.trim() === "" ? skeletonSummary(this.sim, steps) : text;
 	}
 
 	/** 叙述 = 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文。 */
@@ -308,21 +296,15 @@ export class Engine {
 		return text;
 	}
 
-	private fallbackSummary(steps: Commit[]): string {
-		const { text, warning } = skeletonSummary(this.sim, steps);
-		if (warning) this.run.warnings.push(warning);
-		return text;
-	}
-
 	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信（重启后世界与档案停在上一回合，前缀档案无损）。 */
 	private finalizeTurn(narration: string): void {
 		const record: ChronicleEntry = deepFreeze({ time: this.sim.world.time, utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
 		try {
 			this.options.archive?.append(record);
 		} catch (e) {
-			this.ledger.dead = `定稿落盘失败：${String(e)}`;
-			this.run.warnings.push(this.ledger.dead);
-			return;
+			const reason = `定稿落盘失败：${String(e)}`;
+			this.ledger.dead = reason;
+			throw new Error(reason);
 		}
 		this.ledger.records.push(record);
 	}
@@ -366,12 +348,13 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 	};
 }
 
-function skeletonSummary(sim: Simulation, steps: Commit[]): { text: string; warning?: string } {
+function skeletonSummary(sim: Simulation, steps: Commit[]): string {
 	try {
 		const lines = spineLines(sim, steps, sim.snapshot());
-		return { text: lines.length ? lines.join("\n") : speak(sim.def, { kind: "noProposal" }) };
+		return lines.length ? lines.join("\n") : speak(sim.def, { kind: "noProposal" });
 	} catch (e) {
-		return { text: interruptedText(sim.def), warning: `骨架渲染失败：${String(e)}` };
+		report(e);
+		return interruptedText(sim.def);
 	}
 }
 
@@ -458,13 +441,13 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 			// 形态校验完全托付接口模式（execute 前整批拦截）
 			run.phase = "narration";
 			const steps: Commit[] = [];
-			let crashed: string | null = null;
+			let crashed = false;
 			try {
 				applyBatch(sim, proposed, steps);
 			} catch (e) {
 				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛，已裁决步照常入账
-				crashed = String(e);
-				run.warnings.push(`裁决执行抛错（世界停在最后成功提交）：${crashed}`);
+				crashed = true;
+				report(e);
 			}
 			run.steps = steps;
 			// 事件行与新增呈现分相投影：任一相失灵只降级该相；结果即回合呈现，不重算
@@ -473,13 +456,13 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 				run.lines = spineLines(sim, steps, sim.snapshot());
 				projected = true;
 			} catch (e) {
-				run.warnings.push(`事件投影抛错：${String(e)}`);
+				report(e);
 				run.lines = [];
 			}
 			try {
 				run.reveals = sim.reveals(steps);
 			} catch (e) {
-				run.warnings.push(`新见段投影抛错：${String(e)}`);
+				report(e);
 				run.reveals = [];
 			}
 			const lines = projected ? [...run.lines] : [interruptedText(def)];
@@ -489,7 +472,7 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 				try {
 					return speak(def, speech);
 				} catch (e) {
-					run.warnings.push(`引擎文本抛错：${String(e)}`);
+					report(e);
 					return def.messages.noResponse;
 				}
 			};

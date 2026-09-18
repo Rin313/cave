@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openArchive } from "../core/archive.ts";
-import { Engine, type ActOutcome, type AgentSpec, type NarrationOutcome } from "../core/engine.ts";
+import { Engine, type ActOutcome, type AgentSpec } from "../core/engine.ts";
 import * as sim from "../core/sim.ts";
 import { installModel, isThinkingLevel, modelRef, openModelRuntime, supportedThinkingLevels, type ModelFace, type ThinkingLevel } from "./model.ts";
 
@@ -453,7 +453,7 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 ipcMain.handle("open", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "open");
 	const session = await openSession(game, run);
-	return { ...face(session), warnings: [...session.engine.loadWarnings] };
+	return { ...face(session), load: session.engine.load };
 });
 
 /** 显式释放：不动档案。 */
@@ -474,8 +474,7 @@ ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unkno
 	const { game, run } = idsIn(req, "narrate");
 	const instruction = strIn(req?.instruction, "narrate", "instruction");
 	const session = await attached(game, run);
-	const outcome: NarrationOutcome = await session.engine.narrate(instruction);
-	return outcome;
+	return { narration: await session.engine.narrate(instruction) };
 });
 
 ipcMain.handle("state", async (_event, req: RunRequest) => {

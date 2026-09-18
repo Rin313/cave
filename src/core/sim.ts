@@ -12,6 +12,11 @@ export function clone<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** 软故障出口，只进 stderr */
+export function report(e: unknown): void {
+	console.error(e);
+}
+
 export type Scalar = string | number | boolean;
 
 /** 存储值：标量或其有限序列；缺席由键不在表达 */
@@ -1006,8 +1011,8 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	return lines;
 }
 
-/** 近况选择：作者钩子收全账本记录与缺省选择（最后 recentWindow 条，缺席即全量）；抛错或非账本序子序列回落 base 并告警。 */
-function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings: string[]): readonly ChronicleEntry[] {
+/** 近况选择：作者钩子收全账本记录与缺省选择（最后 recentWindow 条，缺席即全量）；抛错或非账本序子序列回落 base。 */
+function selectRecent(def: GameDef, records: readonly ChronicleEntry[]): readonly ChronicleEntry[] {
 	const n = def.recentWindow;
 	const base = n !== undefined ? records.slice(Math.max(0, records.length - n)) : records;
 	if (def.recent === undefined) return base;
@@ -1015,7 +1020,7 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings
 	try {
 		picked = def.recent(records, base);
 	} catch (e) {
-		warnings.push(`近况选择抛错（回落缺省窗口）：${String(e)}`);
+		report(e);
 		return base;
 	}
 	const index = new Map(records.map((r, i) => [r, i]));
@@ -1027,7 +1032,7 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[], warnings
 		return true;
 	});
 	if (!ordered) {
-		warnings.push("近况选择须为传入记录的子序列（账本序）：回落缺省窗口");
+		report("近况选择须为传入记录的子序列（账本序）：回落缺省窗口");
 		return base;
 	}
 	return picked;
@@ -1053,8 +1058,8 @@ function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], sele
 }
 
 /** 近况：选择 × 投影 */
-export function recentEntries(sim: Simulation, records: readonly ChronicleEntry[], warnings: string[]): RecentEntry[] {
-	return projectRecent(sim, records, selectRecent(sim.def, records, warnings));
+export function recentEntries(sim: Simulation, records: readonly ChronicleEntry[]): RecentEntry[] {
+	return projectRecent(sim, records, selectRecent(sim.def, records));
 }
 
 export function relVal(world: World, from: string, to: string, type: string): Value | null {
