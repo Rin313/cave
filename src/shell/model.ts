@@ -49,12 +49,12 @@ export function supportedThinkingLevels(model: AgentSpec["model"]): readonly Thi
 
 export const modelRef = (model: AgentSpec["model"]): string => `${model.provider}/${model.id}`;
 
-/** 当前模型的解析面：身份、显式档位与受支持档位；供配置面渲染思考档。 */
+/** 当前模型的解析面：身份、生效档位与受支持档位；供配置面渲染思考档。 */
 export interface ModelFace {
 	provider: string;
 	id: string;
 	ref: string;
-	/** 显式档位；缺席即用全局缺省。 */
+	/** 生效档位：该模型显式档 ?? 全局缺省；两者皆无即缺席。 */
 	level?: ThinkingLevel;
 	thinkingLevels: readonly ThinkingLevel[];
 }
@@ -135,11 +135,11 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 	});
 
 	ipcMain.handle("auth:login", async (event, req: { provider?: unknown; type?: unknown }) => {
+		closeFlow(); // 新登录抢占旧流：以调用序为准，校验失败也不回退
 		const provider = providerIn(req?.provider, "login");
 		const type: LoginType | null = req?.type === "api_key" || req?.type === "oauth" ? req.type : null;
 		if (type === null) throw new Error("login 需要 type（api_key|oauth）");
 		const sender = event.sender;
-		closeFlow(); // 新登录抢占旧流：最后一次点击胜出
 		const abort = new AbortController();
 		const f: Flow = {
 			sender,

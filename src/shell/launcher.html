@@ -184,7 +184,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("back").onclick = () => shell.home();
 	$("uiTitle").textContent = t("ui.section");
 	$("openRoot").textContent = t("open.root");
-	$("openRoot").onclick = () => shell.reveal();
+	$("openRoot").onclick = () => void shell.reveal().catch((e) => showError(reason(e)));
 	$("modelTitle").textContent = t("model.section");
 	$("thinkingLabel").textContent = t("thinking.label");
 	$("search").placeholder = t("model.filter");
@@ -204,7 +204,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 	/** 解析在壳内完成：UI 只渲染解析面。 */
 	async function currentFace() {
 		try {
-			return await shell.currentModel();
+			return await shell.config.current();
 		} catch (e) {
 			return { error: reason(e) };
 		}
@@ -231,7 +231,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 		if (busy) return;
 		busy = true;
 		try {
-			await shell.setModel(provider, id, level);
+			await shell.config.use(provider, id, level);
 			await refreshCurrent();
 			drawModels();
 		} finally {
@@ -291,7 +291,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 		box.replaceChildren(el("p", t("model.loading"), "muted"));
 		let providers;
 		try {
-			providers = await shell.auth.providers();
+			providers = await shell.config.providers();
 		} catch (e) {
 			box.replaceChildren(el("p", reason(e), "err"));
 			return;
@@ -303,7 +303,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 			if (p.label) li.append(el("span", p.label, "tag"));
 			if (p.apiKey?.login) li.append(button(t("model.apiKey"), () => void startLogin(p.id, "api_key")));
 			if (p.oauth) li.append(button(p.oauth.label || t("model.login"), () => void startLogin(p.id, "oauth")));
-			if (p.configured) li.append(button(t("model.logout"), async () => { await shell.auth.logout(p.id); await refreshProvidersAndModels(); }));
+			if (p.configured) li.append(button(t("model.logout"), async () => { await shell.config.logout(p.id); await refreshProvidersAndModels(); }));
 			list.append(li);
 		}
 		box.replaceChildren(list);
@@ -319,21 +319,23 @@ document.documentElement.lang = zh ? "zh" : "en";
 		$("flow").hidden = false;
 		$("notices").replaceChildren();
 		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
-		const offPrompt = shell.auth.onPrompt(({ prompt }) => renderPrompt(prompt));
-		const offNotice = shell.auth.onNotice(({ notice }) => renderNotice(notice));
 		try {
-			await shell.auth.login(provider, type);
+			await shell.config.login(provider, type, {
+				onPrompt: (prompt) => new Promise((settle) => renderPrompt(prompt, (value) => {
+					$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
+					settle(value);
+				})),
+				onNotice: renderNotice,
+			});
 			$("promptArea").replaceChildren(el("p", t("login.done"), "muted"));
 		} catch (e) {
 			$("promptArea").replaceChildren(el("p", t("login.failed", { error: reason(e) }), "err"));
 		} finally {
-			offPrompt();
-			offNotice();
 			await refreshProvidersAndModels();
 		}
 	}
 
-	function renderPrompt(prompt) {
+	function renderPrompt(prompt, answer) {
 		const area = $("promptArea");
 		area.replaceChildren(el("p", prompt.message));
 		if (prompt.type === "select") {
@@ -348,11 +350,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 		row.append(input, button(t("login.ok"), () => answer(input.value)));
 		area.append(row);
 		input.focus();
-	}
-
-	function answer(value) {
-		$("promptArea").replaceChildren(el("p", t("login.waiting"), "muted"));
-		void shell.auth.answer(value).catch((e) => $("promptArea").replaceChildren(el("p", reason(e), "err")));
 	}
 
 	function renderNotice(notice) {
@@ -374,12 +371,17 @@ document.documentElement.lang = zh ? "zh" : "en";
 		const list = $("modelList");
 		list.replaceChildren(el("li", t("model.loading"), "muted"));
 		try {
-			allModels = await shell.models();
+			allModels = await shell.config.models();
 		} catch (e) {
 			list.replaceChildren(el("li", reason(e), "err"));
 			return;
 		}
 		drawModels();
+	}
+
+	/** 当前档目标模型支持即携带，否则省略档位：use 省略即保留目标模型自己的显式档。 */
+	function carriedLevel(m) {
+		return face !== null && face.error === undefined && face.level !== undefined && m.thinkingLevels.includes(face.level) ? face.level : undefined;
 	}
 
 	function drawModels() {
@@ -398,8 +400,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 			if (!m.available) li.append(el("span", t("model.noCredentials"), "tag"));
 			li.append(button(t("use"), async () => {
 				try {
-					const keep = face?.level !== undefined && m.thinkingLevels.includes(face.level) ? face.level : null;
-					await applyModel(m.provider, m.id, keep);
+					await applyModel(m.provider, m.id, carriedLevel(m));
 				} catch (e) {
 					alert(reason(e));
 				}

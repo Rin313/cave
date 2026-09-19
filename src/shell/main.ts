@@ -254,7 +254,7 @@ function listRuns(root: string, game?: string): RunFace[] {
 	return out;
 }
 
-/** 装载（或新建）一次运行并订阅：世界与档案就绪，模型到 act/narrate 建会话时才解析；事件按实例身份分流，界面自行按 (game, run) 过滤。 */
+/** 装载（或新建）一次运行并订阅：世界与档案就绪，模型到 act/narrate 建会话时才解析；事件携 (game, run) 分流，供句柄按坐标过滤。 */
 async function createSession(game: string, run: string): Promise<Session> {
 	const engine = await Engine.create(await loadGame(ROOT, game), {
 		agent,
@@ -424,16 +424,16 @@ ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } 
 	};
 });
 
-/** 写当前模型（provider 与 id 同为必填）：level 缺席或 null 即清除该模型的显式档。 */
+/** 写当前模型（provider 与 id 同为必填）：level 缺席即保留该模型的显式档，null 即清除，其余须为思考档。 */
 ipcMain.handle("model:set", async (_event, req: { provider?: unknown; id?: unknown; level?: unknown }) => {
 	const provider = strIn(req?.provider, "model:set", "provider");
 	const id = strIn(req?.id, "model:set", "id");
-	const level = req?.level ?? null;
-	if (level !== null && !isThinkingLevel(level)) throw new Error("model:set 的 level 须为思考档或 null");
+	const level = req?.level;
+	if (level !== undefined && level !== null && !isThinkingLevel(level)) throw new Error("model:set 的 level 须为思考档或 null");
 	const manager = settings();
 	manager.setDefaultModelAndProvider(provider, id);
 	if (level === null) manager.removeModelThinkingLevel(provider, id);
-	else manager.setModelThinkingLevel(provider, id, level);
+	else if (level !== undefined) manager.setModelThinkingLevel(provider, id, level);
 	await manager.flush();
 	const failed = manager.drainErrors().find((e) => e.scope === "global");
 	if (failed !== undefined) throw new Error(`设置写入失败（${failed.path ?? SETTINGS_FILE}）：${failed.error.message}`);
@@ -450,10 +450,11 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
+/** 打开或附着：只回档案健康；状态读走 state（句柄以方法为唯一读态，不携快照）。 */
 ipcMain.handle("open", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "open");
 	const session = await openSession(game, run);
-	return { ...face(session), load: session.engine.load };
+	return session.engine.load;
 });
 
 /** 显式释放：不动档案。 */
