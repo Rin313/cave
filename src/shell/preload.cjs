@@ -3,10 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const invoke = (channel, ...args) =>
 	ipcRenderer.invoke(channel, ...args).catch((cause) => {
-		const wrapped = String(cause?.message ?? cause);
-		const prefix = `Error invoking remote method '${channel}': `;
-		const message = wrapped.startsWith(prefix) ? wrapped.slice(prefix.length) : wrapped;
-		throw new Error(message.replace(/^[A-Za-z]*Error: /, ""));
+		const message = String(cause?.message ?? cause).replace(/^(?:Error invoking remote method '[^']*': )?(?:[A-Za-z]*Error: )?/, "");
+		throw new Error(message);
 	});
 
 const on = (channel) => (listener) => {
@@ -37,25 +35,25 @@ function login(provider, type, handlers) {
 	detach?.();
 	let failure = null;
 	const offs = [
-		on("auth:notify")((payload) => onNotice?.(payload.notice)),
-		on("auth:prompt")(({ prompt }) => {
+		on("config:notice")((payload) => onNotice?.(payload.notice)),
+		on("config:prompt")(({ prompt }) => {
 			void (async () => {
 				try {
 					if (typeof onPrompt !== "function") throw new Error("login 未提供 onPrompt");
 					const value = await onPrompt(prompt);
 					if (detach !== off) return;
-					await invoke("auth:answer", { value });
+					await invoke("config:answer", { value });
 				} catch (e) {
 					if (detach !== off) return;
 					failure ??= e instanceof Error ? e : new Error(String(e));
-					await invoke("auth:cancel").catch(() => undefined);
+					await invoke("config:cancel").catch(() => undefined);
 				}
 			})();
 		}),
 	];
 	const off = () => { for (const f of offs) f(); };
 	detach = off;
-	return invoke("auth:login", { provider, type })
+	return invoke("config:login", { provider, type })
 		.catch((e) => { throw failure ?? e; })
 		.finally(() => {
 			if (detach === off) detach = null;
@@ -64,26 +62,21 @@ function login(provider, type, handlers) {
 }
 
 contextBridge.exposeInMainWorld("shell", {
-	games: () => invoke("games"),
 	runs: (game) => invoke("runs", { game }),
 	records: (game, run) => invoke("records", { game, run }),
-	sessions: () => invoke("sessions"),
 	open: async (game, run) => session(game, run, await invoke("open", { game, run })),
-	uis: () => invoke("uis"),
-	navigate: (game) => invoke("navigate", { game }),
 	home: () => invoke("home"),
-	openLauncher: () => invoke("launcher:open"),
 	env: () => invoke("env"),
 	reveal: async (dir) => {
 		const failure = await invoke("reveal", { dir });
 		if (failure !== "") throw new Error(failure);
 	},
 	config: {
-		models: () => invoke("models"),
-		current: () => invoke("model:current"),
-		use: (provider, id, level) => invoke("model:set", level === undefined ? { provider, id } : { provider, id, level }),
-		providers: () => invoke("auth:providers"),
+		models: () => invoke("config:models"),
+		current: () => invoke("config:current"),
+		use: (provider, id, level) => invoke("config:use", level === undefined ? { provider, id } : { provider, id, level }),
+		providers: () => invoke("config:providers"),
 		login,
-		logout: (provider) => invoke("auth:logout", { provider }),
+		logout: (provider) => invoke("config:logout", { provider }),
 	},
 });

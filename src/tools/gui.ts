@@ -35,7 +35,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const js = (v: unknown): string => JSON.stringify(v);
 /** 求值探测时限 */
 const PROBE_MS = 5_000;
-/** 界面装载与清单时限 */
+/** 界面装载时限 */
 const UI_MS = 15_000;
 
 function freePort(): Promise<number> {
@@ -215,14 +215,25 @@ async function shellReady(target: Target): Promise<boolean> {
 	return (await evaluate<unknown>(target, `typeof window.shell === "object"`, PROBE_MS).catch(() => false)) === true;
 }
 
-async function onGameFace(target: Target, game: string): Promise<boolean> {
+async function pageUrl(target: Target): Promise<string | null> {
 	const href = await evaluate<unknown>(target, "location.href", PROBE_MS).catch(() => undefined);
-	if (typeof href !== "string") return false;
+	return typeof href === "string" ? href : null;
+}
+
+async function onGameFace(target: Target, game: string): Promise<boolean> {
+	const href = await pageUrl(target);
+	if (href === null) return false;
 	try {
 		return fileURLToPath(href).endsWith(join("games", game, "index.html"));
 	} catch {
 		return false;
 	}
+}
+
+/** 回落主面的携因：loadHome 的 error 查询参数，缺席即 null。 */
+async function homeFailure(target: Target): Promise<string | null> {
+	const value = await evaluate<unknown>(target, "new URLSearchParams(location.search).get('error')", PROBE_MS).catch(() => undefined);
+	return typeof value === "string" && value !== "" ? value : null;
 }
 
 async function poll(timeout: number, what: string, probe: () => Promise<boolean>): Promise<void> {
@@ -234,14 +245,31 @@ async function poll(timeout: number, what: string, probe: () => Promise<boolean>
 	}
 }
 
-/** 只导航主窗到游戏界面，不开会话、不动引擎；已在即空操作。 */
-async function go(target: Target, game: string): Promise<void> {
+/** 宿主根：二实例须与宿主同根，否则单实例锁按根隔离而另起应用。 */
+async function hostRoot(target: Target): Promise<string> {
+	const env = await evaluate<{ root?: unknown } | undefined>(target, "window.shell.env()", PROBE_MS);
+	const root = env?.root;
+	if (typeof root !== "string" || root === "") throw new Error("无法读取宿主根（window.shell.env()）");
+	return root;
+}
+
+/** 直达游戏：已在即空操作；否则以第二实例走产品入口（--user-data-dir 与宿主同根，单实例锁才命中），窗口面落定即成败。 */
+async function go(target: Target, game: string, exe: string): Promise<void> {
 	if (await onGameFace(target, game)) return;
-	const uis = await evaluate<unknown>(target, "window.shell.uis()", UI_MS);
-	if (!Array.isArray(uis) || !uis.includes(game)) throw new Error(`游戏 ${game} 无界面（games/${game}/index.html 缺席）`);
-	// 导航替换页面并销毁求值上下文：发起不等结果，落定由页面 URL 判定
-	await evaluate(target, `void window.shell.navigate(${js(game)}).catch(() => {})`, PROBE_MS).catch(() => undefined);
-	await poll(UI_MS, `游戏界面 ${game}`, () => onGameFace(target, game));
+	const root = await hostRoot(target);
+	const before = await pageUrl(target);
+	spawn(exe, [`--user-data-dir=${root}`, `--game=${game}`], { detached: true, stdio: "ignore" }).unref();
+	const deadline = Date.now() + UI_MS;
+	for (;;) {
+		if (await onGameFace(target, game)) return;
+		const url = await pageUrl(target);
+		if (url !== null && url !== before) {
+			const failure = await homeFailure(target);
+			if (failure !== null) throw new Error(failure);
+		}
+		if (Date.now() >= deadline) throw new Error((await homeFailure(target)) ?? `等待游戏界面 ${game} 超时（${Math.round(UI_MS / 1000)}s）`);
+		await sleep(150);
+	}
 }
 
 /** 页面内交互元素扫描：ui 与 click 共用同一规则，编号即文档序位置。 */
@@ -387,28 +415,10 @@ async function pressKey(target: Target, name: string, timeout: number): Promise<
 	await cdp(target, "Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.keyCode }, timeout);
 }
 
-/** 空闲须稳定 500ms：点击后 UI 可能尚未发起回合。 */
-async function waitIdle(target: Target, timeout: number): Promise<void> {
-	const deadline = Date.now() + timeout;
-	let since: number | null = null;
-	for (;;) {
-		const list = await evaluate<{ state: string }[]>(target, "window.shell.sessions()", PROBE_MS).catch(() => []);
-		since = list.every((s) => s.state === "idle") ? (since ?? Date.now()) : null;
-		if (since !== null && Date.now() - since >= 500) return;
-		if (Date.now() >= deadline) throw new Error(`等待空闲超时（${Math.round(timeout / 1000)}s）`);
-		await sleep(150);
-	}
-}
-
 async function waitFace(target: Target, args: ParsedArgs, timeout: number): Promise<void> {
 	const text = flagStr(args, "text");
-	const idle = args.flags.has("idle");
-	if ((text === undefined ? 0 : 1) + (idle ? 1 : 0) !== 1) throw new Error("wait 需要 --text <文本> | --idle 之一");
-	if (text !== undefined) {
-		await poll(timeout, `文本 ${js(text)}`, () => evaluate<boolean>(target, `document.body.innerText.includes(${js(text)})`, PROBE_MS));
-		return;
-	}
-	await waitIdle(target, timeout);
+	if (text === undefined) throw new Error("wait 需要 --text <文本>");
+	await poll(timeout, `文本 ${js(text)}`, () => evaluate<boolean>(target, `document.body.innerText.includes(${js(text)})`, PROBE_MS));
 }
 
 async function shot(target: Target, timeout: number): Promise<string> {
@@ -419,13 +429,13 @@ async function shot(target: Target, timeout: number): Promise<string> {
 	return file;
 }
 
-/** 分派：真实交互（go/ui/click/type/key/wait/shot）走 CDP 输入；协议面不设转发命令，经 eval 直达 window.shell。 */
-async function dispatch(cmd: string, args: ParsedArgs, target: Target, timeout: number): Promise<unknown> {
+/** 分派：go 以第二实例走产品入口；交互与读取走 CDP；协议面不设转发命令，经 eval 直达 window.shell。 */
+async function dispatch(cmd: string, args: ParsedArgs, target: Target, timeout: number, exe: string): Promise<unknown> {
 	switch (cmd) {
 		case "go": {
 			const game = args.positionals[0];
 			if (game === undefined) throw new Error("go 需要 <game>");
-			await go(target, game);
+			await go(target, game, exe);
 			return;
 		}
 		case "ui":
@@ -521,8 +531,9 @@ async function main(): Promise<void> {
 	}
 	const rawExe = flagStr(a, "exe");
 	if (rawExe === undefined) throw new Error("需要 --exe <可执行文件>：宿主只由显式指定的二进制启动（npm run dist 的产物）");
-	const target = await ensureHost(resolve(rawExe));
-	const result = await dispatch(cmd, a, target, timeout);
+	const binary = resolve(rawExe);
+	const target = await ensureHost(binary);
+	const result = await dispatch(cmd, a, target, timeout, binary);
 	if (result !== undefined) console.log(typeof result === "string" ? result : JSON.stringify(result));
 }
 

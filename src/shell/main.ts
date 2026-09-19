@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -31,25 +31,49 @@ const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 
 let win: BrowserWindow | null = null;
 
-/** 第二实例聚焦主窗（主窗缺席即应用正在收束）；写者唯一由单实例锁保证。 */
-app.on("second-instance", () => {
-	if (win === null || win.isDestroyed()) return;
-	if (win.isMinimized()) win.restore();
-	win.focus();
+/** 窗口未就绪时第二实例带来的游戏：由 whenReady 消费。 */
+let pendingGame: string | null = null;
+
+/** 第二实例聚焦主窗（写者唯一由单实例锁保证），并直达其命令行指定的游戏；主窗未就绪即暂存目标。 */
+app.on("second-instance", (_event, argv) => {
+	const game = gameArg(argv);
+	const w = win;
+	if (w === null || w.isDestroyed()) {
+		pendingGame = game;
+		return;
+	}
+	if (w.isMinimized()) w.restore();
+	w.focus();
+	if (game !== null) void launchGame(w, game);
 });
 
 /** 根：games、runs 与配置（settings、auth、models）的共同所在；即宿主用户数据目录（--user-data-dir 可覆盖）。 */
 const ROOT = app.getPath("userData");
 const SETTINGS_FILE = join(ROOT, "settings.json");
 
-/** 路径段：id 不做路径解析。 */
+/** 路径段：id 不做路径解析；控制字符即拒（id 会物化为文件名与双击入口内容）。 */
 function isSegment(v: unknown): v is string {
-	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/]/.test(v);
+	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/\x00-\x1f\x7f]/.test(v);
 }
 
-function runsDir(root: string, game?: string): string {
-	const base = join(root, "runs");
-	return game === undefined ? base : join(base, game);
+/** 启动参数里的游戏 id：--game <id> 或 --game=<id>；缺席或非法即 null。 */
+function gameArg(argv: readonly string[]): string | null {
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i]!;
+		if (a === "--game") {
+			const v = argv[i + 1];
+			return v !== undefined && !v.startsWith("--") && isSegment(v) ? v : null;
+		}
+		if (a.startsWith("--game=")) {
+			const v = a.slice("--game=".length);
+			return isSegment(v) ? v : null;
+		}
+	}
+	return null;
+}
+
+function runsDir(root: string, game: string): string {
+	return join(root, "runs", game);
 }
 
 function recordsPath(root: string, game: string, run: string): string {
@@ -62,10 +86,11 @@ function subdirs(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-/** 内容应用面：存在即为主面（启动、home 与游戏界面失败回落的落点）；启动器仅在缺席、故障或内容显式调用时出现。 */
-const APP_FILE = join(ROOT, "ui", "index.html");
-/** 壳内启动器：配置与界面清单。 */
+/** 壳内启动器：唯一主面（启动、home 与游戏界面失败回落的落点）。 */
 const LAUNCHER_FILE = join(import.meta.dirname, "launcher.html");
+
+/** 入口物化只属发行版：开发态 exe 是 Electron 自身。 */
+const entriesActive = (): boolean => app.isPackaged;
 
 let sharedRuntime: Promise<ModelRuntime> | null = null;
 /** 壳、配置协议与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败弃置，下次重试。 */
@@ -87,6 +112,77 @@ function faceFile(root: string, game: string): string | null {
 
 function listFaces(root: string): string[] {
 	return listGames(root).filter((game) => faceFile(root, game) !== null);
+}
+
+/** Windows 命令行参数：含空白或引号即整体加引号，引号前加反斜杠（id 可含引号；路径分隔符不是字面反斜杠）。 */
+const winArg = (arg: string): string => (/[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg);
+/** POSIX sh 单引号串。 */
+const shArg = (arg: string): string => `'${arg.replace(/'/g, `'\\''`)}'`;
+/** .desktop 的 Exec 引号：规范只认双引号，反斜杠、引号、反引号与 $ 须转义，字面 % 写作 %%。 */
+const execArg = (arg: string): string => `"${arg.replace(/[\\"`$%]/g, (c) => (c === "%" ? "%%" : `\\${c}`))}"`;
+
+/** plist 字符串：转义 XML 元字符。 */
+const xmlArg = (v: string): string => v.replace(/[<>&'"]/g, (c) => `&#${c.charCodeAt(0)};`);
+/** bundle id 段：非字母数字转为 `_` + 固定四位十六进制（字面 `_` 亦在转义内），保持单射。 */
+const bundleId = (game: string): string => `cave.game.${game.replace(/[^A-Za-z0-9]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}`;
+
+/** macOS 入口即最小 .app 包裹：.command 会闪 Terminal 且受信任策略限制。 */
+function writeMacApp(file: string, game: string, args: readonly string[]): void {
+	const macos = join(file, "Contents", "MacOS");
+	mkdirSync(macos, { recursive: true });
+	const launch = join(macos, "launch");
+	writeFileSync(launch, `#!/bin/sh\nexec ${[process.execPath, ...args].map(shArg).join(" ")}\n`);
+	chmodSync(launch, 0o755);
+	writeFileSync(join(file, "Contents", "Info.plist"), [
+		`<?xml version="1.0" encoding="UTF-8"?>`,
+		`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+		`<plist version="1.0"><dict>`,
+		`<key>CFBundleExecutable</key><string>launch</string>`,
+		`<key>CFBundleIdentifier</key><string>${bundleId(game)}</string>`,
+		`<key>CFBundleName</key><string>${xmlArg(game)}</string>`,
+		`<key>CFBundlePackageType</key><string>APPL</string>`,
+		`<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>`,
+		`<key>CFBundleVersion</key><string>0.0.0</string>`,
+		`<key>CFBundleShortVersionString</key><string>0.0.0</string>`,
+		`</dict></plist>`,
+		``,
+	].join("\n"));
+}
+
+/** 写一个入口到游戏目录：命令行 = 裸 exe + 数据根 + --game（入口随根自含，双击即回到同一档案）。 */
+function writeEntry(dir: string, game: string): void {
+	const args = [`--user-data-dir=${ROOT}`, `--game=${game}`];
+	if (process.platform === "win32") {
+		const file = join(dir, `${game}.lnk`);
+		if (!shell.writeShortcutLink(file, "create", { target: process.execPath, args: args.map(winArg).join(" "), description: `cave: ${game}` })) {
+			throw new Error(`快捷方式写入失败：${file}`);
+		}
+		return;
+	}
+	if (process.platform === "darwin") {
+		writeMacApp(join(dir, `${game}.app`), game, args);
+		return;
+	}
+	const file = join(dir, `${game}.desktop`);
+	writeFileSync(file, `[Desktop Entry]\nType=Application\nName=${game}\nExec=${[process.execPath, ...args].map(execArg).join(" ")}\nTerminal=false\n`);
+	chmodSync(file, 0o755);
+}
+
+/** 入口物化：每个游戏面在自身目录内写一个入口，随游戏目录生灭；逐条失败不中断其余，整体失败也在清单内（不抛）。 */
+function syncEntries(): string[] {
+	const failures: string[] = [];
+	try {
+		for (const game of listFaces(ROOT)) {
+			try {
+				writeEntry(join(ROOT, "games", game), game);
+			} catch (e) {
+				failures.push(`${game}：${String(e)}`);
+			}
+		}
+	} catch (e) {
+		failures.push(String(e));
+	}
+	return failures;
 }
 
 /** 全局设置（ROOT/settings.json 即 SDK 的全局设置路径）：每次新建即每次重读；载入错误即抛。 */
@@ -153,36 +249,29 @@ function bindWindow(w: BrowserWindow): void {
 	w.webContents.on("will-prevent-unload", (event) => event.preventDefault());
 }
 
-/** 内容之外的兜底出口：Cmd/Ctrl+Shift+H 回主面（应用面或启动器）。 */
-function bindHomeKey(w: BrowserWindow): void {
-	w.webContents.on("before-input-event", (event, input) => {
-		if (input.type !== "keyDown" || input.isAutoRepeat || !(input.control || input.meta) || !input.shift || input.key.toLowerCase() !== "h") return;
-		event.preventDefault();
-		void loadHome(w);
-	});
-}
-
 /** 导航代（按窗口）：末位导航胜出，被取代的装载无论成败（ERR_ABORTED 即其一）都不算本次意图的结果。 */
 const navSeq = new WeakMap<BrowserWindow, number>();
 
-function load(w: BrowserWindow, file: string, error?: string): Promise<void> {
+function load(w: BrowserWindow, file: string, query?: Record<string, string>): Promise<void> {
 	const seq = (navSeq.get(w) ?? 0) + 1;
 	navSeq.set(w, seq);
-	const job = error === undefined ? w.loadFile(file) : w.loadFile(file, { query: { error } });
+	const job = query === undefined ? w.loadFile(file) : w.loadFile(file, { query });
 	return job.catch((e: unknown) => {
 		if (navSeq.get(w) === seq) throw e;
 	});
 }
 
-/** 主面为启动器：应用面缺席。 */
-function launcherHome(): boolean {
-	return !existsSync(APP_FILE);
+/** 启动器查询参数（主进程向自己的页面下发壳内状态，不属协议面）：入口物化只随启动器面装载发生，失败与来因同经 error 呈现。 */
+function launcherQuery(error?: string): Record<string, string> {
+	const lines = entriesActive() ? syncEntries() : [];
+	if (error !== undefined) lines.unshift(error);
+	return lines.length === 0 ? {} : { error: lines.join("\n") };
 }
 
 /** 装载内置启动器：成功或被取代即 null，失败即原因文本（含来因）。 */
 function loadLauncher(w: BrowserWindow, error?: string): Promise<string | null> {
 	if (w.isDestroyed()) return Promise.resolve(null);
-	return load(w, LAUNCHER_FILE, error).then(
+	return load(w, LAUNCHER_FILE, launcherQuery(error)).then(
 		() => null,
 		(e: unknown) => `${error === undefined ? "" : `${error}\n`}启动器装载失败（${LAUNCHER_FILE}）：${String(e)}`,
 	);
@@ -196,14 +285,27 @@ async function requireLauncher(w: BrowserWindow, error?: string): Promise<void> 
 	app.exit(1);
 }
 
-/** 装载主面；error 非空即经查询参数透出。应用面自身失败即降启动器携因（唯一自动降级），启动器亦失败即无窗口面。 */
-function loadHome(w: BrowserWindow, error?: string): Promise<void> {
-	if (w.isDestroyed()) return Promise.resolve();
-	if (launcherHome()) return requireLauncher(w, error);
-	return load(w, APP_FILE, error).catch((e: unknown) => {
+/** 进游戏：只导航主窗，不动引擎；未知游戏、无界面或装载失败一律携因抛出。 */
+async function goGame(w: BrowserWindow, game: string): Promise<void> {
+	if (gameFile(ROOT, game) === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
+	const file = faceFile(ROOT, game);
+	if (file === null) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
+	if (w.isDestroyed()) return;
+	try {
+		await load(w, file);
+	} catch (e) {
 		if (w.isDestroyed()) return;
-		return requireLauncher(w, `${error === undefined ? "" : `${error}\n`}应用面装载失败（${APP_FILE}）：${String(e)}`);
-	});
+		throw new Error(`界面 ${game} 装载失败（${file}）：${String(e)}`);
+	}
+}
+
+/** 入口唯一路径：启动参数与第二实例直达游戏，失败即回配置面携因。 */
+async function launchGame(w: BrowserWindow, game: string): Promise<void> {
+	try {
+		await goGame(w, game);
+	} catch (e) {
+		if (!w.isDestroyed()) await requireLauncher(w, String(e));
+	}
 }
 
 function gameFile(root: string, id: string): string | null {
@@ -239,16 +341,13 @@ interface RunFace {
 	mtime: number;
 }
 
-/** 枚举存档（按记录文件 mtime 降序） */
-function listRuns(root: string, game?: string): RunFace[] {
-	const games = game !== undefined ? [game] : subdirs(runsDir(root));
+/** 枚举某游戏的存档（按记录文件 mtime 降序）：存档面只按游戏坐标取，不跨游戏列。 */
+function listRuns(root: string, game: string): RunFace[] {
 	const out: RunFace[] = [];
-	for (const g of games) {
-		for (const run of subdirs(runsDir(root, g))) {
-			const stat = statSync(recordsPath(root, g, run), { throwIfNoEntry: false });
-			if (stat === undefined) continue;
-			out.push({ game: g, run, mtime: stat.mtimeMs });
-		}
+	for (const run of subdirs(runsDir(root, game))) {
+		const stat = statSync(recordsPath(root, game, run), { throwIfNoEntry: false });
+		if (stat === undefined) continue;
+		out.push({ game, run, mtime: stat.mtimeMs });
 	}
 	out.sort((a, b) => b.mtime - a.mtime);
 	return out;
@@ -329,17 +428,11 @@ function strIn(value: unknown, cmd: string, field: string): string {
 	return value;
 }
 
-/** 可缺席的 game 字段：缺席即 undefined，非路径段即拒。 */
-function idIn(req: GameRequest | undefined, cmd: string): string | undefined {
-	if (req?.game === undefined) return undefined;
-	if (!isSegment(req.game)) throw new Error(`${cmd} 的 game 须为游戏 id`);
-	return req.game;
-}
-
-/** 必填的 game 字段。 */
+/** 必填的 game 字段，须为游戏 id（路径段）。 */
 function gameIn(req: GameRequest | undefined, cmd: string): string {
-	const game = idIn(req, cmd);
+	const game = req?.game;
 	if (game === undefined) throw new Error(`${cmd} 需要游戏 id`);
+	if (!isSegment(game)) throw new Error(`${cmd} 的 game 须为游戏 id`);
 	return game;
 }
 
@@ -350,11 +443,8 @@ function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: s
 	return { game, run: req.run };
 }
 
-/** 跨游戏的管理/启动面归内容：壳只提供枚举与会话协议；游戏自述与资产由内容自持，壳不设通道。 */
-ipcMain.handle("games", () => listGames(ROOT));
-
-/** 存档清单：带 game 即只列该游戏；无记录目录不列。 */
-ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, idIn(req, "runs")));
+/** 存档清单：只按给定游戏坐标取，不跨游戏列；无记录目录不列。 */
+ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, gameIn(req, "runs")));
 
 /** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
@@ -362,54 +452,12 @@ ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	return { game, run, ...openArchive(recordsPath(ROOT, game, run)).snapshot };
 });
 
-/** 活实例面：opening 即装载中，其余即引擎单飞态；time 仅在已落定时给出。 */
-interface SessionFace {
-	game: string;
-	run: string;
-	state: "opening" | "idle" | "act" | "narrate";
-	time?: number;
-}
-
-/** 活实例清单（含打开中）：界面换装/重载后据此附着回既有实例。 */
-ipcMain.handle("sessions", (): SessionFace[] => [...sessions.values()].map((slot): SessionFace => {
-	const { session } = slot;
-	if (session === null) return { game: slot.game, run: slot.run, state: "opening" };
-	return { ...coords(session), state: session.engine.busy ?? "idle" };
-}));
-
-/** 界面清单 */
-ipcMain.handle("uis", () => listFaces(ROOT));
-
-/** 进游戏：只导航主窗，不动引擎，不写设置；装载失败即携因回主面。 */
-ipcMain.handle("navigate", async (_event, req: GameRequest | undefined) => {
-	const game = gameIn(req, "navigate");
-	if (gameFile(ROOT, game) === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
-	const file = faceFile(ROOT, game);
-	if (file === null) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
-	const w = win;
-	if (w === null || w.isDestroyed()) return;
-	try {
-		await load(w, file);
-	} catch (e) {
-		if (w.isDestroyed()) return;
-		await loadHome(w, `界面 ${game} 装载失败（${file}）：${String(e)}`);
-	}
-});
-
-/** 回主面：内容自建的出口（按钮等）与快捷键走同一路径。 */
+/** 回主面：内容自建的出口（按钮等）；启动器失败即无窗口面。 */
 ipcMain.handle("home", async () => {
-	if (win !== null) await loadHome(win);
+	if (win !== null) await requireLauncher(win);
 });
 
-/** 显式打开内置启动器（配置与界面清单）：内容侧入口；失败即回主面携因。 */
-ipcMain.handle("launcher:open", async () => {
-	const w = win;
-	if (w === null || w.isDestroyed()) return;
-	const failure = await loadLauncher(w);
-	if (failure !== null && !w.isDestroyed()) await loadHome(w, failure);
-});
-
-ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } | null> => {
+ipcMain.handle("config:current", async (): Promise<ModelFace | { error: string } | null> => {
 	const stored = storedModel();
 	if (stored === null) return null;
 	const runtime = await modelRuntime();
@@ -425,11 +473,11 @@ ipcMain.handle("model:current", async (): Promise<ModelFace | { error: string } 
 });
 
 /** 写当前模型（provider 与 id 同为必填）：level 缺席即保留该模型的显式档，null 即清除，其余须为思考档。 */
-ipcMain.handle("model:set", async (_event, req: { provider?: unknown; id?: unknown; level?: unknown }) => {
-	const provider = strIn(req?.provider, "model:set", "provider");
-	const id = strIn(req?.id, "model:set", "id");
+ipcMain.handle("config:use", async (_event, req: { provider?: unknown; id?: unknown; level?: unknown }) => {
+	const provider = strIn(req?.provider, "config:use", "provider");
+	const id = strIn(req?.id, "config:use", "id");
 	const level = req?.level;
-	if (level !== undefined && level !== null && !isThinkingLevel(level)) throw new Error("model:set 的 level 须为思考档或 null");
+	if (level !== undefined && level !== null && !isThinkingLevel(level)) throw new Error("config:use 的 level 须为思考档或 null");
 	const manager = settings();
 	manager.setDefaultModelAndProvider(provider, id);
 	if (level === null) manager.removeModelThinkingLevel(provider, id);
@@ -439,7 +487,7 @@ ipcMain.handle("model:set", async (_event, req: { provider?: unknown; id?: unkno
 	if (failed !== undefined) throw new Error(`设置写入失败（${failed.path ?? SETTINGS_FILE}）：${failed.error.message}`);
 });
 
-ipcMain.handle("env", () => ({ root: ROOT, home: launcherHome() ? "launcher" : "app" }));
+ipcMain.handle("env", () => ({ root: ROOT }));
 
 /** 打开根下目录（不存在即建）：界面据此暴露内容与配置的可写位置。 */
 ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
@@ -487,11 +535,11 @@ app.whenReady().then(() => {
 	installModel(modelRuntime);
 	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
 	bindWindow(win);
-	bindHomeKey(win);
 	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
 	win.on("closed", () => {
 		win = null;
 		app.quit();
 	});
-	void loadHome(win);
+	const game = pendingGame ?? gameArg(process.argv);
+	void (game === null ? requireLauncher(win) : launchGame(win, game));
 });

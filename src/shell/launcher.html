@@ -87,15 +87,8 @@
 <main>
 	<header>
 		<h1 id="title"></h1>
-		<button id="back" type="button" hidden></button>
 	</header>
 	<p id="error" class="err" hidden></p>
-	<section id="uiSection">
-		<h2 id="uiTitle"></h2>
-		<ul id="uiList"></ul>
-		<p id="uiNone" class="muted" hidden></p>
-		<p id="uiHint" class="muted" hidden></p>
-	</section>
 	<section>
 		<h2 id="modelTitle"></h2>
 		<p id="current"></p>
@@ -130,7 +123,6 @@ const showError = (message) => { const box = $("error"); box.hidden = false; box
 const zh = (navigator.language || "en").toLowerCase().startsWith("zh");
 const text = {
 	"title": ["启动器", "Launcher"],
-	"back": ["返回应用面", "Back to app"],
 	"bridge": ["window.shell 不可用", "window.shell unavailable"],
 	"open.root": ["打开根目录", "Open root folder"],
 	"current": ["当前", "Current"],
@@ -139,9 +131,6 @@ const text = {
 	"thinking.default": ["默认", "Default"],
 	"configured": ["已配置", "Configured"],
 	"unconfigured": ["未配置", "Not configured"],
-	"ui.section": ["界面", "Interface"],
-	"ui.none": ["没有可用界面：在 games/<id>/index.html 放置界面。", "No user interface available: add games/<id>/index.html."],
-	"ui.hint": ["游戏中 Cmd/Ctrl+Shift+H 回到此处", "Press Cmd/Ctrl+Shift+H in a game to return here."],
 	"model.section": ["模型与凭据", "Models & credentials"],
 	"model.current": ["当前模型：{model}", "Current model: {model}"],
 	"model.error": ["模型不可用：{error}", "Model unavailable: {error}"],
@@ -169,9 +158,9 @@ document.documentElement.lang = zh ? "zh" : "en";
 		showError(t("bridge"));
 		return;
 	}
-	const bootError = new URLSearchParams(location.search).get("error");
+	const params = new URLSearchParams(location.search);
+	const bootError = params.get("error");
 	if (bootError !== null) showError(bootError);
-	const env = await shell.env();
 	let allModels = [];
 	let showAll = false;
 	let face = null;
@@ -179,10 +168,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 
 	document.title = t("title");
 	$("title").textContent = t("title");
-	$("back").textContent = t("back");
-	$("back").hidden = env.home !== "app";
-	$("back").onclick = () => shell.home();
-	$("uiTitle").textContent = t("ui.section");
 	$("openRoot").textContent = t("open.root");
 	$("openRoot").onclick = () => void shell.reveal().catch((e) => showError(reason(e)));
 	$("modelTitle").textContent = t("model.section");
@@ -196,7 +181,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 		drawModels();
 	};
 
-	await renderUis();
 	await refreshCurrent();
 	await renderProviders();
 	await renderModels();
@@ -256,34 +240,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 		$("currentError").hidden = error === null;
 		if (error !== null) $("currentError").textContent = t("model.error", { error });
 		renderThinking();
-	}
-
-	async function renderUis() {
-		const none = $("uiNone");
-		const hint = $("uiHint");
-		none.textContent = t("ui.none");
-		hint.textContent = t("ui.hint");
-		let uis;
-		try {
-			uis = await shell.uis();
-		} catch (e) {
-			showError(reason(e));
-			hint.hidden = true;
-			return;
-		}
-		none.hidden = uis.length > 0;
-		hint.hidden = uis.length === 0 || env.home !== "launcher";
-		$("uiList").replaceChildren(...uis.map((game) => {
-			const li = document.createElement("li");
-			li.append(el("span", game, "name"), button(t("use"), async () => {
-				try {
-					await shell.navigate(game);
-				} catch (e) {
-					showError(reason(e));
-				}
-			}));
-			return li;
-		}));
 	}
 
 	async function renderProviders() {

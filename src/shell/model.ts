@@ -123,9 +123,9 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		target.abort.abort();
 	};
 
-	ipcMain.handle("auth:providers", async (): Promise<ProviderInfo[]> => providerInfo(await load()));
+	ipcMain.handle("config:providers", async (): Promise<ProviderInfo[]> => providerInfo(await load()));
 
-	ipcMain.handle("models", async (): Promise<ModelRef[]> => {
+	ipcMain.handle("config:models", async (): Promise<ModelRef[]> => {
 		const runtime = await load();
 		const available = new Set((await runtime.getAvailable()).map((m) => modelRef(m)));
 		return runtime.getModels().map((m) => {
@@ -134,7 +134,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		});
 	});
 
-	ipcMain.handle("auth:login", async (event, req: { provider?: unknown; type?: unknown }) => {
+	ipcMain.handle("config:login", async (event, req: { provider?: unknown; type?: unknown }) => {
 		closeFlow(); // 新登录抢占旧流：以调用序为准，校验失败也不回退
 		const provider = providerIn(req?.provider, "login");
 		const type: LoginType | null = req?.type === "api_key" || req?.type === "oauth" ? req.type : null;
@@ -157,7 +157,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 			await (await load()).login(provider, type, {
 				signal: abort.signal,
 				notify: (notice) => {
-					if (flow === f && !sender.isDestroyed()) sender.send("auth:notify", { notice });
+					if (flow === f && !sender.isDestroyed()) sender.send("config:notice", { notice });
 				},
 				prompt: (prompt) =>
 					new Promise<string>((resolve, reject) => {
@@ -185,7 +185,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 						abort.signal.addEventListener("abort", onAbort, { once: true });
 						prompt.signal?.addEventListener("abort", onAbort, { once: true });
 						try {
-							sender.send("auth:prompt", { prompt: promptPayload(prompt) });
+							sender.send("config:prompt", { prompt: promptPayload(prompt) });
 						} catch {
 							onAbort();
 						}
@@ -196,7 +196,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		}
 	});
 
-	ipcMain.handle("auth:answer", (event, req: { value?: unknown }) => {
+	ipcMain.handle("config:answer", (event, req: { value?: unknown }) => {
 		const f = flow;
 		if (f === null || f.sender !== event.sender) throw new Error("没有进行中的登录流程");
 		if (typeof req?.value !== "string") throw new Error("answer 需要字符串 value");
@@ -204,13 +204,13 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		f.answer(req.value);
 	});
 
-	ipcMain.handle("auth:cancel", (event) => {
+	ipcMain.handle("config:cancel", (event) => {
 		const f = flow;
 		if (f === null || f.sender !== event.sender) throw new Error("没有进行中的登录流程");
 		closeFlow(f);
 	});
 
-	ipcMain.handle("auth:logout", async (_event, req: { provider?: unknown }) => {
+	ipcMain.handle("config:logout", async (_event, req: { provider?: unknown }) => {
 		await (await load()).logout(providerIn(req?.provider, "logout"));
 	});
 }
