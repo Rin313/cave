@@ -71,7 +71,7 @@ Denial   ::= (Point, ⟨text⟩?)                 -- 受众 engine 时文本必�
 ```
 
 - `before` 是提交前读态（回滚锚）；`changes` 是本次提交的全部变更。integrity 恒挂：id 唯一、身份非空、存储值 ∈ V、注册项类型契约（值与非空序列按 `type` 声明；注册 `ref` 追加引用在世）、边形状与三元组唯一。游戏不变式追加领域约束。任一违反 ⇒ 整提交回滚并拒绝。
-- 受众是 Point 的全函数（见 `fault`）：受众 world 的点以世界腔文本呈现（记录内容直用，其余经 `say` 与词表缺省解析，呈现侧缺省 noResponse），受众 engine 的点必携 debug；debug 只经记录与诊断面（`records`）可读。
+- 受众是 Point 的全函数：受众 world 的点以世界腔文本呈现（记录内容直用，其余经 `say` 与词表缺省解析，呈现侧缺省 noResponse），受众 engine 的点必携 debug；debug 只经记录与诊断面（`records`）可读。
 - `admit` 是装载终点的零变更审查（当前世界 × 当下法则）：与零变更授予逐字段同形，proposal 是唯一判别；重放不跑 authored 不变式（历史由当时的法则裁判过）；终态必过 admit——装载拒绝即当下世界违反当下法则。
 
 ### 裁决
@@ -155,7 +155,7 @@ card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : pres
 ## 面向作者的契约
 
 - **动词表**：`params` 由值声明（type×重数）加可选与描述构成，派生接口模式、内核校验与规则参数的编译期类型；`ref` 值过指称门（域即可指称集）；`many` 令参数为非空序列——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。全表另派生 AI 广告（`verbFace`／`catalog`：id、label、description、span、逐参数的 type×重数×可选×ref 与过门注记）；`act` 工具描述缺省即协议约束＋该广告，作者经 `prompt.tool` 委托或覆盖。
-- **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被记录与断言消费，`text` 是世界腔答复（缺省回落 noResponse），`span` 覆写缺省跨度；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。否决不携带涉及实体——指称落点在 action 参数与法则理由。受众规则见 `fault`。
+- **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被记录与断言消费，`text` 是世界腔答复（缺省回落 noResponse），`span` 覆写缺省跨度；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。否决不携带涉及实体——指称落点在 action 参数与法则理由。
 - **引擎文本**（`Messages` 皆非空；`say` 可接管总函数）：引擎合成读者侧文本的场合是闭集 `Speech`——记录点的 `(point, verb)`（rule/closure/gate/invariant/engine）与边界情形 `noProposal`（空提案、未调 act、零行文）、`interrupted(adjudicate|project)`。解析序：记录文本中受众 world 者直用（`deny` 的 text、invariant 的 reply）；其余经 `say(speech, base)`——`base` 对 gate 先取动词 `invisible`、再取 `invisibleEntity`、最后 `noResponse`，其余场合一律 `noResponse`（受众 engine 点的隐身呈现）。`verb.invisible` 是词表缺省，不进入记录、不越级 say。记录点场合的解析是记录与 def 的纯函数（act 结果与近况恒同）；边界场合不在账本；投影失灵先按 `interrupted(project)` 解析，`say` 失败时直取 `noResponse`。`timePassed` 承载静默拍聚合，不属 `say`；回复/陈述是授予侧的逐次文本，亦不入 `say`。文案只被呈现消费，不参与裁决。
 
 ## 非目标
