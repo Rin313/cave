@@ -298,7 +298,7 @@ export class Engine {
 
 	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信（重启后世界与档案停在上一回合，前缀档案无损）。 */
 	private finalizeTurn(narration: string): void {
-		const record: ChronicleEntry = deepFreeze({ time: this.sim.world.time, utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
+		const record: ChronicleEntry = deepFreeze({ utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
 		try {
 			this.options.archive?.append(record);
 		} catch (e) {
@@ -367,11 +367,11 @@ function interruptedText(def: GameDef): string {
 	}
 }
 
-/** 逐动作落钟：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
+/** 逐动作推进：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
 function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[]): void {
 	for (const a of actions) {
 		const res = sim.apply(a);
-		sink.push(res.step, ...res.elapsed);
+		sink.push(res.step, ...res.ticks);
 	}
 }
 
