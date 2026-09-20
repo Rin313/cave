@@ -5,7 +5,7 @@
 	"type": "module",
 	"main": "src/shell/main.ts",
 	"scripts": {
-		"dist": "electron-packager . --out=dist --overwrite --app-version=0.0.0 --download.mirrorOptions.mirror=https://npmmirror.com/mirrors/electron/ --ignore=\"^(?!$)(?!/(package\\.json$|(src|node_modules)(/|$)))\" --ignore=\"^/src/tools(/|$)\" --ignore=\"\\.map$\" --ignore=\"\\.d\\.ts$\""
+		"build": "electron-packager . --out=dist --overwrite --app-version=0.0.0 --download.mirrorOptions.mirror=https://npmmirror.com/mirrors/electron/ --ignore=\"^(?!$)(?!/(package\\.json$|(src|node_modules)(/|$)))\" --ignore=\"^/src/tools(/|$)\" --ignore=\"\\.map$\" --ignore=\"\\.d\\.ts$\""
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "^0.85.1"

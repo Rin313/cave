@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type BrowserWindowConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type BrowserWindowConstructorOptions } from "electron";
 import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -220,8 +220,6 @@ function windowOptions(): BrowserWindowConstructorOptions {
 	return {
 		show: false,
 		backgroundColor: "#14161a",
-		// 菜单隐藏但保留默认角色：重载/DevTools/缩放快捷键仍有效，Alt 可唤出，常驻视觉噪音消失。
-		autoHideMenuBar: true,
 		webPreferences: {
 			preload: join(import.meta.dirname, "preload.cjs"),
 			contextIsolation: true,
@@ -533,6 +531,7 @@ ipcMain.handle("state", async (_event, req: RunRequest) => {
 
 app.whenReady().then(() => {
 	installModel(modelRuntime);
+	if (process.platform !== "darwin") Menu.setApplicationMenu(null);
 	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
 	bindWindow(win);
 	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
