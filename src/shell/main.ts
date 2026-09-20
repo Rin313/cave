@@ -102,16 +102,6 @@ function modelRuntime(): Promise<ModelRuntime> {
 	return sharedRuntime;
 }
 
-function faceFile(root: string, game: string): string | null {
-	if (gameFile(root, game) === null) return null;
-	const file = join(root, "games", game, "index.html");
-	return existsSync(file) ? file : null;
-}
-
-function listFaces(root: string): string[] {
-	return listGames(root).filter((game) => faceFile(root, game) !== null);
-}
-
 /** Windows 命令行参数：含空白或引号即整体加引号，引号前加反斜杠（id 可含引号；路径分隔符不是字面反斜杠）。 */
 const winArg = (arg: string): string => (/[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg);
 /** POSIX sh 单引号串。 */
@@ -283,9 +273,9 @@ async function requireLauncher(w: BrowserWindow, error?: string): Promise<void> 
 /** 入口唯一路径：启动参数与第二实例直达游戏；未知游戏、无界面或装载失败一律回配置面携因。 */
 async function launchGame(w: BrowserWindow, game: string): Promise<void> {
 	try {
-		if (gameFile(ROOT, game) === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
-		const file = faceFile(ROOT, game);
-		if (file === null) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
+		const dir = requireGameDir(ROOT, game);
+		const file = join(dir, "index.html");
+		if (!existsSync(file)) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
 		if (w.isDestroyed()) return;
 		try {
 			await load(w, file);
@@ -297,21 +287,32 @@ async function launchGame(w: BrowserWindow, game: string): Promise<void> {
 	}
 }
 
-function gameFile(root: string, id: string): string | null {
+/** 游戏目录：id 合法且 index.ts 在世（游戏身份的唯一定义）；缺席即 null。 */
+function gameDir(root: string, id: string): string | null {
 	if (!isSegment(id)) return null;
-	const file = join(root, "games", id, "index.ts");
-	return existsSync(file) ? file : null;
+	const dir = join(root, "games", id);
+	return existsSync(join(dir, "index.ts")) ? dir : null;
 }
 
 /** 列出 <root>/games 下的可用游戏；id 升序。 */
 function listGames(root: string): string[] {
-	return subdirs(join(root, "games")).filter((id) => gameFile(root, id) !== null).sort();
+	return subdirs(join(root, "games")).filter((id) => gameDir(root, id) !== null).sort();
+}
+
+function listFaces(root: string): string[] {
+	return listGames(root).filter((id) => existsSync(join(root, "games", id, "index.html")));
+}
+
+/** 未知游戏即抛：直达与装载共用同一文案。 */
+function requireGameDir(root: string, id: string): string {
+	const dir = gameDir(root, id);
+	if (dir === null) throw new Error(`未知游戏：${id}（可用：${listGames(root).join(", ") || "无"}）`);
+	return dir;
 }
 
 /** 装载游戏实例：default 为 GameDef 或 (core) => GameDef 工厂 */
 async function loadGame(root: string, id: string): Promise<sim.GameDef> {
-	const file = gameFile(root, id);
-	if (file === null) throw new Error(`未知游戏：${id}（可用：${listGames(root).join(", ") || "无"}）`);
+	const file = join(requireGameDir(root, id), "index.ts");
 	let mod: { default?: unknown };
 	try {
 		mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
