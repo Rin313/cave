@@ -640,7 +640,6 @@ export interface FieldView {
 
 /** 闭合后的状态视图基座：卡、句柄、边（名字、披露与指称闭包同时成立；边名即呈现 token，不携 τ）；作者视图钩子的缺省值与素材。 */
 export type ViewBase = {
-	/** 账本读数（Σ act span），非世界字段；只供呈现。 */
 	readout: number;
 	entities: Card[];
 	relations: { from: string; to: string; name: string; value: Value }[];
@@ -679,7 +678,7 @@ export function roll(addr: string, key: string, sides: number): number {
 	return 1 + Math.floor(h * sides);
 }
 
-/** 尝试地址：账本位置 (act 序号, trigger, id, 拍位)——act 序号 = 该尝试所属 act 的序号（0 起，act 步即自身，clock 步即其跨度所属的 act），拍位 = act 步 0、clock 步在其跨度内的第几拍。对尝试单射、由账本前缀与负载唯一确定：随机是账本位置的纯函数，入账与否不改变地址，全局读数不入地址。 */
+/** 尝试地址：账本位置 (act 序号, trigger, id, 拍位)——act 序号 = 该尝试所属 act 的序号，拍位 = act 步 0、clock 步在其跨度内的第几拍。 */
 function attemptAddr(actSeq: number, trigger: Trigger, verb: string, phase: number): string {
 	return tupleKey(["attempt", String(actSeq), trigger, verb, String(phase)]);
 }
@@ -748,7 +747,7 @@ function isChange(v: unknown): boolean {
 	}
 }
 
-/** 步形状：act 的 span ≥ 0，clock 的 offset ≥ 1；授予行 law/changes 必填、不得携 denial；否决的 rule 可缺（gate/closure 无守卫），不得携授予字段；clock 不携 reply、参数空。 */
+/** 步形状：act 的 span ≥ 0，clock 的 offset ≥ 1；授予行 law/changes 必填、不得携 denial；否决的 rule 可缺，不得携授予字段；clock 不携 reply、参数空。 */
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object" || Array.isArray(s)) return false;
 	const c = s as Record<string, unknown>;
@@ -774,7 +773,7 @@ export function isCommit(s: unknown): boolean {
 	return isDenial(c.denial);
 }
 
-/** 回合定稿记录：narration 允许缺失；步逐条过形状判据，跨步一致性不对账。 */
+/** 回合定稿记录：narration 允许缺失 */
 export interface ChronicleEntry {
 	utterance: string;
 	steps: Commit[];
@@ -923,8 +922,8 @@ function referentsOf(sim: Simulation, c: Change, sides: { prev: boolean; next: b
 	return out;
 }
 /**
- * 事件流的规范单行渲染（✓/✗/⏱/×n）。各行是否呈现由世界即时判据，言默不随消费面改变（跨度账目闭合）。
- * worldAfter 是 steps 之后的世界，据此逆推每步的提交边界；clock 步按 offset 归入所属跨度。
+ * 事件流的规范单行渲染（✓/✗/⏱/×n）
+ * worldAfter 是 steps 之后的世界，据此逆推每步的提交边界
  */
 export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter: World): string[] {
 	const n = steps.length;
@@ -1044,7 +1043,7 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[]): readonl
 	return picked;
 }
 
-/** 一步集的账本跨度：act 的 span 之和（clock 步不延伸跨度）。 */
+/** 一步集的账本跨度：act 的 span 之和 */
 function spanOf(steps: readonly Commit[]): number {
 	let n = 0;
 	for (const s of steps) if (s.trigger === "act") n += s.span;
@@ -1090,7 +1089,7 @@ type RawResult =
 	| { ok: true; deltas: Delta[]; rule: string; law: string; reply?: string; statements?: string[]; span?: number }
 	| { ok: false; denial: Denial; rule?: string; span?: number };
 
-/** 裁决产出的记录内容（不含时序轴）：授予携守卫与法则，否决携裁决点与守卫。 */
+/** 裁决产出的记录内容：授予携守卫与法则，否决携裁决点与守卫。 */
 type StepOutcome =
 	| { ok: true; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[] }
 	| { ok: false; rule?: string; denial: Denial };
@@ -1100,7 +1099,7 @@ export class Simulation {
 	readonly world: World;
 	/** 规则链注册表：两通道同制，(trigger, id) 是身份；clock 的插入序即拍内执行序。 */
 	private readonly chains: Record<Trigger, Map<string, readonly Rule[]>> = { act: new Map(), clock: new Map() };
-	/** 账本读数：Σ act span，只供呈现；不是世界字段，不入裁决。 */
+	/** 账本读数：Σ act span，只供呈现。 */
 	#readout = 0;
 	/** 已入账 act 步数：骰子地址的账本位置；只随成功提交或重放推进。 */
 	private actSeq = 0;
@@ -1358,7 +1357,7 @@ export class Simulation {
 		return step;
 	}
 
-	/** 裁决产出的记录内容：授予先提交后审查，审查拒绝兑为 engine 点否决；时序轴由调用处附加。 */
+	/** 裁决产出的记录内容 */
 	private settle(s0: World, action: Action, trigger: Trigger, r: RawResult): StepOutcome {
 		if (r.ok) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, trigger, action);
@@ -1373,7 +1372,6 @@ export class Simulation {
 		if (step.trigger === "act") this.actSeq += 1;
 	}
 
-	/** 泵是调度原语：按 span 逐拍以空参运行常驻规则，不写任何世界字段；clock 步地址由 act 序号与拍位唯一确定，入账与否不消耗地址。 */
 	private pump(span: number): ClockCommit[] {
 		const out: ClockCommit[] = [];
 		for (let i = 1; i <= span; i++) {
@@ -1456,7 +1454,7 @@ export class Simulation {
 		return clone(this.world);
 	}
 
-	/** 账本读数：Σ act span；呈现可用，不是世界字段、不入裁决。 */
+	/** 账本读数：Σ act span */
 	get readout(): number {
 		return this.#readout;
 	}
