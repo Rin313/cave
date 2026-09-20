@@ -19,8 +19,6 @@ interface Session {
 
 /** 会话槽：opened 恒为本次打开的结果；session 落定后可用；关闭即除名。 */
 interface SessionSlot {
-	readonly game: string;
-	readonly run: string;
 	readonly opened: Promise<Session>;
 	session: Session | null;
 }
@@ -90,7 +88,7 @@ function subdirs(dir: string): string[] {
 const LAUNCHER_FILE = join(import.meta.dirname, "launcher.html");
 
 /** 入口物化只属发行版：开发态 exe 是 Electron 自身。 */
-const entriesActive = (): boolean => app.isPackaged;
+const entriesActive = app.isPackaged;
 
 let sharedRuntime: Promise<ModelRuntime> | null = null;
 /** 壳、配置协议与所有引擎共享同一模型运行时：凭据写入对所有后续建会话生效；失败弃置，下次重试。 */
@@ -193,40 +191,39 @@ function settings(): SettingsManager {
 	return manager;
 }
 
-/** 当前模型：defaultProvider/defaultModel，档位取该模型的显式档或全局缺省；未配置即 null。 */
-function storedModel(): { provider: string; id: string; level?: ThinkingLevel } | null {
+/** 当前模型：defaultProvider/defaultModel 未配置即 null，模型不存在即抛；档位取该模型的显式档或全局缺省。 */
+async function currentModel(): Promise<{ runtime: ModelRuntime; model: AgentSpec["model"]; level?: ThinkingLevel } | null> {
 	const manager = settings();
 	const provider = manager.getDefaultProvider();
 	const id = manager.getDefaultModel();
 	if (provider === undefined || id === undefined) return null;
+	const runtime = await modelRuntime();
+	const model = runtime.getModel(provider, id);
+	if (model === undefined) throw new Error(`模型 ${provider}/${id} 不存在（${SETTINGS_FILE}）：在启动器选择可用模型`);
 	const level = manager.getModelThinkingLevel(provider, id) ?? manager.getDefaultThinkingLevel();
-	return { provider, id, ...(level !== undefined && { level }) };
+	return { runtime, model, ...(level !== undefined && { level }) };
 }
 
 /** 会话规格惰性解析：模型与凭据只在 act/narrate 建会话时求值，设置每次都重读。 */
 async function agent(): Promise<AgentSpec> {
-	const stored = storedModel();
-	if (stored === null) throw new Error(`模型未配置：在启动器选择模型，或在 ${SETTINGS_FILE} 写入 defaultProvider 与 defaultModel`);
-	const runtime = await modelRuntime();
-	const model = runtime.getModel(stored.provider, stored.id);
-	if (model === undefined) throw new Error(`模型 ${stored.provider}/${stored.id} 不存在（${SETTINGS_FILE}）：在启动器选择可用模型`);
+	const resolved = await currentModel();
+	if (resolved === null) throw new Error(`模型未配置：在启动器选择模型，或在 ${SETTINGS_FILE} 写入 defaultProvider 与 defaultModel`);
+	const { runtime, model, level } = resolved;
 	if (!(await runtime.checkAuth(model.provider))) {
 		throw new Error(`模型 ${model.provider}/${model.id} 未配置凭据：设置该 provider 的 API key 环境变量，或在 ${join(ROOT, "auth.json")} 写入凭据；格式见 ${join(getDocsPath(), "providers.md")}`);
 	}
-	return { model, modelRuntime: runtime, agentDir: ROOT, ...(stored.level !== undefined && { thinkingLevel: stored.level }) };
+	return { model, modelRuntime: runtime, agentDir: ROOT, ...(level !== undefined && { thinkingLevel: level }) };
 }
 
-function windowOptions(): BrowserWindowConstructorOptions {
-	return {
-		show: false,
-		backgroundColor: "#14161a",
-		webPreferences: {
-			preload: join(import.meta.dirname, "preload.cjs"),
-			contextIsolation: true,
-			sandbox: true,
-		},
-	};
-}
+const windowOptions: BrowserWindowConstructorOptions = {
+	show: false,
+	backgroundColor: "#14161a",
+	webPreferences: {
+		preload: join(import.meta.dirname, "preload.cjs"),
+		contextIsolation: true,
+		sandbox: true,
+	},
+};
 
 /** 窗口共同纪律：首帧渲染完成后再显示（不闪底色）；页面不得自行导航（同址重载除外），http(s) 交系统浏览器；内容不得否决关闭。 */
 function bindWindow(w: BrowserWindow): void {
@@ -261,7 +258,7 @@ function load(w: BrowserWindow, file: string, query?: Record<string, string>): P
 
 /** 启动器查询参数（主进程向自己的页面下发壳内状态，不属协议面）：入口物化只随启动器面装载发生，失败与来因同经 error 呈现。 */
 function launcherQuery(error?: string): Record<string, string> {
-	const lines = entriesActive() ? syncEntries() : [];
+	const lines = entriesActive ? syncEntries() : [];
 	if (error !== undefined) lines.unshift(error);
 	return lines.length === 0 ? {} : { error: lines.join("\n") };
 }
@@ -283,24 +280,18 @@ async function requireLauncher(w: BrowserWindow, error?: string): Promise<void> 
 	app.exit(1);
 }
 
-/** 进游戏：只导航主窗，不动引擎；未知游戏、无界面或装载失败一律携因抛出。 */
-async function goGame(w: BrowserWindow, game: string): Promise<void> {
-	if (gameFile(ROOT, game) === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
-	const file = faceFile(ROOT, game);
-	if (file === null) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
-	if (w.isDestroyed()) return;
-	try {
-		await load(w, file);
-	} catch (e) {
-		if (w.isDestroyed()) return;
-		throw new Error(`界面 ${game} 装载失败（${file}）：${String(e)}`);
-	}
-}
-
-/** 入口唯一路径：启动参数与第二实例直达游戏，失败即回配置面携因。 */
+/** 入口唯一路径：启动参数与第二实例直达游戏；未知游戏、无界面或装载失败一律回配置面携因。 */
 async function launchGame(w: BrowserWindow, game: string): Promise<void> {
 	try {
-		await goGame(w, game);
+		if (gameFile(ROOT, game) === null) throw new Error(`未知游戏：${game}（可用：${listGames(ROOT).join(", ") || "无"}）`);
+		const file = faceFile(ROOT, game);
+		if (file === null) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
+		if (w.isDestroyed()) return;
+		try {
+			await load(w, file);
+		} catch (e) {
+			if (!w.isDestroyed()) throw new Error(`界面 ${game} 装载失败（${file}）：${String(e)}`);
+		}
 	} catch (e) {
 		if (!w.isDestroyed()) await requireLauncher(w, String(e));
 	}
@@ -363,13 +354,13 @@ async function createSession(game: string, run: string): Promise<Session> {
 	return { game, run, engine, unsubscribe };
 }
 
-/** 建槽：并发首调只建一次；失败释放位置（打开中不可关闭，故释放无需复核表项身份）。 */
-function slotOf(game: string, run: string): SessionSlot {
+/** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）；失败即释放位置（打开中不可关闭，故释放无需复核表项身份）。 */
+function openSession(game: string, run: string): Promise<Session> {
 	const key = sessionKey(game, run);
 	const found = sessions.get(key);
-	if (found !== undefined) return found;
+	if (found !== undefined) return found.opened;
 	const opened = createSession(game, run);
-	const slot: SessionSlot = { game, run, opened, session: null };
+	const slot: SessionSlot = { opened, session: null };
 	sessions.set(key, slot);
 	opened.then(
 		(session) => {
@@ -379,12 +370,7 @@ function slotOf(game: string, run: string): SessionSlot {
 			sessions.delete(key);
 		},
 	);
-	return slot;
-}
-
-/** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）；返回必为表内活实例。 */
-function openSession(game: string, run: string): Promise<Session> {
-	return slotOf(game, run).opened;
+	return opened;
 }
 
 /** state/act 只附着已打开的实例（打开中一并等）；未打开即拒绝，不隐式创建。 */
@@ -406,14 +392,9 @@ function closeSession(game: string, run: string): void {
 	session.unsubscribe();
 }
 
-/** 实例坐标：快照与会话清单共用。 */
-function coords(session: Session): { game: string; run: string; time: number } {
-	return { game: session.game, run: session.run, time: session.engine.sim.world.time };
-}
-
 /** 状态快照：视图与坐标由同一读态求值。 */
-function face(session: Session): { game: string; run: string; time: number; view: unknown } {
-	return { ...coords(session), view: session.engine.sim.view() };
+function stateOf(session: Session): { game: string; run: string; time: number; view: unknown } {
+	return { game: session.game, run: session.run, time: session.engine.sim.world.time, view: session.engine.sim.view() };
 }
 
 /** IPC 载荷不可信：只声明形状，语义逐命令校验。 */
@@ -455,17 +436,15 @@ ipcMain.handle("home", async () => {
 	if (win !== null) await requireLauncher(win);
 });
 
-ipcMain.handle("config:current", async (): Promise<ModelFace | { error: string } | null> => {
-	const stored = storedModel();
-	if (stored === null) return null;
-	const runtime = await modelRuntime();
-	const model = runtime.getModel(stored.provider, stored.id);
-	if (model === undefined) return { error: `模型 ${stored.provider}/${stored.id} 不存在` };
+ipcMain.handle("config:current", async (): Promise<ModelFace | null> => {
+	const resolved = await currentModel();
+	if (resolved === null) return null;
+	const { model, level } = resolved;
 	return {
-		provider: stored.provider,
-		id: stored.id,
+		provider: model.provider,
+		id: model.id,
 		ref: modelRef(model),
-		...(stored.level !== undefined && { level: stored.level }),
+		...(level !== undefined && { level }),
 		thinkingLevels: supportedThinkingLevels(model),
 	};
 });
@@ -514,7 +493,7 @@ ipcMain.handle("act", async (_event, req: RunRequest & { utterance?: unknown }) 
 	const utterance = strIn(req?.utterance, "act", "utterance");
 	const session = await attached(game, run);
 	const outcome: ActOutcome = await session.engine.act({ utterance });
-	return { ...face(session), ...outcome };
+	return { ...stateOf(session), ...outcome };
 });
 
 ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unknown }) => {
@@ -526,13 +505,13 @@ ipcMain.handle("narrate", async (_event, req: RunRequest & { instruction?: unkno
 
 ipcMain.handle("state", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "state");
-	return face(await attached(game, run));
+	return stateOf(await attached(game, run));
 });
 
 app.whenReady().then(() => {
 	installModel(modelRuntime);
 	if (process.platform !== "darwin") Menu.setApplicationMenu(null);
-	win = new BrowserWindow({ ...windowOptions(), width: 1200, height: 820 });
+	win = new BrowserWindow({ ...windowOptions, width: 1200, height: 820 });
 	bindWindow(win);
 	// 主窗关闭＝结束应用：实例随进程收束，不存在无主窗的存活态。
 	win.on("closed", () => {
