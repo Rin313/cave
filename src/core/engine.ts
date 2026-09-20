@@ -322,7 +322,7 @@ function promptText(name: string, render: () => string): string {
 	return text;
 }
 
-/** 裁为最后一条 user 起：工具结果是独立消息，回合内该锚恒为回合提示，续行保住裁决前缀。 */
+/** 裁为最后一条 user 起：系统头（提示词与工具声明）恒保，回合内该锚恒为回合提示，续行保住裁决前缀。 */
 function pruneContext(messages: ContextEvent["messages"]): ContextEvent["messages"] {
 	let last = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -332,7 +332,7 @@ function pruneContext(messages: ContextEvent["messages"]): ContextEvent["message
 		}
 	}
 	if (last < 0) return messages;
-	return messages.slice(last);
+	return [...messages.filter((m) => m.role === "system"), ...messages.slice(last)];
 }
 
 function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): InlineExtension {
