@@ -112,7 +112,7 @@ function discardHost(): void {
 	rmSync(HOST_FILE, { force: true });
 }
 
-/** 脱离父进程启动宿主；就绪后才落盘状态。 */
+/** 脱离父进程启动宿主；不覆盖 userData，与 go 的二实例共享缺省 root（单实例锁才命中）；就绪后才落盘状态。 */
 async function spawnHost(exe: string): Promise<Target> {
 	const port = await freePort();
 	const flags = [`--remote-debugging-port=${port}`];
@@ -245,20 +245,11 @@ async function poll(timeout: number, what: string, probe: () => Promise<boolean>
 	}
 }
 
-/** 宿主根：二实例须与宿主同根，否则单实例锁按根隔离而另起应用。 */
-async function hostRoot(target: Target): Promise<string> {
-	const env = await evaluate<{ root?: unknown } | undefined>(target, "window.shell.env()", PROBE_MS);
-	const root = env?.root;
-	if (typeof root !== "string" || root === "") throw new Error("无法读取宿主根（window.shell.env()）");
-	return root;
-}
-
-/** 直达游戏：已在即空操作；否则以第二实例走产品入口（--user-data-dir 与宿主同根，单实例锁才命中），窗口面落定即成败。 */
+/** 直达游戏：已在即空操作；否则以第二实例走产品入口（宿主与二实例都不覆盖 userData，缺省 root 一致，单实例锁命中），窗口面落定即成败。 */
 async function go(target: Target, game: string, exe: string): Promise<void> {
 	if (await onGameFace(target, game)) return;
-	const root = await hostRoot(target);
 	const before = await pageUrl(target);
-	spawn(exe, [`--user-data-dir=${root}`, `--game=${game}`], { detached: true, stdio: "ignore" }).unref();
+	spawn(exe, [`--game=${game}`], { detached: true, stdio: "ignore" }).unref();
 	const deadline = Date.now() + UI_MS;
 	for (;;) {
 		if (await onGameFace(target, game)) return;

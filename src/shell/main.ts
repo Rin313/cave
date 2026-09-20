@@ -465,8 +465,6 @@ ipcMain.handle("config:use", async (_event, req: { provider?: unknown; id?: unkn
 	if (failed !== undefined) throw new Error(`设置写入失败（${failed.path ?? SETTINGS_FILE}）：${failed.error.message}`);
 });
 
-ipcMain.handle("env", () => ({ root: ROOT }));
-
 /** 打开根下目录（不存在即建）：界面据此暴露内容与配置的可写位置。 */
 ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	const dir = req?.dir ?? "";

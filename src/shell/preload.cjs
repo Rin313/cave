@@ -66,7 +66,6 @@ contextBridge.exposeInMainWorld("shell", {
 	records: (game, run) => invoke("records", { game, run }),
 	open: async (game, run) => session(game, run, await invoke("open", { game, run })),
 	home: () => invoke("home"),
-	env: () => invoke("env"),
 	reveal: async (dir) => {
 		const failure = await invoke("reveal", { dir });
 		if (failure !== "") throw new Error(failure);
