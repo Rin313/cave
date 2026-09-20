@@ -37,6 +37,7 @@ const js = (v: unknown): string => JSON.stringify(v);
 const PROBE_MS = 5_000;
 /** 界面装载时限 */
 const UI_MS = 15_000;
+const MOUSE_MS = 20_000;
 
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
@@ -366,9 +367,9 @@ async function click(target: Target, args: ParsedArgs, timeout: number): Promise
 		if (hit.off) throw new Error(`click 目标不在视口内（${Math.round(hit.x)},${Math.round(hit.y)}）`);
 		point = hit;
 	}
-	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, PROBE_MS);
-	await cdp(target, "Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, PROBE_MS);
-	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, PROBE_MS);
+	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, MOUSE_MS);
+	await cdp(target, "Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, MOUSE_MS);
+	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, MOUSE_MS);
 }
 
 interface KeySpec {
