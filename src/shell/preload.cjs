@@ -28,33 +28,37 @@ function session(game, run, load) {
 	};
 }
 
-/** 登录流程：prompt 以「返回答案的 Promise」应答；同窗同时至多一条流，新登录即摘旧监听；prompt 处理失败即取消本次流，并以原因为拒绝。 */
+/** 登录流程：prompt 以「返回答案的 Promise」应答；同窗同时至多一条流，新登录即摘旧监听；处理失败以 error 回传，迟到应答由主进程丢弃。 */
 let detach = null;
 function login(provider, type, handlers) {
 	const { onPrompt, onNotice } = handlers ?? {};
 	detach?.();
-	let failure = null;
 	const offs = [
 		on("config:notice")((payload) => onNotice?.(payload.notice)),
 		on("config:prompt")(({ prompt }) => {
 			void (async () => {
+				const reply = (payload) => invoke("config:reply", payload).catch(() => undefined);
+				if (typeof onPrompt !== "function") {
+					await reply({ error: "login 未提供 onPrompt" });
+					return;
+				}
+				let value;
 				try {
-					if (typeof onPrompt !== "function") throw new Error("login 未提供 onPrompt");
-					const value = await onPrompt(prompt);
-					if (detach !== off) return;
-					await invoke("config:answer", { value });
+					value = await onPrompt(prompt);
+					if (typeof value !== "string") throw new Error("login 的 onPrompt 须返回字符串");
 				} catch (e) {
 					if (detach !== off) return;
-					failure ??= e instanceof Error ? e : new Error(String(e));
-					await invoke("config:cancel").catch(() => undefined);
+					await reply({ error: e instanceof Error ? e.message : String(e) });
+					return;
 				}
+				if (detach !== off) return;
+				await reply({ value });
 			})();
 		}),
 	];
 	const off = () => { for (const f of offs) f(); };
 	detach = off;
 	return invoke("config:login", { provider, type })
-		.catch((e) => { throw failure ?? e; })
 		.finally(() => {
 			if (detach === off) detach = null;
 			off();

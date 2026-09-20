@@ -67,7 +67,7 @@ type PromptPayload = StripSignal<Prompt>;
 interface Flow {
 	sender: WebContents;
 	abort: AbortController;
-	answer: ((value: string) => void) | null;
+	pending: { resolve(value: string): void; reject(error: Error): void } | null;
 	onDestroyed: () => void;
 	onNavigate: (details: Event<WebContentsDidStartNavigationEventParams>) => void;
 }
@@ -110,7 +110,7 @@ function providerIn(value: unknown, cmd: string): string {
 	return value;
 }
 
-/** 登录流程的应答通道：prompt/notice 只发往发起窗口，answer/cancel 只接受同一窗口；发起文档导航或销毁即取消。 */
+/** 登录协议：prompt/notice 只发往发起窗口；reply 只认同一窗口的当前流，迟到即弃；文档导航或窗口销毁即取消。 */
 export function installModel(load: () => Promise<ModelRuntime>): void {
 	let flow: Flow | null = null;
 
@@ -144,7 +144,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		const f: Flow = {
 			sender,
 			abort,
-			answer: null,
+			pending: null,
 			onDestroyed: () => closeFlow(f),
 			onNavigate: (details) => {
 				if (details.isMainFrame && !details.isSameDocument) closeFlow(f);
@@ -166,7 +166,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 							return;
 						}
 						// 单槽待答：SDK 串行提示，重叠即契约破坏，显式拒绝而非静默顶掉
-						if (f.answer !== null) {
+						if (f.pending !== null) {
 							reject(new Error("登录流程已有待答提示"));
 							return;
 						}
@@ -174,14 +174,16 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 						const finish = (done: () => void): void => {
 							if (settled) return;
 							settled = true;
-							f.answer = null;
+							f.pending = null;
 							abort.signal.removeEventListener("abort", onAbort);
 							prompt.signal?.removeEventListener("abort", onAbort);
 							done();
 						};
-						const answer = (value: string): void => finish(() => resolve(value));
 						const onAbort = (): void => finish(() => reject(new Error("登录已取消")));
-						f.answer = answer;
+						f.pending = {
+							resolve: (value) => finish(() => resolve(value)),
+							reject: (error) => finish(() => reject(error)),
+						};
 						abort.signal.addEventListener("abort", onAbort, { once: true });
 						prompt.signal?.addEventListener("abort", onAbort, { once: true });
 						try {
@@ -196,18 +198,24 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		}
 	});
 
-	ipcMain.handle("config:answer", (event, req: { value?: unknown }) => {
+	ipcMain.handle("config:reply", (event, req: { value?: unknown; error?: unknown; cancel?: unknown }) => {
 		const f = flow;
-		if (f === null || f.sender !== event.sender) throw new Error("没有进行中的登录流程");
-		if (typeof req?.value !== "string") throw new Error("answer 需要字符串 value");
-		if (f.answer === null) throw new Error("该登录流程没有待答提示");
-		f.answer(req.value);
-	});
-
-	ipcMain.handle("config:cancel", (event) => {
-		const f = flow;
-		if (f === null || f.sender !== event.sender) throw new Error("没有进行中的登录流程");
-		closeFlow(f);
+		if (f === null || f.sender !== event.sender) return; // 流已落定或非本窗：迟到应答，丢弃
+		if (req?.cancel === true) {
+			closeFlow(f);
+			return;
+		}
+		const pending = f.pending;
+		if (pending === null) return; // 问题已被 SDK 放弃：迟到应答无害
+		if (typeof req?.error === "string") {
+			pending.reject(new Error(req.error));
+			return;
+		}
+		if (typeof req?.value === "string") {
+			pending.resolve(req.value);
+			return;
+		}
+		pending.reject(new Error("config:reply 需要 value、error 或 cancel"));
 	});
 
 	ipcMain.handle("config:logout", async (_event, req: { provider?: unknown }) => {
