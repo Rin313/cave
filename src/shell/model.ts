@@ -7,7 +7,6 @@ type Interaction = Parameters<ModelRuntime["login"]>[2];
 type LoginType = Parameters<ModelRuntime["login"]>[1];
 type Prompt = Parameters<Interaction["prompt"]>[0];
 
-/** 配置协议 */
 interface ProviderInfo {
 	id: string;
 	name: string;
@@ -30,7 +29,6 @@ interface ModelRef {
 	thinkingLevels: readonly ThinkingLevel[];
 }
 
-/** pi 的思考档全序；实际子集由 reasoning 与 thinkingLevelMap 决定。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
@@ -49,7 +47,6 @@ export function supportedThinkingLevels(model: AgentSpec["model"]): readonly Thi
 
 export const modelRef = (model: AgentSpec["model"]): string => `${model.provider}/${model.id}`;
 
-/** 当前模型的解析面：身份、生效档位与受支持档位；供配置面渲染思考档。 */
 export interface ModelFace {
 	provider: string;
 	id: string;
@@ -59,11 +56,11 @@ export interface ModelFace {
 	thinkingLevels: readonly ThinkingLevel[];
 }
 
-/** 线上载荷：剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生，不逐字段重抄（AuthPrompt 是 union，直接 Omit 会塌成公共键）。 */
+/** 剥掉不可克隆的 signal；其余形状由 SDK 类型分配式派生 */
 type StripSignal<T> = T extends unknown ? Omit<T, "signal"> : never;
 type PromptPayload = StripSignal<Prompt>;
 
-/** 登录流：同时至多一条（一次交互只有一个用户）；发起文档导航或销毁即中止。 */
+/** 登录流：同时至多一条（一次交互只有一个用户） */
 interface Flow {
 	sender: WebContents;
 	abort: AbortController;
@@ -77,7 +74,6 @@ function promptPayload(prompt: Prompt): PromptPayload {
 	return rest;
 }
 
-/** 凭据与模型表随用户级配置根自持：不读 pi agent 的 ~/.pi/agent，用户无需安装 pi agent 或 /login。 */
 export function openModelRuntime(root: string): Promise<ModelRuntime> {
 	return ModelRuntime.create({
 		authPath: join(root, "auth.json"),
@@ -135,10 +131,10 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 	});
 
 	ipcMain.handle("config:login", async (event, req: { provider?: unknown; type?: unknown }) => {
-		closeFlow(); // 新登录抢占旧流：以调用序为准，校验失败也不回退
 		const provider = providerIn(req?.provider, "login");
 		const type: LoginType | null = req?.type === "api_key" || req?.type === "oauth" ? req.type : null;
 		if (type === null) throw new Error("login 需要 type（api_key|oauth）");
+		closeFlow(); // 校验通过才抢占旧流
 		const sender = event.sender;
 		const abort = new AbortController();
 		const f: Flow = {
@@ -170,13 +166,13 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 							reject(new Error("登录流程已有待答提示"));
 							return;
 						}
+						const signal = prompt.signal === undefined ? abort.signal : AbortSignal.any([abort.signal, prompt.signal]);
 						let settled = false;
 						const finish = (done: () => void): void => {
 							if (settled) return;
 							settled = true;
 							f.pending = null;
-							abort.signal.removeEventListener("abort", onAbort);
-							prompt.signal?.removeEventListener("abort", onAbort);
+							signal.removeEventListener("abort", onAbort);
 							done();
 						};
 						const onAbort = (): void => finish(() => reject(new Error("登录已取消")));
@@ -184,8 +180,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 							resolve: (value) => finish(() => resolve(value)),
 							reject: (error) => finish(() => reject(error)),
 						};
-						abort.signal.addEventListener("abort", onAbort, { once: true });
-						prompt.signal?.addEventListener("abort", onAbort, { once: true });
+						signal.addEventListener("abort", onAbort, { once: true });
 						try {
 							sender.send("config:prompt", { prompt: promptPayload(prompt) });
 						} catch {
@@ -198,13 +193,9 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 		}
 	});
 
-	ipcMain.handle("config:reply", (event, req: { value?: unknown; error?: unknown; cancel?: unknown }) => {
+	ipcMain.handle("config:reply", (event, req: { value?: unknown; error?: unknown }) => {
 		const f = flow;
 		if (f === null || f.sender !== event.sender) return; // 流已落定或非本窗：迟到应答，丢弃
-		if (req?.cancel === true) {
-			closeFlow(f);
-			return;
-		}
 		const pending = f.pending;
 		if (pending === null) return; // 问题已被 SDK 放弃：迟到应答无害
 		if (typeof req?.error === "string") {
@@ -215,7 +206,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 			pending.resolve(req.value);
 			return;
 		}
-		pending.reject(new Error("config:reply 需要 value、error 或 cancel"));
+		pending.reject(new Error("config:reply 需要 value 或 error"));
 	});
 
 	ipcMain.handle("config:logout", async (_event, req: { provider?: unknown }) => {
