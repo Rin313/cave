@@ -29,20 +29,25 @@ const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 
 let win: BrowserWindow | null = null;
 
-/** 窗口未就绪时第二实例带来的游戏：由 whenReady 消费。 */
-let pendingGame: string | null = null;
+/** 面请求：--game <id> 即该游戏面，缺席即 launcher 面。 */
+interface FaceRequest {
+	game: string | null;
+}
 
-/** 第二实例聚焦主窗（写者唯一由单实例锁保证），并直达其命令行指定的游戏；主窗未就绪即暂存目标。 */
+/** 窗口未就绪时第二实例带来的面请求（末位胜出）：由 whenReady 消费；null 即无请求。 */
+let pendingFace: FaceRequest | null = null;
+
+/** 第二实例聚焦主窗（写者唯一由单实例锁保证），并装载其请求的面；主窗未就绪即暂存。 */
 app.on("second-instance", (_event, argv) => {
-	const game = gameArg(argv);
+	const face = { game: gameArg(argv) };
 	const w = win;
 	if (w === null || w.isDestroyed()) {
-		pendingGame = game;
+		pendingFace = face;
 		return;
 	}
 	if (w.isMinimized()) w.restore();
 	w.focus();
-	if (game !== null) void launchGame(w, game);
+	void loadFace(w, face);
 });
 
 /** 根：games、runs 与配置（settings、auth、models）的共同所在；即宿主用户数据目录（--user-data-dir 可覆盖）。 */
@@ -84,7 +89,7 @@ function subdirs(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-/** 壳内启动器：唯一主面（启动、home 与游戏界面失败回落的落点）。 */
+/** 壳内启动器：无 --game 的启动与第二实例即此面，游戏界面装载失败亦回落于此。 */
 const LAUNCHER_FILE = join(import.meta.dirname, "launcher.html");
 
 /** 入口物化只属发行版：开发态 exe 是 Electron 自身。 */
@@ -287,6 +292,11 @@ async function launchGame(w: BrowserWindow, game: string): Promise<void> {
 	}
 }
 
+/** 面请求的装载：--game 直达游戏面，缺席即回落启动器面。 */
+function loadFace(w: BrowserWindow, face: FaceRequest): Promise<void> {
+	return face.game === null ? requireLauncher(w) : launchGame(w, face.game);
+}
+
 /** 游戏目录：id 合法且 index.ts 在世（游戏身份的唯一定义）；缺席即 null。 */
 function gameDir(root: string, id: string): string | null {
 	if (!isSegment(id)) return null;
@@ -432,11 +442,6 @@ ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	return { game, run, ...openArchive(recordsPath(ROOT, game, run)).snapshot };
 });
 
-/** 回主面：内容自建的出口（按钮等）；启动器失败即无窗口面。 */
-ipcMain.handle("home", async () => {
-	if (win !== null) await requireLauncher(win);
-});
-
 ipcMain.handle("config:current", async (): Promise<ModelFace | null> => {
 	const resolved = await currentModel();
 	if (resolved === null) return null;
@@ -517,6 +522,6 @@ app.whenReady().then(() => {
 		win = null;
 		app.quit();
 	});
-	const game = pendingGame ?? gameArg(process.argv);
-	void (game === null ? requireLauncher(win) : launchGame(win, game));
+	const face = pendingFace ?? { game: gameArg(process.argv) };
+	void loadFace(win, face);
 });

@@ -230,8 +230,8 @@ async function onGameFace(target: Target, game: string): Promise<boolean> {
 	}
 }
 
-/** 回落主面的携因：loadHome 的 error 查询参数，缺席即 null。 */
-async function homeFailure(target: Target): Promise<string | null> {
+/** 回落启动器的携因：error 查询参数，缺席即 null。 */
+async function launcherFailure(target: Target): Promise<string | null> {
 	const value = await evaluate<unknown>(target, "new URLSearchParams(location.search).get('error')", PROBE_MS).catch(() => undefined);
 	return typeof value === "string" && value !== "" ? value : null;
 }
@@ -255,10 +255,10 @@ async function go(target: Target, game: string, exe: string): Promise<void> {
 		if (await onGameFace(target, game)) return;
 		const url = await pageUrl(target);
 		if (url !== null && url !== before) {
-			const failure = await homeFailure(target);
+			const failure = await launcherFailure(target);
 			if (failure !== null) throw new Error(failure);
 		}
-		if (Date.now() >= deadline) throw new Error((await homeFailure(target)) ?? `等待游戏界面 ${game} 超时（${Math.round(UI_MS / 1000)}s）`);
+		if (Date.now() >= deadline) throw new Error((await launcherFailure(target)) ?? `等待游戏界面 ${game} 超时（${Math.round(UI_MS / 1000)}s）`);
 		await sleep(150);
 	}
 }
