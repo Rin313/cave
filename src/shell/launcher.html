@@ -175,7 +175,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	await renderProviders();
 	await renderModels();
 
-	/** 解析在壳内完成：UI 只渲染解析面。 */
 	async function currentFace() {
 		try {
 			return await shell.config.current();
@@ -325,7 +324,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 		drawModels();
 	}
 
-	/** 当前档目标模型支持即携带，否则省略档位：use 省略即保留目标模型自己的显式档。 */
 	function carriedLevel(m) {
 		return face !== null && face.error === undefined && face.level !== undefined && m.thinkingLevels.includes(face.level) ? face.level : undefined;
 	}

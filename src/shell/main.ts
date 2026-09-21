@@ -17,13 +17,12 @@ interface Session {
 	unsubscribe: () => void;
 }
 
-/** 会话槽：opened 恒为本次打开的结果；session 落定后可用 */
+/** opened 恒为本次打开的结果；session 落定后可用 */
 interface SessionSlot {
 	readonly opened: Promise<Session>;
 	session: Session | null;
 }
 
-/** 会话单表：键为 (game, run)；两段均为路径段（isSegment），拼接无歧义。 */
 const sessions = new Map<string, SessionSlot>();
 const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 
@@ -53,7 +52,7 @@ app.on("second-instance", (_event, argv) => {
 const ROOT = app.getPath("userData");
 const SETTINGS_FILE = join(ROOT, "settings.json");
 
-/** 路径段：id 不做路径解析；控制字符即拒（id 会物化为文件名与双击入口内容）。 */
+/** 路径段：id 不做路径解析；控制字符即拒 */
 function isSegment(v: unknown): v is string {
 	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/\x00-\x1f\x7f]/.test(v);
 }
@@ -437,7 +436,7 @@ ipcMain.handle("config:current", async (): Promise<ModelFace | null> => {
 	};
 });
 
-/** 写当前模型（provider 与 id 同为必填）：level 缺席即保留该模型的显式档，null 即清除，其余须为思考档。 */
+/** level 缺席即保留该模型的显式档，null 即清除，其余须为思考档。 */
 ipcMain.handle("config:use", async (_event, req: { provider?: unknown; id?: unknown; level?: unknown }) => {
 	const provider = strIn(req?.provider, "config:use", "provider");
 	const id = strIn(req?.id, "config:use", "id");
@@ -461,13 +460,11 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 打开或附着：档案任一损坏即抛（不修复、不跳过）；成功即健康，状态读走 state。 */
 ipcMain.handle("open", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "open");
 	await openSession(game, run);
 });
 
-/** 显式释放：不动档案。 */
 ipcMain.handle("close", (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "close");
 	return closeSession(game, run);
