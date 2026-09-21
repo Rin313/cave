@@ -25,7 +25,6 @@ interface ModelRef {
 	provider: string;
 	id: string;
 	name: string;
-	available: boolean;
 	thinkingLevels: readonly ThinkingLevel[];
 }
 
@@ -123,11 +122,7 @@ export function installModel(load: () => Promise<ModelRuntime>): void {
 
 	ipcMain.handle("config:models", async (): Promise<ModelRef[]> => {
 		const runtime = await load();
-		const available = new Set((await runtime.getAvailable()).map((m) => modelRef(m)));
-		return runtime.getModels().map((m) => {
-			const ref = modelRef(m);
-			return { ref, provider: m.provider, id: m.id, name: m.name, available: available.has(ref), thinkingLevels: supportedThinkingLevels(m) };
-		});
+		return (await runtime.getAvailable()).map((m) => ({ ref: modelRef(m), provider: m.provider, id: m.id, name: m.name, thinkingLevels: supportedThinkingLevels(m) }));
 	});
 
 	ipcMain.handle("config:login", async (event, req: { provider?: unknown; type?: unknown }) => {

@@ -102,7 +102,6 @@
 		<div id="models">
 			<div class="row">
 				<input id="search" type="search">
-				<button id="all" type="button"></button>
 			</div>
 			<ul id="modelList"></ul>
 		</div>
@@ -135,14 +134,12 @@ const text = {
 	"model.current": ["当前模型：{model}", "Current model: {model}"],
 	"model.error": ["模型不可用：{error}", "Model unavailable: {error}"],
 	"model.loading": ["加载…", "Loading…"],
-	"model.noCredentials": ["未配置凭据", "No credentials"],
 	"model.logout": ["退出登录", "Sign out"],
 	"model.apiKey": ["使用 API key", "Use API key"],
 	"model.login": ["登录", "Sign in"],
 	"model.filter": ["筛选", "Filter"],
-	"model.all": ["显示全部", "Show all"],
-	"model.available": ["仅显示可用", "Available only"],
 	"model.empty": ["没有匹配的模型", "No matching models"],
+	"model.none": ["没有可用模型", "No available models"],
 	"login.waiting": ["等待登录…", "Waiting for sign-in…"],
 	"login.ok": ["确定", "OK"],
 	"login.done": ["已完成。", "Done."],
@@ -162,7 +159,6 @@ document.documentElement.lang = zh ? "zh" : "en";
 	const bootError = params.get("error");
 	if (bootError !== null) showError(bootError);
 	let allModels = [];
-	let showAll = false;
 	let face = null;
 	let busy = false;
 
@@ -173,13 +169,7 @@ document.documentElement.lang = zh ? "zh" : "en";
 	$("modelTitle").textContent = t("model.section");
 	$("thinkingLabel").textContent = t("thinking.label");
 	$("search").placeholder = t("model.filter");
-	$("all").textContent = t("model.all");
 	$("search").oninput = drawModels;
-	$("all").onclick = () => {
-		showAll = !showAll;
-		$("all").textContent = showAll ? t("model.available") : t("model.all");
-		drawModels();
-	};
 
 	await refreshCurrent();
 	await renderProviders();
@@ -344,16 +334,15 @@ document.documentElement.lang = zh ? "zh" : "en";
 		const query = $("search").value.trim().toLowerCase();
 		const current = face !== null && face.error === undefined ? face.ref : "";
 		const list = $("modelList");
-		const rows = allModels.filter((m) => (showAll || m.available) && (query === "" || m.ref.toLowerCase().includes(query) || m.name.toLowerCase().includes(query)));
+		const rows = allModels.filter((m) => query === "" || m.ref.toLowerCase().includes(query) || m.name.toLowerCase().includes(query));
 		list.replaceChildren();
 		if (rows.length === 0) {
-			list.append(el("li", t("model.empty"), "muted"));
+			list.append(el("li", t(allModels.length === 0 ? "model.none" : "model.empty"), "muted"));
 			return;
 		}
-		for (const m of rows.slice(0, 200)) {
+		for (const m of rows) {
 			const li = document.createElement("li");
 			li.append(el("span", m.ref === current ? `${m.name} · ${t("current")}` : m.name, "name"));
-			if (!m.available) li.append(el("span", t("model.noCredentials"), "tag"));
 			li.append(button(t("use"), async () => {
 				try {
 					await applyModel(m.provider, m.id, carriedLevel(m));
