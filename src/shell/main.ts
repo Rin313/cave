@@ -436,10 +436,10 @@ function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: s
 /** 存档清单：只按给定游戏坐标取，不跨游戏列；无记录目录不列。 */
 ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, gameIn(req, "runs")));
 
-/** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；坏行只计数。 */
+/** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；损坏即抛（错误即诊断）。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
-	return { game, run, ...openArchive(recordsPath(ROOT, game, run)).snapshot };
+	return { game, run, records: openArchive(recordsPath(ROOT, game, run)).records };
 });
 
 ipcMain.handle("config:current", async (): Promise<ModelFace | null> => {
@@ -479,11 +479,10 @@ ipcMain.handle("reveal", (_event, req: { dir?: unknown }) => {
 	return shell.openPath(path);
 });
 
-/** 打开或附着：只回档案健康；状态读走 state（句柄以方法为唯一读态，不携快照）。 */
+/** 打开或附着：档案任一损坏即抛（不修复、不跳过）；成功即健康，状态读走 state。 */
 ipcMain.handle("open", async (_event, req: RunRequest) => {
 	const { game, run } = idsIn(req, "open");
-	const session = await openSession(game, run);
-	return session.engine.load;
+	await openSession(game, run);
 });
 
 /** 显式释放：不动档案。 */

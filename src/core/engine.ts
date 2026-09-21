@@ -9,7 +9,7 @@ import {
 	type InlineExtension,
 	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import type { ArchiveSnapshot, ArchiveStore } from "./archive.ts";
+import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, denialReasonText, lawOf, recentEntries, report, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface AgentSpec {
@@ -21,7 +21,6 @@ export interface AgentSpec {
 
 export interface EngineOptions {
 	agent: () => Promise<AgentSpec>;
-	/** 回合记录档案端口；缺省只留进程内存。 */
 	archive?: ArchiveStore;
 }
 
@@ -33,15 +32,6 @@ export interface ActOutcome {
 	lines: string[];
 	reveals: (Card | Handle)[];
 	narration: string;
-}
-
-export interface LoadOutcome {
-	/** 形状损坏的档案行数。 */
-	broken: number;
-	/** 档案末尾未收尾（无换行）。 */
-	incomplete: boolean;
-	/** 不可应用而未进入世界的尾部记录数（0 即全量）。 */
-	dropped: number;
 }
 
 /** 只承载叙述相位的实时正文；narration_reset 镜像 pi 的重试作废语义。 */
@@ -74,19 +64,17 @@ export class Engine {
 	private readonly recent: RecentEntry[];
 	/** 定稿写点（表达落定）与近况选择的共同源；保留全部存活回合记录。 */
 	private readonly ledger: Ledger;
-	readonly load: LoadOutcome;
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
 	/** 单飞窗口：act/narrate 共享同一 run 槽，入口即占；dispose 同受此拒。 */
 	private running: "act" | "narrate" | null = null;
 
-	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState, load: LoadOutcome) {
+	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState) {
 		this.sim = sim;
 		this.options = options;
 		this.ledger = ledger;
 		this.recent = recent;
 		this.run = run;
-		this.load = load;
 		this.updateRecent();
 	}
 
@@ -104,28 +92,21 @@ export class Engine {
 		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
 
-		const snapshot: ArchiveSnapshot = options.archive?.snapshot ?? { records: [], broken: 0, incomplete: false };
-		// 装载即重放：不重裁决、不掷骰；首个不可应用的记录起与近况同界截断
+		// 装载即重放：不重裁决、不掷骰；任一条不可应用即拒绝装载，不截断、不跳过
+		const source = options.archive?.records ?? [];
 		const sim = new Simulation(def);
-		const records: ChronicleEntry[] = [];
-		for (const record of snapshot.records) {
+		for (const [i, record] of source.entries()) {
 			const reason = sim.replayRecord(record);
-			if (reason !== null) {
-				report(`档案记录不可应用（第 ${records.length + 1} 条）：${reason}`);
-				break;
-			}
-			records.push(record);
+			if (reason !== null) throw new Error(`档案第 ${i + 1} 条不可应用：${reason}`);
 		}
-		options.archive?.keep(records);
 		const denied = sim.admit();
 		if (denied !== null) throw new Error(`装载拒绝：当前世界违反 ${lawOf(denied.point)}（${denialReasonText(denied)}）`);
-		const ledger: Ledger = { records, dead: null };
-		const load: LoadOutcome = { broken: snapshot.broken, incomplete: snapshot.incomplete, dropped: snapshot.records.length - records.length };
+		const ledger: Ledger = { records: [...source], dead: null };
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [] };
 		const recent: RecentEntry[] = [];
-		return new Engine(sim, options, ledger, recent, run, load);
+		return new Engine(sim, options, ledger, recent, run);
 	}
 
 	/** 会话按需建立：并发首调共享同一次建立；解析失败原样上抛（配置出口在宿主），世界与档案均未动。 */
@@ -296,7 +277,7 @@ export class Engine {
 		return text;
 	}
 
-	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信（重启后世界与档案停在上一回合，前缀档案无损）。 */
+	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信，档案可能留有残行，重启装载会原样拒绝（不修复）。 */
 	private finalizeTurn(narration: string): void {
 		const record: ChronicleEntry = deepFreeze({ utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
 		try {

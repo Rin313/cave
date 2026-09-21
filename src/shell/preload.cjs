@@ -13,10 +13,9 @@ const on = (channel) => (listener) => {
 	return () => ipcRenderer.removeListener(channel, handler);
 };
 
-function session(game, run, load) {
+function session(game, run) {
 	const at = (channel, payload = {}) => invoke(channel, { game, run, ...payload });
 	return {
-		load,
 		state: () => at("state"),
 		act: (utterance) => at("act", { utterance }),
 		narrate: (instruction) => at("narrate", { instruction }),
@@ -66,7 +65,10 @@ function login(provider, type, handlers) {
 contextBridge.exposeInMainWorld("shell", {
 	runs: (game) => invoke("runs", { game }),
 	records: (game, run) => invoke("records", { game, run }),
-	open: async (game, run) => session(game, run, await invoke("open", { game, run })),
+	open: async (game, run) => {
+		await invoke("open", { game, run });
+		return session(game, run);
+	},
 	reveal: async (dir) => {
 		const failure = await invoke("reveal", { dir });
 		if (failure !== "") throw new Error(failure);
