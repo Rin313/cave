@@ -7,13 +7,11 @@ export interface ArchiveStore {
 	append(record: ChronicleEntry): void;
 }
 
-/** 空档案之外，文本须由换行收尾的合法记录行构成 */
 export function readRecords(path: string): ChronicleEntry[] {
 	if (!existsSync(path)) return [];
 	const text = readFileSync(path, "utf8");
-	if (text === "") return [];
-	if (!text.endsWith("\n")) throw new Error(`档案 ${path} 未以换行收尾（追加中断或文件损坏）`);
-	const lines = text.slice(0, -1).split("\n");
+	const lines = text.split("\n");
+	if (lines.pop() !== "") throw new Error(`档案 ${path} 未以换行收尾（追加中断或文件损坏）`);
 	const records: ChronicleEntry[] = [];
 	for (const [i, raw] of lines.entries()) {
 		let v: unknown;
@@ -29,11 +27,13 @@ export function readRecords(path: string): ChronicleEntry[] {
 }
 
 export function openArchive(path: string): ArchiveStore {
+	const records = readRecords(path);
 	return {
-		records: readRecords(path),
+		records,
 		append(record) {
 			mkdirSync(dirname(path), { recursive: true });
 			appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+			records.push(record);
 		},
 	};
 }

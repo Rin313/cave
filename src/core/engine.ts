@@ -21,7 +21,7 @@ export interface AgentSpec {
 
 export interface EngineOptions {
 	agent: () => Promise<AgentSpec>;
-	archive?: ArchiveStore;
+	archive: ArchiveStore;
 }
 
 type SessionHandle = Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -48,12 +48,6 @@ interface RunState {
 	reveals: (Card | Handle)[];
 }
 
-/** 装载与定稿共享的账本态：records 是全部存活回合（近况选择与投影的源，表达随记录） */
-interface Ledger {
-	records: ChronicleEntry[];
-	dead: string | null;
-}
-
 export class Engine {
 	readonly sim: Simulation;
 	/** 会话按需建立：装载/浏览不需要模型与 pi 资源，首次 act/narrate 才解析并建会话。 */
@@ -61,8 +55,7 @@ export class Engine {
 	private opening: Promise<SessionHandle> | null = null;
 	private readonly options: EngineOptions;
 	private readonly recent: RecentEntry[];
-	/** 定稿写点（表达落定）与近况选择的共同源；保留全部存活回合记录。 */
-	private readonly ledger: Ledger;
+	private dead: string | null = null;
 	private readonly run: RunState;
 	private listeners = new Set<(event: EngineEvent) => void>();
 	/** 单飞窗口：act/narrate 共享同一 run 槽，入口即占；dispose 同受此拒。 */
@@ -70,10 +63,9 @@ export class Engine {
 	/** 关闭即终态：disposed 后一切回合入口拒绝。 */
 	private disposed = false;
 
-	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState) {
+	private constructor(sim: Simulation, options: EngineOptions, recent: RecentEntry[], run: RunState) {
 		this.sim = sim;
 		this.options = options;
-		this.ledger = ledger;
 		this.recent = recent;
 		this.run = run;
 		this.updateRecent();
@@ -102,7 +94,7 @@ export class Engine {
 		}
 
 		// 装载即重放：不重裁决、不掷骰；任一条不可应用即拒绝装载，不截断、不跳过
-		const source = options.archive?.records ?? [];
+		const source = options.archive.records;
 		const sim = new Simulation(def);
 		for (const [i, record] of source.entries()) {
 			const reason = sim.replayRecord(record);
@@ -110,12 +102,11 @@ export class Engine {
 		}
 		const denied = sim.admit();
 		if (denied !== null) throw new Error(`装载拒绝：当前世界违反 ${lawOf(denied.point)}（${denialReasonText(denied)}）`);
-		const ledger: Ledger = { records: [...source], dead: null };
 
 		// 初值 mapping：运行前的杂散文本被丢弃而非泄漏为叙述
 		const run: RunState = { phase: "mapping", messageStart: 0, steps: [], lines: [], reveals: [] };
 		const recent: RecentEntry[] = [];
-		return new Engine(sim, options, ledger, recent, run);
+		return new Engine(sim, options, recent, run);
 	}
 
 	/** 会话按需建立：并发首调共享同一次建立；解析失败原样上抛（配置出口在宿主），世界与档案均未动。 */
@@ -236,13 +227,13 @@ export class Engine {
 
 	private assertUsable(): void {
 		if (this.disposed) throw new Error("引擎已关闭");
-		if (this.ledger.dead !== null) throw new Error(`引擎状态已不可信（${this.ledger.dead}）：须重启进程由档案重建`);
+		if (this.dead !== null) throw new Error(`引擎状态已不可信（${this.dead}）：须重启进程由档案重建`);
 	}
 
 	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
 	private updateRecent(): void {
 		try {
-			const next = recentEntries(this.sim, this.ledger.records);
+			const next = recentEntries(this.sim, this.options.archive.records);
 			this.recent.length = 0;
 			this.recent.push(...next);
 		} catch (e) {
@@ -286,13 +277,12 @@ export class Engine {
 	private finalizeTurn(utterance: string, narration: string): void {
 		const record: ChronicleEntry = deepFreeze({ utterance, steps: this.run.steps, narration });
 		try {
-			this.options.archive?.append(record);
+			this.options.archive.append(record);
 		} catch (e) {
 			const reason = `定稿落盘失败：${String(e)}`;
-			this.ledger.dead = reason;
+			this.dead = reason;
 			throw new Error(reason);
 		}
-		this.ledger.records.push(record);
 	}
 
 	dispose(): void {
