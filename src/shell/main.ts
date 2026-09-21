@@ -151,15 +151,17 @@ function writeEntry(dir: string, game: string): void {
 	chmodSync(file, 0o755);
 }
 
-/** 入口物化：每个游戏面在自身目录内写一个入口，随游戏目录生灭；逐条失败不中断其余，整体失败也在清单内（不抛）。 */
+/** 有界面的游戏在自身目录内写一个入口 */
 function syncEntries(): string[] {
 	const failures: string[] = [];
 	try {
-		for (const game of listFaces(ROOT)) {
+		for (const id of subdirs(join(ROOT, "games"))) {
+			const dir = gameDir(ROOT, id);
+			if (dir === null || !existsSync(join(dir, "index.html"))) continue;
 			try {
-				writeEntry(join(ROOT, "games", game), game);
+				writeEntry(dir, id);
 			} catch (e) {
-				failures.push(`${game}：${String(e)}`);
+				failures.push(`${id}：${String(e)}`);
 			}
 		}
 	} catch (e) {
@@ -270,7 +272,7 @@ async function launchGame(w: BrowserWindow, game: string): Promise<void> {
 	try {
 		const dir = requireGameDir(ROOT, game);
 		const file = join(dir, "index.html");
-		if (!existsSync(file)) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置（有界面的游戏：${listFaces(ROOT).join(", ") || "无"}）`);
+		if (!existsSync(file)) throw new Error(`游戏 ${game} 没有界面：在 games/${game}/index.html 放置`);
 		if (w.isDestroyed()) return;
 		try {
 			await load(w, file);
@@ -293,19 +295,10 @@ function gameDir(root: string, id: string): string | null {
 	return existsSync(join(dir, "index.ts")) ? dir : null;
 }
 
-/** 列出 <root>/games 下的可用游戏；id 升序。 */
-function listGames(root: string): string[] {
-	return subdirs(join(root, "games")).filter((id) => gameDir(root, id) !== null).sort();
-}
-
-function listFaces(root: string): string[] {
-	return listGames(root).filter((id) => existsSync(join(root, "games", id, "index.html")));
-}
-
 /** 未知游戏即抛：直达与装载共用同一文案。 */
 function requireGameDir(root: string, id: string): string {
 	const dir = gameDir(root, id);
-	if (dir === null) throw new Error(`未知游戏：${id}（可用：${listGames(root).join(", ") || "无"}）`);
+	if (dir === null) throw new Error(`未知游戏：${id}`);
 	return dir;
 }
 
