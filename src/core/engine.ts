@@ -42,7 +42,6 @@ export type EngineEvent =
 /** mapping 相位文本丢弃，narration 相位文本留作回合叙述（不入账），结算时从消息账本重读。 */
 interface RunState {
 	phase: "mapping" | "narration";
-	utterance?: string | undefined;
 	messageStart: number;
 	steps: Commit[];
 	lines: string[];
@@ -68,6 +67,8 @@ export class Engine {
 	private listeners = new Set<(event: EngineEvent) => void>();
 	/** 单飞窗口：act/narrate 共享同一 run 槽，入口即占；dispose 同受此拒。 */
 	private running: "act" | "narrate" | null = null;
+	/** 关闭即终态：disposed 后一切回合入口拒绝。 */
+	private disposed = false;
 
 	private constructor(sim: Simulation, options: EngineOptions, ledger: Ledger, recent: RecentEntry[], run: RunState) {
 		this.sim = sim;
@@ -84,13 +85,21 @@ export class Engine {
 	}
 
 	private emit(event: EngineEvent): void {
-		for (const l of this.listeners) l(event);
+		for (const l of this.listeners) {
+			try {
+				l(event);
+			} catch (e) {
+				report(e);
+			}
+		}
 	}
 
 	static async create(def: GameDef, options: EngineOptions): Promise<Engine> {
-		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一");
-		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
 		if (typeof def.prompt?.system !== "string" || def.prompt.system.trim() === "") throw new Error("GameDef.prompt.system 必填：表达纪律与回合协议的告知面");
+		for (const key of ["tool", "turn", "narrate", "context"] as const) {
+			const hook = def.prompt[key];
+			if (hook !== undefined && typeof hook !== "function") throw new Error(`GameDef.prompt.${key} 须为函数`);
+		}
 
 		// 装载即重放：不重裁决、不掷骰；任一条不可应用即拒绝装载，不截断、不跳过
 		const source = options.archive?.records ?? [];
@@ -155,26 +164,21 @@ export class Engine {
 		session.subscribe((event) => {
 			switch (event.type) {
 				case "message_update":
-					if (event.assistantMessageEvent.type === "text_delta" && this.run.phase === "narration") {
+					if (this.running !== null && this.run.phase === "narration" && event.assistantMessageEvent.type === "text_delta") {
 						this.emit({ type: "narration_delta", delta: event.assistantMessageEvent.delta });
 					}
 					break;
 				case "auto_retry_start":
-					if (this.run.phase === "narration") this.emit({ type: "narration_reset" });
+					if (this.running !== null && this.run.phase === "narration") this.emit({ type: "narration_reset" });
 					break;
 			}
 		});
 		return session;
 	}
 
-	get busy(): "act" | "narrate" | null {
-		return this.running;
-	}
-
-	private beginRun(session: SessionHandle, phase: "mapping" | "narration", utterance?: string): void {
+	private beginRun(session: SessionHandle, phase: "mapping" | "narration"): void {
 		const r = this.run;
 		r.phase = phase;
-		r.utterance = utterance;
 		r.messageStart = session.messages.length;
 		r.steps = [];
 		r.lines = [];
@@ -183,7 +187,7 @@ export class Engine {
 
 	/** 回合入口：先占后跑；已占用即拒（壳的并发调用与关闭路径同受此门）。 */
 	private enter(kind: "act" | "narrate"): void {
-		this.assertLive();
+		this.assertUsable();
 		if (this.running !== null) throw new Error(`回合进行中（${this.running}）：不能开始新回合`);
 		this.running = kind;
 	}
@@ -192,7 +196,7 @@ export class Engine {
 		this.enter("act");
 		try {
 			const session = await this.ensureSession();
-			this.beginRun(session, "mapping", action.utterance);
+			this.beginRun(session, "mapping");
 			const view = this.sim.view();
 			const kit: TurnKit = { view, utterance: JSON.stringify(action.utterance), recent: this.recent };
 			try {
@@ -216,7 +220,7 @@ export class Engine {
 					report(e);
 					narration = skeletonSummary(this.sim, this.run.steps);
 				}
-				this.finalizeTurn(narration);
+				this.finalizeTurn(action.utterance, narration);
 			}
 			this.updateRecent();
 			return {
@@ -230,7 +234,8 @@ export class Engine {
 		}
 	}
 
-	private assertLive(): void {
+	private assertUsable(): void {
+		if (this.disposed) throw new Error("引擎已关闭");
 		if (this.ledger.dead !== null) throw new Error(`引擎状态已不可信（${this.ledger.dead}）：须重启进程由档案重建`);
 	}
 
@@ -278,8 +283,8 @@ export class Engine {
 	}
 
 	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信，档案可能留有残行，重启装载会原样拒绝（不修复）。 */
-	private finalizeTurn(narration: string): void {
-		const record: ChronicleEntry = deepFreeze({ utterance: this.run.utterance ?? "", steps: this.run.steps, narration });
+	private finalizeTurn(utterance: string, narration: string): void {
+		const record: ChronicleEntry = deepFreeze({ utterance, steps: this.run.steps, narration });
 		try {
 			this.options.archive?.append(record);
 		} catch (e) {
@@ -292,6 +297,9 @@ export class Engine {
 
 	dispose(): void {
 		if (this.running !== null) throw new Error(`回合进行中（${this.running}）：引擎不能关闭`);
+		if (this.disposed) return;
+		this.disposed = true;
+		this.listeners.clear();
 		this.session?.dispose();
 	}
 }
@@ -305,13 +313,7 @@ function promptText(name: string, render: () => string): string {
 
 /** 裁为最后一条 user 起：系统头（提示词与工具声明）恒保，回合内该锚恒为回合提示，续行保住裁决前缀。 */
 function pruneContext(messages: ContextEvent["messages"]): ContextEvent["messages"] {
-	let last = -1;
-	for (let i = messages.length - 1; i >= 0; i--) {
-		if (messages[i]?.role === "user") {
-			last = i;
-			break;
-		}
-	}
+	const last = messages.findLastIndex((m) => m.role === "user");
 	if (last < 0) return messages;
 	return [...messages.filter((m) => m.role === "system"), ...messages.slice(last)];
 }
@@ -329,31 +331,61 @@ function buildContextExtension(def: GameDef, recent: () => RecentEntry[]): Inlin
 	};
 }
 
-function skeletonSummary(sim: Simulation, steps: Commit[]): string {
+/** 引擎文本的最终兜底：say 失灵直取 noResponse。 */
+function sayOrNoResponse(def: GameDef, speech: Speech): string {
 	try {
-		const lines = spineLines(sim, steps, sim.snapshot());
-		return lines.length ? lines.join("\n") : speak(sim.def, { kind: "noProposal" });
+		return speak(def, speech);
 	} catch (e) {
 		report(e);
-		return interruptedText(sim.def);
-	}
-}
-
-/** 投影失灵的最终兜底：say 自身失败时直取 noResponse。 */
-function interruptedText(def: GameDef): string {
-	try {
-		return speak(def, { kind: "interrupted", phase: "project" });
-	} catch {
 		return def.messages.noResponse;
 	}
 }
 
-/** 逐动作推进：后一动作在后一世界态上裁决，已裁决步实时入 sink。形态预检在窗口占用前完成（通道次序）。 */
-function applyBatch(sim: Simulation, actions: readonly Action[], sink: Commit[]): void {
-	for (const a of actions) {
-		const res = sim.apply(a);
-		sink.push(res.step, ...res.ticks);
+/** 事件投影：spineLines 失灵即 null，由调用方选择降级文本。 */
+function projectLines(sim: Simulation, steps: readonly Commit[]): string[] | null {
+	try {
+		return spineLines(sim, steps, sim.snapshot());
+	} catch (e) {
+		report(e);
+		return null;
 	}
+}
+
+function skeletonSummary(sim: Simulation, steps: Commit[]): string {
+	const lines = projectLines(sim, steps);
+	if (lines === null) return sayOrNoResponse(sim.def, { kind: "interrupted", phase: "project" });
+	return lines.length ? lines.join("\n") : sayOrNoResponse(sim.def, { kind: "noProposal" });
+}
+
+/** 窗口内裁决 → 模型侧呈现文本：逐动作推进（后一动作在后一世界态上裁决，已裁决步实时入账），事件行与新增呈现分相投影，任一相失灵只降级该相；形态违约已在窗口前拦截。 */
+function adjudicate(def: GameDef, sim: Simulation, run: RunState, actions: readonly Action[]): string {
+	run.phase = "narration";
+	const steps: Commit[] = [];
+	let crashed = false;
+	try {
+		for (const a of actions) {
+			const res = sim.apply(a);
+			steps.push(res.step, ...res.ticks);
+		}
+	} catch (e) {
+		// 此处只剩投影与内核缺陷：apply 边界重抛，已裁决步照常入账
+		crashed = true;
+		report(e);
+	}
+	run.steps = steps;
+	const projected = projectLines(sim, steps);
+	run.lines = projected ?? [];
+	try {
+		run.reveals = sim.reveals(steps);
+	} catch (e) {
+		report(e);
+		run.reveals = [];
+	}
+	const lines = projected === null ? [sayOrNoResponse(def, { kind: "interrupted", phase: "project" })] : [...projected];
+	if (!crashed && projected !== null) for (const item of run.reveals) lines.push(JSON.stringify(item));
+	if (crashed) lines.push(sayOrNoResponse(def, { kind: "interrupted", phase: "adjudicate" }));
+	const text = lines.join("\n");
+	return text === "" ? sayOrNoResponse(def, { kind: "noProposal" }) : text;
 }
 
 /** 接口模式走 JSON Schema 通道；ref 的 JSON 型是 string。 */
@@ -401,8 +433,7 @@ function hostParametersSchema(face: readonly VerbFace[]): JsonSchema {
 
 function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 	const base = `Propose actions to the world; the tool result is the world's response. Actions are adjudicated in order, each on the world state left by the previous one; one call opens this turn's adjudication window; an empty actions array is a refusal.\nAvailable verbs:\n${catalog(def.verbs)}`;
-	const description = def.prompt.tool?.(base) ?? base;
-	if (typeof description !== "string" || description.trim() === "") throw new Error("prompt.tool 须返回非空字符串（act 工具描述）");
+	const description = promptText("prompt.tool", () => def.prompt.tool?.(base) ?? base);
 	return defineTool({
 		name: "act",
 		label: "act",
@@ -418,50 +449,10 @@ function buildActTool(def: GameDef, sim: Simulation, run: RunState) {
 				// 占用后的再次调用：空白结果加 terminate，防模型无界空转
 				return { content: [{ type: "text", text: " " }], details: {}, terminate: true };
 			}
-			const proposed = (params.actions ?? []) as Action[];
 			// 形态校验完全托付接口模式（execute 前整批拦截）
-			run.phase = "narration";
-			const steps: Commit[] = [];
-			let crashed = false;
-			try {
-				applyBatch(sim, proposed, steps);
-			} catch (e) {
-				// 形态违约已在窗口前拦截，此处只剩投影与内核缺陷：apply 边界重抛，已裁决步照常入账
-				crashed = true;
-				report(e);
-			}
-			run.steps = steps;
-			// 事件行与新增呈现分相投影：任一相失灵只降级该相；结果即回合呈现，不重算
-			let projected = false;
-			try {
-				run.lines = spineLines(sim, steps, sim.snapshot());
-				projected = true;
-			} catch (e) {
-				report(e);
-				run.lines = [];
-			}
-			try {
-				run.reveals = sim.reveals(steps);
-			} catch (e) {
-				report(e);
-				run.reveals = [];
-			}
-			const lines = projected ? [...run.lines] : [interruptedText(def)];
-			if (!crashed && projected) for (const item of run.reveals) lines.push(JSON.stringify(item));
-			// say 失灵直取 noResponse：呈现缺陷不得丢弃已定稿的账目
-			const say = (speech: Speech): string => {
-				try {
-					return speak(def, speech);
-				} catch (e) {
-					report(e);
-					return def.messages.noResponse;
-				}
-			};
-			if (crashed) lines.push(say({ kind: "interrupted", phase: "adjudicate" }));
-			let text = lines.join("\n");
-			if (text === "") text = say({ kind: "noProposal" });
+			const proposed = (params.actions ?? []) as Action[];
 			return {
-				content: [{ type: "text", text }],
+				content: [{ type: "text", text: adjudicate(def, sim, run, proposed) }],
 				details: {},
 			};
 		},

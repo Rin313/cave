@@ -1112,6 +1112,9 @@ export class Simulation {
 		if (typeof messages.timePassed !== "string" || messages.timePassed.trim() === "") throw new Error("messages.timePassed 须为非空字符串");
 		if (messages.invisibleEntity !== undefined && (typeof messages.invisibleEntity !== "string" || messages.invisibleEntity.trim() === "")) throw new Error("messages.invisibleEntity 须为非空字符串");
 		if (def.say !== undefined && typeof def.say !== "function") throw new Error("GameDef.say 须为函数");
+		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一");
+		if (def.recentWindow !== undefined && (!Number.isInteger(def.recentWindow) || def.recentWindow < 0)) throw new Error(`GameDef.recentWindow 须为非负整数（回合记录数），得到 ${String(def.recentWindow)}`);
+		if (def.recent !== undefined && typeof def.recent !== "function") throw new Error("GameDef.recent 须为函数");
 		const invariantIds = new Set<string>();
 		for (const inv of def.invariants ?? []) {
 			if (typeof inv.id !== "string" || inv.id === "") throw new Error("不变式 id 须为非空字符串");

@@ -4,18 +4,19 @@ import { deepFreeze, isChronicleEntry, type ChronicleEntry } from "./sim.ts";
 
 /** 回合档案：单一追加日志，每回合一行（回合与表达同条目）。装载即全量校验：任一损坏（坏行、半行、形状不符）即抛，不跳过、不改写。 */
 export interface ArchiveStore {
+	/** open 时的全量快照；append 只写文件，不回填本数组。 */
 	readonly records: readonly ChronicleEntry[];
 	append(record: ChronicleEntry): void;
 }
 
 /** 全量读取：空档案之外，文本须由换行收尾的合法记录行构成；任一偏差即抛，修复归人工。 */
-function readRecords(path: string): ChronicleEntry[] {
+export function readRecords(path: string): ChronicleEntry[] {
 	if (!existsSync(path)) return [];
 	const text = readFileSync(path, "utf8");
 	if (text === "") return [];
-	if (!text.endsWith("\n")) throw new Error(`档案 ${path} 第 ${text.split("\n").length} 行未收尾（追加中断或文件损坏）`);
 	const lines = text.split("\n");
-	lines.pop();
+	const tail = lines.pop()!;
+	if (tail !== "") throw new Error(`档案 ${path} 第 ${lines.length + 1} 行未收尾（追加中断或文件损坏）`);
 	const records: ChronicleEntry[] = [];
 	for (const [i, raw] of lines.entries()) {
 		let v: unknown;
