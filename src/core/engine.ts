@@ -9,7 +9,6 @@ import {
 	type InlineExtension,
 	type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import type { ArchiveStore } from "./archive.ts";
 import { Simulation, catalog, deepFreeze, defaultNarratePrompt, defaultTurnPrompt, denialReasonText, lawOf, recentEntries, report, speak, spineLines, verbFace, type Action, type Card, type ChronicleEntry, type Commit, type GameDef, type Handle, type NarrateKit, type PromptKit, type RecentEntry, type Speech, type TurnKit, type VerbFace } from "./sim.ts";
 
 export interface AgentSpec {
@@ -17,6 +16,11 @@ export interface AgentSpec {
 	modelRuntime: ModelRuntime;
 	agentDir: string;
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+}
+
+export interface ArchiveStore {
+	readonly records: readonly ChronicleEntry[];
+	append(record: ChronicleEntry): void;
 }
 
 export interface EngineOptions {

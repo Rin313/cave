@@ -1,10 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type BrowserWindowConstructorOptions } from "electron";
-import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDocsPath, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { openArchive, readRecords } from "../core/archive.ts";
-import { Engine, type ActOutcome, type AgentSpec } from "../core/engine.ts";
+import { Engine, type ActOutcome, type AgentSpec, type ArchiveStore } from "../core/engine.ts";
 import * as sim from "../core/sim.ts";
 import { installModel, isThinkingLevel, modelRef, openModelRuntime, supportedThinkingLevels, type ModelFace, type ThinkingLevel } from "./model.ts";
 
@@ -70,6 +69,37 @@ function runsDir(root: string, game: string): string {
 
 function recordsPath(root: string, game: string, run: string): string {
 	return join(runsDir(root, game), run, "records.jsonl");
+}
+
+function readRecords(path: string): sim.ChronicleEntry[] {
+	if (!existsSync(path)) return [];
+	const text = readFileSync(path, "utf8");
+	const lines = text.split("\n");
+	if (lines.pop() !== "") throw new Error(`档案 ${path} 未以换行收尾（追加中断或文件损坏）`);
+	const records: sim.ChronicleEntry[] = [];
+	for (const [i, raw] of lines.entries()) {
+		let v: unknown;
+		try {
+			v = JSON.parse(raw);
+		} catch {
+			throw new Error(`档案 ${path} 第 ${i + 1} 行不是合法 JSON`);
+		}
+		if (!sim.isChronicleEntry(v)) throw new Error(`档案 ${path} 第 ${i + 1} 行不是回合记录`);
+		records.push(sim.deepFreeze(v));
+	}
+	return records;
+}
+
+function openArchive(path: string): ArchiveStore {
+	const records = readRecords(path);
+	return {
+		records,
+		append(record) {
+			mkdirSync(dirname(path), { recursive: true });
+			appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+			records.push(record);
+		},
+	};
 }
 
 /** 目录下的直接子目录名；目录缺席即空。 */
