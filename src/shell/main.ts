@@ -29,7 +29,6 @@ const sessionKey = (game: string, run: string): string => `${game}/${run}`;
 
 let win: BrowserWindow | null = null;
 
-/** 面请求：--game <id> 即该游戏面，缺席即 launcher 面。 */
 interface FaceRequest {
 	game: string | null;
 }
@@ -59,20 +58,11 @@ function isSegment(v: unknown): v is string {
 	return typeof v === "string" && v !== "" && v !== "." && v !== ".." && !/[\\/\x00-\x1f\x7f]/.test(v);
 }
 
-/** 启动参数里的游戏 id：--game <id> 或 --game=<id>；缺席或非法即 null。 */
 function gameArg(argv: readonly string[]): string | null {
-	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i]!;
-		if (a === "--game") {
-			const v = argv[i + 1];
-			return v !== undefined && !v.startsWith("--") && isSegment(v) ? v : null;
-		}
-		if (a.startsWith("--game=")) {
-			const v = a.slice("--game=".length);
-			return isSegment(v) ? v : null;
-		}
-	}
-	return null;
+	const a = argv.find((v) => v.startsWith("--game="));
+	if (a === undefined) return null;
+	const v = a.slice("--game=".length);
+	return isSegment(v) ? v : null;
 }
 
 function runsDir(root: string, game: string): string {
@@ -89,7 +79,7 @@ function subdirs(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-/** 壳内启动器：无 --game 的启动与第二实例即此面，游戏界面装载失败亦回落于此。 */
+/** 壳内启动器：--game=<id> 缺席的启动与第二实例即此面，游戏界面装载失败亦回落于此。 */
 const LAUNCHER_FILE = join(import.meta.dirname, "launcher.html");
 
 /** 入口物化只属发行版：开发态 exe 是 Electron 自身。 */
@@ -142,7 +132,7 @@ function writeMacApp(file: string, game: string, args: readonly string[]): void 
 	].join("\n"));
 }
 
-/** 写一个入口到游戏目录：命令行 = 裸 exe + 数据根 + --game（入口随根自含，双击即回到同一档案）。 */
+/** 写一个入口到游戏目录：命令行 = 裸 exe + 数据根 + --game=<id>（入口随根自含，双击即回到同一档案）。 */
 function writeEntry(dir: string, game: string): void {
 	const args = [`--user-data-dir=${ROOT}`, `--game=${game}`];
 	if (process.platform === "win32") {
@@ -292,12 +282,11 @@ async function launchGame(w: BrowserWindow, game: string): Promise<void> {
 	}
 }
 
-/** 面请求的装载：--game 直达游戏面，缺席即回落启动器面。 */
+/** --game=<id> 直达游戏面，缺席即回落启动器面。 */
 function loadFace(w: BrowserWindow, face: FaceRequest): Promise<void> {
 	return face.game === null ? requireLauncher(w) : launchGame(w, face.game);
 }
 
-/** 游戏目录：id 合法且 index.ts 在世（游戏身份的唯一定义）；缺席即 null。 */
 function gameDir(root: string, id: string): string | null {
 	if (!isSegment(id)) return null;
 	const dir = join(root, "games", id);
