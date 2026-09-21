@@ -33,6 +33,8 @@ interface UiFace {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const js = (v: unknown): string => JSON.stringify(v);
+/** 轮询间隔：本机探测廉价，等待按探测粒度而非固定时延 */
+const POLL_MS = 25;
 /** 求值探测时限 */
 const PROBE_MS = 5_000;
 /** 界面装载时限 */
@@ -129,11 +131,11 @@ async function spawnHost(exe: string): Promise<Target> {
 			throw new Error(`宿主退出（code ${child.exitCode}）${logTail()}`);
 		}
 		const target = await targetOf(port);
-		if (target !== null && (await shellReady(target))) {
+		if (target !== null && (await face(target))?.ready === true) {
 			writeHost({ pid: child.pid ?? 0, port, exe });
 			return target;
 		}
-		await sleep(150);
+		await sleep(POLL_MS);
 	}
 	child.kill();
 	throw new Error(`等待界面超时（30s，已结束 pid ${child.pid ?? 0}）：页面未就绪或 window.shell 不可达${logTail()}`);
@@ -159,7 +161,7 @@ async function stopHost(): Promise<number | null> {
 	const target = await targetOf(host.port);
 	if (target !== null) await cdp(target, "Page.close", {}, 1000).catch(() => undefined);
 	const deadline = Date.now() + 5000;
-	while (Date.now() < deadline && pidAlive(host.pid)) await sleep(150);
+	while (Date.now() < deadline && pidAlive(host.pid)) await sleep(POLL_MS);
 	if (pidAlive(host.pid)) {
 		try {
 			process.kill(host.pid);
@@ -211,19 +213,27 @@ async function evaluate<T>(target: Target, expression: string, timeoutMs: number
 	return out.result?.value as T;
 }
 
-/** 装载就绪判据：preload 已暴露 window.shell。 */
-async function shellReady(target: Target): Promise<boolean> {
-	return (await evaluate<unknown>(target, `typeof window.shell === "object"`, PROBE_MS).catch(() => false)) === true;
+interface Face {
+	href: string;
+	ready: boolean;
+	error: string | null;
 }
 
-async function pageUrl(target: Target): Promise<string | null> {
-	const href = await evaluate<unknown>(target, "location.href", PROBE_MS).catch(() => undefined);
-	return typeof href === "string" ? href : null;
+/** 页面探测：href、preload 就绪与启动器携因一次求值；导航期不可达即 null。 */
+async function face(target: Target): Promise<Face | null> {
+	const out = await evaluate<unknown>(target, `({
+		href: location.href,
+		ready: typeof window.shell === "object",
+		error: new URLSearchParams(location.search).get("error"),
+	})`, PROBE_MS).catch(() => undefined);
+	if (out === null || typeof out !== "object") return null;
+	const { href, ready, error } = out as Record<string, unknown>;
+	if (typeof href !== "string") return null;
+	return { href, ready: ready === true, error: typeof error === "string" && error !== "" ? error : null };
 }
 
-async function onGameFace(target: Target, game: string): Promise<boolean> {
-	const href = await pageUrl(target);
-	if (href === null) return false;
+/** 游戏界面判据：URL 即 <...>/games/<game>/index.html。 */
+function isGameFace(href: string, game: string): boolean {
 	try {
 		return fileURLToPath(href).endsWith(join("games", game, "index.html"));
 	} catch {
@@ -231,36 +241,34 @@ async function onGameFace(target: Target, game: string): Promise<boolean> {
 	}
 }
 
-/** 回落启动器的携因：error 查询参数，缺席即 null。 */
-async function launcherFailure(target: Target): Promise<string | null> {
-	const value = await evaluate<unknown>(target, "new URLSearchParams(location.search).get('error')", PROBE_MS).catch(() => undefined);
-	return typeof value === "string" && value !== "" ? value : null;
-}
-
-async function poll(timeout: number, what: string, probe: () => Promise<boolean>): Promise<void> {
+/** 轮询至 probe 为真；超时即抛；probe 的错误即失败。 */
+async function until(timeout: number, what: string, probe: () => Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + timeout;
 	for (;;) {
-		if (await probe().catch(() => false)) return;
+		if (await probe()) return;
 		if (Date.now() >= deadline) throw new Error(`等待${what}超时（${Math.round(timeout / 1000)}s）`);
-		await sleep(150);
+		await sleep(POLL_MS);
 	}
 }
 
 /** 直达游戏：已在即空操作；否则以第二实例走产品入口（宿主与二实例都不覆盖 userData，缺省 root 一致，单实例锁命中），窗口面落定即成败。 */
 async function go(target: Target, game: string, exe: string): Promise<void> {
-	if (await onGameFace(target, game)) return;
-	const before = await pageUrl(target);
+	const before = await face(target);
+	if (before !== null && isGameFace(before.href, game)) return;
 	spawn(exe, [`--game=${game}`], { detached: true, stdio: "ignore" }).unref();
-	const deadline = Date.now() + UI_MS;
-	for (;;) {
-		if (await onGameFace(target, game)) return;
-		const url = await pageUrl(target);
-		if (url !== null && url !== before) {
-			const failure = await launcherFailure(target);
-			if (failure !== null) throw new Error(failure);
-		}
-		if (Date.now() >= deadline) throw new Error((await launcherFailure(target)) ?? `等待游戏界面 ${game} 超时（${Math.round(UI_MS / 1000)}s）`);
-		await sleep(150);
+	// before 缺席即初始探测失败：当前面上的旧 error 不属本次（第二实例尚未导航），等超时由 catch 回读
+	try {
+		await until(UI_MS, `游戏界面 ${game}`, async () => {
+			const now = await face(target);
+			if (now === null) return false;
+			if (isGameFace(now.href, game)) return true;
+			if (before !== null && now.href !== before.href && now.error !== null) throw new Error(now.error);
+			return false;
+		});
+	} catch (e) {
+		const now = await face(target);
+		if (now !== null && now.error !== null) throw new Error(now.error);
+		throw e;
 	}
 }
 
@@ -367,7 +375,6 @@ async function click(target: Target, args: ParsedArgs, timeout: number): Promise
 		if (hit.off) throw new Error(`click 目标不在视口内（${Math.round(hit.x)},${Math.round(hit.y)}）`);
 		point = hit;
 	}
-	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y }, MOUSE_MS);
 	await cdp(target, "Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, MOUSE_MS);
 	await cdp(target, "Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, MOUSE_MS);
 }
@@ -410,7 +417,7 @@ async function pressKey(target: Target, name: string, timeout: number): Promise<
 async function waitFace(target: Target, args: ParsedArgs, timeout: number): Promise<void> {
 	const text = flagStr(args, "text");
 	if (text === undefined) throw new Error("wait 需要 --text <文本>");
-	await poll(timeout, `文本 ${js(text)}`, () => evaluate<boolean>(target, `document.body.innerText.includes(${js(text)})`, PROBE_MS));
+	await until(timeout, `文本 ${js(text)}`, async () => (await evaluate<unknown>(target, `document.body.innerText.includes(${js(text)})`, PROBE_MS).catch(() => false)) === true);
 }
 
 async function shot(target: Target, timeout: number): Promise<string> {
@@ -437,7 +444,7 @@ async function dispatch(cmd: string, args: ParsedArgs, target: Target, timeout: 
 			return;
 		}
 		case "type": {
-			const text = args.positionals.join(" ").trim();
+			const text = args.positionals.join(" ");
 			if (text === "") throw new Error("type 需要文本");
 			await cdp(target, "Input.insertText", { text }, timeout);
 			return;
