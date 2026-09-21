@@ -17,7 +17,7 @@ interface Session {
 	unsubscribe: () => void;
 }
 
-/** 会话槽：opened 恒为本次打开的结果；session 落定后可用；关闭即除名。 */
+/** 会话槽：opened 恒为本次打开的结果；session 落定后可用 */
 interface SessionSlot {
 	readonly opened: Promise<Session>;
 	session: Session | null;

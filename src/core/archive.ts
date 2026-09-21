@@ -2,14 +2,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { deepFreeze, isChronicleEntry, type ChronicleEntry } from "./sim.ts";
 
-/** 回合档案：单一追加日志，每回合一行（回合与表达同条目）。装载即全量校验：任一损坏（坏行、半行、形状不符）即抛，不跳过、不改写。 */
 export interface ArchiveStore {
 	/** open 时的全量快照；append 只写文件，不回填本数组。 */
 	readonly records: readonly ChronicleEntry[];
 	append(record: ChronicleEntry): void;
 }
 
-/** 全量读取：空档案之外，文本须由换行收尾的合法记录行构成；任一偏差即抛，修复归人工。 */
+/** 空档案之外，文本须由换行收尾的合法记录行构成 */
 export function readRecords(path: string): ChronicleEntry[] {
 	if (!existsSync(path)) return [];
 	const text = readFileSync(path, "utf8");
