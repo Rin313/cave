@@ -239,7 +239,7 @@ export interface ParamSpec extends ValueDecl {
 type BaseOf<T extends SlotType> = T extends "number" ? number : T extends "boolean" ? boolean : string;
 type ValueOfParam<S extends ParamSpec> = S extends { many: true } ? BaseOf<S["type"]>[] : BaseOf<S["type"]>;
 
-/** 参数声明的可选面：重数 × 可选 × 描述；type 只能由 param 的第一参数给出。 */
+/** 重数 × 可选 × 描述；type 只能由 param 的第一参数给出。 */
 type ParamOpts = Omit<ParamSpec, "type">;
 
 /** params 声明派生的编译期类型。 */
@@ -280,7 +280,6 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	};
 }
 
-/** 规则链注册项的共同面：动词与常驻规则同制。 */
 interface RuleDecl {
 	rules: Rule[];
 }
@@ -295,7 +294,7 @@ export interface VerbDef extends RuleDecl {
 	invisible?: string;
 }
 
-/** 常驻规则：唯一调用通道是 clock（泵每拍一次，空参）。不进动词面、无参数、无跨度、无答复、无呈现名；id 只进账本与骰子地址。 */
+/** 唯一调用通道是 clock（泵每拍一次，空参）。不进动词面、无参数、无跨度、无答复、无呈现名；id 只进账本与骰子地址。 */
 export interface TickDef extends RuleDecl {
 	id: string;
 }
@@ -391,14 +390,14 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 function verdictProblems(v: Verdict, clock: boolean): string[] {
 	const out: string[] = [];
 	if (v.span !== undefined) {
-		if (clock) out.push("常驻规则不得延伸跨度");
+		if (clock) out.push("不得延伸跨度");
 		else if (!Number.isInteger(v.span) || v.span < 0) out.push(`span 须为非负整数拍数，得到 ${String(v.span)}`);
 	}
 	if (v.ok) {
 		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
 		if (!Array.isArray(v.deltas)) out.push("deltas 须为序列");
 		if (v.reply !== undefined && (typeof v.reply !== "string" || v.reply === "")) out.push("reply 须为非空字符串");
-		if (clock && v.reply !== undefined) out.push("常驻规则不得答复");
+		if (clock && v.reply !== undefined) out.push("不得答复");
 		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string" && s !== ""))) out.push("statements 须为非空字符串序列");
 		return out;
 	}
@@ -472,7 +471,7 @@ export interface GameDef {
 	props?: Record<string, SlotDef>;
 	/** 边类型注册表：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
 	relTypes?: Record<string, SlotDef>;
-	/** 常驻规则表：每拍按声明序由泵以空参调用，后一条看得见前一条的后果。 */
+	/** 每拍按声明序由泵以空参调用，后一条看得见前一条的后果。 */
 	ticks?: TickDef[];
 	/** 视角：访问结构（格级披露 × 实体级可指称）；缺省全见、可指称即顶点披露。 */
 	perspective?: (world: World) => Partial<Access>;
@@ -694,7 +693,7 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 一步（clock 步的 verb 即常驻规则 id，params 恒空）：act 记 span（生效跨度），clock 记 offset（所属跨度内的拍位，进骰子地址）；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
+/** 一步：act 记 span（生效跨度），clock 记 offset（所属跨度内的拍位，进骰子地址）；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
 	| { trigger: "act"; action: Action; span: number; ok: true; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[] }
 	| { trigger: "act"; action: Action; span: number; ok: false; rule?: string; denial: Denial }
@@ -868,7 +867,7 @@ function validateDecl(where: string, param: boolean, d: unknown): void {
 	}
 }
 
-/** 规则链校验：id 非空且链内唯一；动词与常驻规则共用。 */
+/** 规则链校验：id 非空且链内唯一 */
 function assertRules(where: string, rules: readonly Rule[]): void {
 	const ids = new Set<string>();
 	for (const r of rules) {

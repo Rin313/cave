@@ -78,7 +78,7 @@ Denial   ::= (Point, ⟨text⟩?)                 -- 受众 engine 时文本必�
 
 ```
 verb = (label, description, schema, span ∈ ℕ, invisible?, rules)    -- 外部动词：唯一调用通道是 act
-tick = (id, rules)                                      -- 常驻规则：唯一调用点是 clock（泵每拍空参）
+tick = (id, rules)                                      -- 唯一调用点是 clock（泵每拍空参）
 a    = (verb, params)      params : P_verb ⇀ V          -- 一次尝试即一次裁决、一个跨度、一个拒绝单位
 ref(a) ⊆ P_verb           指称参数键集（P_verb 即该动词的参数键集）
 Q    = (world, params, roll)                    -- world 深冻结，params 冻结，越权写即抛
@@ -88,7 +88,7 @@ RuleDenial ::= (Point = rule(⟨law⟩), ⟨text⟩?)
 ```
 
 - 世界腔文本只有两种角色。`reply`（答复）是对本次提案的答复：每步至多一条（结构保证单值；句数属作者纪律），只存在于有提案者的步（act）——授予缺文本渲染裸 ✓，否决缺文本回落 noResponse。`statements`（陈述）是授予许可的 0..n 条世界腔陈述（零变更授予亦可携）。否决只有答复。二者都在变更行判据与指称闭包之外——可显示不在 P 中的名字与无名边的聚合，但不产生指称、不改变 P/Ref、不进指称门；随步逐字入账并冻结，投影不回读世界、不重解析。位置由 (trigger, 果, 角色) 决定：act 的答复内联在尝试行、陈述附随变更块；clock 无答复对象，拍内授予不得携 reply——引擎点否决（与不得延伸跨度同制），拍内文本只经 statements；否决仍为失败拍；装载判据同此（clock 步不得携 reply 与非空参数，世界腔文本非空）。
-- 卫语句链 `rules`（动词与常驻规则同构）：链上每条守卫携链内唯一 id；首个非 ⊥ 表态即判决，授予可携 `law`（缺省即守卫 id），否决的 `law` 由 `deny` 给定——记录两侧自含 (守卫, law)。全弃权由引擎闭合为 `closure`。指称参数先过指称门（域即可指称集），非指称参数按字面径由法则裁决。
+- 卫语句链 `rules`：链上每条守卫携链内唯一 id；首个非 ⊥ 表态即判决，授予可携 `law`（缺省即守卫 id），否决的 `law` 由 `deny` 给定——记录两侧自含 (守卫, law)。全弃权由引擎闭合为 `closure`。指称参数先过指称门（域即可指称集），非指称参数按字面径由法则裁决。
 - 判定与审查是作者否决的两个时相：判定（`Rule`）在提交前读 `w⁻`，携参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺`、`before`、`changes` 与 `proposal`（admit 无尝试），不可授予。一切否决同形为 `Denial`：rule → `rule(law)`+world(reply?)，gate → `gate`+world（门文案是词表缺省，由呈现解析），closure → `closure`，invariant → `invariant(id,fault)`+受众文本，engine → `engine`+engine(debug)。门、闭合、自检与作者否决共享同一记录形状与回滚路径，但不能是作者的具名否决点。判定与审查中的作者抛出同归 engine 点，出处与细节在 text。
 
 ```
@@ -109,7 +109,7 @@ offset ::= 1..所属 act 的 span           -- clock 步的拍位：进骰子地
 ```
 
 - 入账内容：凡裁决时读出且不可由账本前缀回算者随步入账。act 步记 span，clock 步记 offset（静默拍不留步；泵按 span 逐拍产生 offset ∈ [1, span] 且同跨度内非降）；边界值 `prev` 一并入账，供渲染与重放消费；提交产出与装载接受共用单步形状判据，跨步一致性不对账。由 kind 唯一决定的呈现身份不入账（lawOf 产生）；只读派生视图（脸表、sees、言默、近况、账本读数）一律是投影。
-- 序列按构造保序：账本序即事件的先后。trigger 由调用点给定（act：AI 经动词面；clock：泵逐拍），作者不可传，随步入账——记录自含分类、跨度与拍位，投影不重跑裁决、不据动词表反推（name/label/messages 等呈现词汇仍取自 def）。动词表与常驻规则表是两套独立的命名空间：`(trigger, id)` 才是规则链的身份，id 只是各自表内的局部名，同名互不相干，引擎不检查跨表唯一。一切步一律携 action（action.verb 即动词或常驻规则 id；clock 的 params 恒空）。果是裁决点：授予记守卫与法则，否决记 Point 与受众；链上规则表态（或授予被审查拒绝）时守卫随果入账（gate/closure 无守卫），授予轨迹不入账。
+- 序列按构造保序：账本序即事件的先后。trigger 由调用点给定（act：AI 经动词面；clock：泵逐拍），作者不可传，随步入账——记录自含分类、跨度与拍位，投影不重跑裁决、不据动词表反推（name/label/messages 等呈现词汇仍取自 def）。`(trigger, id)` 才是规则链的身份，id 只是各自表内的局部名，同名互不相干，引擎不检查跨表唯一。一切步一律携 action。果是裁决点：授予记守卫与法则，否决记 Point 与受众；链上规则表态（或授予被审查拒绝）时守卫随果入账（gate/closure 无守卫），授予轨迹不入账。
 - 提交存在判据：变更 ∨ 答复 ∨ 陈述 ∨ 否决 ∨ 应答义务。act 提案恒因应答义务入账（授予无文本以 ✓ 行入账、否决缺文本以 noResponse 兜底）；clock 提案无应答义务，空授予即默、不留空步。步入账即冻结。呈现按 trigger 分流：act 产尝试行（✓/✗ 动词与答复），clock 归 ⏱（授予成块、否决为失败拍、全弃权即默）。
 
 ### 视角
