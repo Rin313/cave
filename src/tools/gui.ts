@@ -32,7 +32,6 @@ interface UiFace {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-const js = (v: unknown): string => JSON.stringify(v);
 /** 轮询间隔：本机探测廉价，等待按探测粒度而非固定时延 */
 const POLL_MS = 25;
 /** 求值探测时限 */
@@ -316,12 +315,12 @@ ${SCAN}
 /** 文本目标：先精确后包含；交互元素之外再落到最小可见文本宿主（无角色的 div 按钮）。 */
 function pickExpression(text: string): string {
 	return `((l) => {
-		const hit = l.find((c) => c.name === ${js(text)}) ?? l.find((c) => c.name.includes(${js(text)}));
+		const hit = l.find((c) => c.name === ${JSON.stringify(text)}) ?? l.find((c) => c.name.includes(${JSON.stringify(text)}));
 		if (hit) return hit.el;
 		const all = Array.from(document.querySelectorAll("*")).filter((el) => el.getClientRects().length > 0);
-		const exact = all.filter((el) => collapse(el.textContent) === ${js(text)});
+		const exact = all.filter((el) => collapse(el.textContent) === ${JSON.stringify(text)});
 		if (exact.length > 0) return exact[exact.length - 1];
-		const loose = all.filter((el) => collapse(el.textContent).includes(${js(text)}));
+		const loose = all.filter((el) => collapse(el.textContent).includes(${JSON.stringify(text)}));
 		return loose.length > 0 ? loose[loose.length - 1] : null;
 	})(scan())`;
 }
@@ -417,7 +416,7 @@ async function pressKey(target: Target, name: string, timeout: number): Promise<
 async function waitFace(target: Target, args: ParsedArgs, timeout: number): Promise<void> {
 	const text = flagStr(args, "text");
 	if (text === undefined) throw new Error("wait 需要 --text <文本>");
-	await until(timeout, `文本 ${js(text)}`, async () => (await evaluate<unknown>(target, `document.body.innerText.includes(${js(text)})`, PROBE_MS).catch(() => false)) === true);
+	await until(timeout, `文本 ${JSON.stringify(text)}`, async () => (await evaluate<unknown>(target, `document.body.innerText.includes(${JSON.stringify(text)})`, PROBE_MS).catch(() => false)) === true);
 }
 
 async function shot(target: Target, timeout: number): Promise<string> {
