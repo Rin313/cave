@@ -35,6 +35,7 @@ export interface ActOutcome {
 	/** 回合变更行与新增呈现：与工具结果同源，一次投影。 */
 	lines: string[];
 	reveals: (Card | Handle)[];
+	/** 模型侧叙述，可空 */
 	narration: string;
 }
 
@@ -43,7 +44,7 @@ export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
 
-/** mapping 相位文本丢弃，narration 相位文本留作回合叙述（不入账），结算时从消息账本重读。 */
+/** mapping 相位文本丢弃；narration 相位文本结算时从消息账本重读作回合叙述，可空。 */
 interface RunState {
 	phase: "mapping" | "narration";
 	messageStart: number;
@@ -197,23 +198,14 @@ export class Engine {
 				const prompt = this.sim.def.prompt;
 				await session.prompt(promptText("prompt.turn", () => (prompt.turn === undefined ? defaultTurnPrompt(kit) : prompt.turn(kit, defaultTurnPrompt))));
 			} catch (e) {
-				// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 裁决已完成，表达中断只降级呈现，回合仍将在表达落定时定稿
+				// 窗口未占用 ⇒ 回合未发生，世界与档案均未动，原样上抛；已占用 ⇒ 裁决已完成，表达中断只影响叙述，回合照常定稿
 				if (this.run.phase === "mapping") throw e;
 				report(e);
 			}
 
-			let narration: string;
-			if (this.run.phase === "mapping") {
-				// 未调 act 的文本未经裁决，回落确定性摘要
-				narration = skeletonSummary(this.sim, []);
-			} else {
-				try {
-					narration = this.settleNarration(session, this.run.steps);
-				} catch (e) {
-					// 叙述读取是呈现，定稿不依赖它
-					report(e);
-					narration = skeletonSummary(this.sim, this.run.steps);
-				}
+			let narration = "";
+			if (this.run.phase !== "mapping") {
+				narration = this.narrationText(session);
 				this.finalizeTurn(action.utterance, narration);
 			}
 			this.updateRecent();
@@ -253,18 +245,13 @@ export class Engine {
 			const kit: NarrateKit = { view, events: spineLines(this.sim, steps, this.sim.snapshot()), instruction, recent: this.recent };
 			const prompt = this.sim.def.prompt;
 			await session.prompt(promptText("prompt.narrate", () => (prompt.narrate === undefined ? defaultNarratePrompt(kit) : prompt.narrate(kit, defaultNarratePrompt))));
-			return this.settleNarration(session, steps);
+			return this.narrationText(session);
 		} finally {
 			this.running = null;
 		}
 	}
 
-	private settleNarration(session: SessionHandle, steps: Commit[]): string {
-		const text = this.narrationText(session);
-		return text.trim() === "" ? skeletonSummary(this.sim, steps) : text;
-	}
-
-	/** 叙述 = 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文。 */
+	/** 叙述 = 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文；可空。 */
 	private narrationText(session: SessionHandle): string {
 		const messages = session.messages.slice(this.run.messageStart);
 		const firstAct = messages.findIndex((m) => m.role === "toolResult" && m.toolName === "act");
@@ -342,12 +329,6 @@ function projectLines(sim: Simulation, steps: readonly Commit[]): string[] | nul
 		report(e);
 		return null;
 	}
-}
-
-function skeletonSummary(sim: Simulation, steps: Commit[]): string {
-	const lines = projectLines(sim, steps);
-	if (lines === null) return sayOrNoResponse(sim.def, { kind: "interrupted", phase: "project" });
-	return lines.length ? lines.join("\n") : sayOrNoResponse(sim.def, { kind: "noProposal" });
 }
 
 /** 窗口内裁决 → 模型侧呈现文本：逐动作推进（后一动作在后一世界态上裁决，已裁决步实时入账），事件行与新增呈现分相投影，任一相失灵只降级该相；形态违约已在窗口前拦截。 */

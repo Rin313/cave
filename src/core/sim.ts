@@ -137,7 +137,7 @@ export interface Denial {
 /** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse） */
 export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: string };
 
-/** 引擎合成读者侧文本的场合：记录点的 (point, verb) 与两种边界情形。 */
+/** 引擎合成文本的场合：记录点的 (point, verb) 与两种边界情形。 */
 export type Speech =
 	| { kind: "point"; point: Point; verb: string }
 	| { kind: "noProposal" }
@@ -805,7 +805,7 @@ export function speak(def: GameDef, speech: Speech): string {
 	return text;
 }
 
-/** 玩家侧文本：world 点携文本即用，其余按场合解析；engine 点的 debug 不过此门。 */
+/** 世界腔文本：world 点携文本即用，其余按场合解析；engine 点的 debug 不过此门。 */
 export function renderDenial(def: GameDef, denial: Denial, verb: string): string {
 	if (audienceOf(denial.point) === "world" && denial.text !== undefined) return denial.text;
 	return speak(def, { kind: "point", point: denial.point, verb });
