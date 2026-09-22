@@ -321,16 +321,6 @@ function sayOrNoResponse(def: GameDef, speech: Speech): string {
 	}
 }
 
-/** 事件投影：spineLines 失灵即 null，由调用方选择降级文本。 */
-function projectLines(sim: Simulation, steps: readonly Commit[]): string[] | null {
-	try {
-		return spineLines(sim, steps, sim.snapshot());
-	} catch (e) {
-		report(e);
-		return null;
-	}
-}
-
 /** 窗口内裁决 → 模型侧呈现文本：逐动作推进，事件行与新增呈现分相投影，任一相失灵只降级该相 */
 function adjudicate(def: GameDef, sim: Simulation, run: RunState, actions: readonly Action[]): string {
 	run.phase = "narration";
@@ -347,7 +337,12 @@ function adjudicate(def: GameDef, sim: Simulation, run: RunState, actions: reado
 		report(e);
 	}
 	run.steps = steps;
-	const projected = projectLines(sim, steps);
+	let projected: string[] | null = null;
+	try {
+		projected = spineLines(sim, steps, sim.snapshot());
+	} catch (e) {
+		report(e);
+	}
 	run.lines = projected ?? [];
 	try {
 		run.reveals = sim.reveals(steps);
