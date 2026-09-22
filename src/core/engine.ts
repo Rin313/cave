@@ -331,7 +331,7 @@ function projectLines(sim: Simulation, steps: readonly Commit[]): string[] | nul
 	}
 }
 
-/** 窗口内裁决 → 模型侧呈现文本：逐动作推进（后一动作在后一世界态上裁决，已裁决步实时入账），事件行与新增呈现分相投影，任一相失灵只降级该相；形态违约已在窗口前拦截。 */
+/** 窗口内裁决 → 模型侧呈现文本：逐动作推进，事件行与新增呈现分相投影，任一相失灵只降级该相 */
 function adjudicate(def: GameDef, sim: Simulation, run: RunState, actions: readonly Action[]): string {
 	run.phase = "narration";
 	const steps: Commit[] = [];
@@ -355,9 +355,9 @@ function adjudicate(def: GameDef, sim: Simulation, run: RunState, actions: reado
 		report(e);
 		run.reveals = [];
 	}
-	const lines = projected === null ? [sayOrNoResponse(def, { kind: "interrupted", phase: "project" })] : [...projected];
+	const lines = projected === null ? [def.messages.noResponse] : [...projected];
 	if (!crashed && projected !== null) for (const item of run.reveals) lines.push(JSON.stringify(item));
-	if (crashed) lines.push(sayOrNoResponse(def, { kind: "interrupted", phase: "adjudicate" }));
+	if (crashed && projected !== null) lines.push(def.messages.noResponse);
 	const text = lines.join("\n");
 	return text === "" ? sayOrNoResponse(def, { kind: "noProposal" }) : text;
 }

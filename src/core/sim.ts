@@ -137,11 +137,9 @@ export interface Denial {
 /** 作者否决：Denial 在 rule 点上的特化；text 即答复（缺省 noResponse） */
 export type RuleDenial = { point: Extract<Point, { kind: "rule" }>; text?: string };
 
-/** 引擎合成文本的场合：记录点的 (point, verb) 与两种边界情形。 */
 export type Speech =
 	| { kind: "point"; point: Point; verb: string }
-	| { kind: "noProposal" }
-	| { kind: "interrupted"; phase: "adjudicate" | "project" };
+	| { kind: "noProposal" };
 
 /** world 深冻结，越权写即抛；P 是 params 声明派生的编译期形状 */
 export interface Q<P = Record<string, Value>> {
