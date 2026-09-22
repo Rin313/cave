@@ -180,7 +180,6 @@ export class Engine {
 		r.reveals = [];
 	}
 
-	/** 回合入口：先占后跑；已占用即拒（壳的并发调用与关闭路径同受此门）。 */
 	private enter(kind: "act" | "narrate"): void {
 		this.assertUsable();
 		if (this.running !== null) throw new Error(`回合进行中（${this.running}）：不能开始新回合`);
