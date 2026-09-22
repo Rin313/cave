@@ -151,8 +151,8 @@ export interface Q<P = Record<string, Value>> {
 
 /** 裁决结果；span 覆写缺省跨度（授予与否决同轴）；reply 只属 act（clock 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被记录与断言消费。 */
 export type Verdict =
-	| { ok: true; deltas: Delta[]; law?: string; reply?: string; statements?: string[]; span?: number }
-	| { ok: false; denial: RuleDenial; span?: number };
+	| { deltas: Delta[]; law?: string; reply?: string; statements?: string[]; span?: number; denial?: never }
+	| { denial: RuleDenial; span?: number };
 
 export interface Rule {
 	id: string;
@@ -161,7 +161,6 @@ export interface Rule {
 
 export function grant(deltas: Delta[], opts: { law?: string; reply?: string; statements?: string[]; span?: number } = {}): Verdict {
 	return {
-		ok: true,
 		deltas,
 		...(opts.law !== undefined && { law: opts.law }),
 		...(opts.reply !== undefined && { reply: opts.reply }),
@@ -171,7 +170,7 @@ export function grant(deltas: Delta[], opts: { law?: string; reply?: string; sta
 }
 
 export function deny(law: string, text?: string, span?: number): Verdict {
-	return { ok: false, denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(span !== undefined && { span }) };
+	return { denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(span !== undefined && { span }) };
 }
 
 export const D = {
@@ -194,7 +193,7 @@ function deltaOf(c: Change): Delta {
 export function rewind(world: World, steps: readonly Commit[]): void {
 	for (let s = steps.length - 1; s >= 0; s--) {
 		const step = steps[s]!;
-		const changes = step.ok ? step.changes : [];
+		const changes = step.denial === undefined ? step.changes : [];
 		for (let i = changes.length - 1; i >= 0; i--) {
 			const c = changes[i]!;
 			if (c.cell === "vertex") {
@@ -391,7 +390,7 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 		if (clock) out.push("不得延伸跨度");
 		else if (!Number.isInteger(v.span) || v.span < 0) out.push(`span 须为非负整数拍数，得到 ${String(v.span)}`);
 	}
-	if (v.ok) {
+	if (v.denial === undefined) {
 		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
 		if (!Array.isArray(v.deltas)) out.push("deltas 须为序列");
 		if (v.reply !== undefined && (typeof v.reply !== "string" || v.reply === "")) out.push("reply 须为非空字符串");
@@ -693,17 +692,17 @@ export function lawOf(point: Point): string {
 
 /** 一步：act 记 span（生效跨度），clock 记 offset（所属跨度内的拍位，进骰子地址）；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
-	| { trigger: "act"; action: Action; span: number; ok: true; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[] }
-	| { trigger: "act"; action: Action; span: number; ok: false; rule?: string; denial: Denial }
-	| { trigger: "clock"; action: Action; offset: number; ok: true; rule: string; law: string; changes: Change[]; statements?: string[] }
-	| { trigger: "clock"; action: Action; offset: number; ok: false; rule?: string; denial: Denial };
+	| { trigger: "act"; action: Action; span: number; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[]; denial?: never }
+	| { trigger: "act"; action: Action; span: number; rule?: string; denial: Denial }
+	| { trigger: "clock"; action: Action; offset: number; rule: string; law: string; changes: Change[]; statements?: string[]; denial?: never }
+	| { trigger: "clock"; action: Action; offset: number; rule?: string; denial: Denial };
 
 type ActCommit = Extract<Commit, { trigger: "act" }>;
 type ClockCommit = Extract<Commit, { trigger: "clock" }>;
 
 /** 入账判据：clock 的默（全弃权与空授予）不留步。 */
 function recorded(c: ClockCommit): boolean {
-	return c.ok ? c.changes.length > 0 || (c.statements?.length ?? 0) > 0 : c.denial.point.kind !== "closure";
+	return c.denial === undefined ? c.changes.length > 0 || (c.statements?.length ?? 0) > 0 : c.denial.point.kind !== "closure";
 }
 
 export interface Resolution {
@@ -748,7 +747,6 @@ function isChange(v: unknown): boolean {
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object" || Array.isArray(s)) return false;
 	const c = s as Record<string, unknown>;
-	if (typeof c.ok !== "boolean") return false;
 	if (c.trigger !== "act" && c.trigger !== "clock") return false;
 	if (c.trigger === "act") {
 		if (typeof c.span !== "number" || !Number.isInteger(c.span) || c.span < 0) return false;
@@ -757,11 +755,10 @@ export function isCommit(s: unknown): boolean {
 	if (a === null || typeof a !== "object" || Array.isArray(a)) return false;
 	if (typeof a.verb !== "string" || a.verb === "" || a.params === null || typeof a.params !== "object" || Array.isArray(a.params)) return false;
 	if (c.trigger === "clock" && Object.keys(a.params).length > 0) return false;
-	if (c.ok) {
+	if (c.denial === undefined) {
 		if (typeof c.rule !== "string" || c.rule === "") return false;
 		if (typeof c.law !== "string" || c.law === "") return false;
 		if (!Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
-		if (c.denial !== undefined) return false;
 		if (c.reply !== undefined && (c.trigger === "clock" || typeof c.reply !== "string" || c.reply === "")) return false;
 		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string" && x !== ""));
 	}
@@ -987,20 +984,20 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 	for (let i = 0; i < n; i++) {
 		const s = steps[i]!;
 		const { face, renames, changeLine } = renderer(i);
-		const changes = s.ok ? [...renames, ...s.changes.map(changeLine).filter((x): x is string => x !== null)] : [];
+		const changes = s.denial === undefined ? [...renames, ...s.changes.map(changeLine).filter((x): x is string => x !== null)] : [];
 		if (s.trigger !== "clock") {
 			flush();
 			granted = s.span;
-			const reply = s.ok ? s.reply : renderDenial(sim.def, s.denial, s.action.verb);
-			const statements = s.ok ? (s.statements ?? []) : [];
+			const reply = s.denial === undefined ? s.reply : renderDenial(sim.def, s.denial, s.action.verb);
+			const statements = s.denial === undefined ? (s.statements ?? []) : [];
 			const tail = [
 				changes.length ? `(${changes.join("; ")})` : "",
 				statements.length ? `[${statements.join("; ")}]` : "",
 			].join("");
-			lines.push(`${s.ok ? "✓" : "✗"} ${sim.describeAction(s, face)}${reply !== undefined ? `：${reply}` : ""}${tail}`);
+			lines.push(`${s.denial === undefined ? "✓" : "✗"} ${sim.describeAction(s, face)}${reply !== undefined ? `：${reply}` : ""}${tail}`);
 		} else {
 			const held = said.get(s.offset) ?? { changes: [], statements: [], denials: [] };
-			if (s.ok) {
+			if (s.denial === undefined) {
 				held.changes.push(...changes);
 				if (s.statements?.length) held.statements.push(...s.statements);
 			} else {
@@ -1083,13 +1080,13 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 
 /** 门内裁决的表态；授予记守卫与法则，否决自带裁决点与守卫。 */
 type RawResult =
-	| { ok: true; deltas: Delta[]; rule: string; law: string; reply?: string; statements?: string[]; span?: number }
-	| { ok: false; denial: Denial; rule?: string; span?: number };
+	| { deltas: Delta[]; rule: string; law: string; reply?: string; statements?: string[]; span?: number; denial?: never }
+	| { denial: Denial; rule?: string; span?: number };
 
 /** 裁决产出的记录内容：授予携守卫与法则，否决携裁决点与守卫。 */
 type StepOutcome =
-	| { ok: true; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[] }
-	| { ok: false; rule?: string; denial: Denial };
+	| { rule: string; law: string; changes: Change[]; reply?: string; statements?: string[]; denial?: never }
+	| { rule?: string; denial: Denial };
 
 export class Simulation {
 	readonly def: GameDef;
@@ -1236,24 +1233,24 @@ export class Simulation {
 				const v = action.params[p];
 				return seq(v ?? []).filter((id): id is string => typeof id === "string" && !gate.has(id));
 			});
-		if (invalid.length) return { ok: false, denial: { point: { kind: "gate" } } };
+		if (invalid.length) return { denial: { point: { kind: "gate" } } };
 		for (const r of rules) {
 			const q = this.query(world, action.params, addr);
 			let v: Verdict | null;
 			try {
 				v = r.judge(q);
 			} catch (e) {
-				return { ok: false, rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${String(e)}` } };
+				return { rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${String(e)}` } };
 			}
 			if (!v) continue;
 			const problems = verdictProblems(v, clock);
-			if (problems.length) return { ok: false, rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
-			if (v.ok) {
-				return { ok: true, deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.span !== undefined && { span: v.span }) };
+			if (problems.length) return { rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
+			if (v.denial === undefined) {
+				return { deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.span !== undefined && { span: v.span }) };
 			}
-			return { ok: false, rule: r.id, denial: v.denial, ...(v.span !== undefined && { span: v.span }) };
+			return { denial: v.denial, rule: r.id, ...(v.span !== undefined && { span: v.span }) };
 		}
-		return { ok: false, denial: { point: { kind: "closure" } } };
+		return { denial: { point: { kind: "closure" } } };
 	}
 
 	/** 骰子地址是决策事件的账本位置；同地址同 key 恒同值，与法则重构无关。 */
@@ -1271,23 +1268,23 @@ export class Simulation {
 	}
 
 	/** 先执行校验后不变式；审查过程的意外异常同通道兑为审查否决。 */
-	private commitChecked(s0: World, deltas: Delta[], rule: string, trigger: Trigger, action: Action): { ok: true; changes: Change[] } | { ok: false; denial: Denial } {
+	private commitChecked(s0: World, deltas: Delta[], rule: string, trigger: Trigger, action: Action): { changes: Change[]; denial?: never } | { denial: Denial } {
 		try {
 			const out = this.commit(deltas);
 			if ("refusal" in out) {
 				this.restore(s0);
-				return { ok: false, denial: { point: { kind: "engine" }, text: out.refusal } };
+				return { denial: { point: { kind: "engine" }, text: out.refusal } };
 			}
 			const inv = this.checkInvariants({ kind: "rule", rule, trigger, action }, s0, out.changes);
 			if (inv) {
 				this.restore(s0);
-				return { ok: false, denial: inv };
+				return { denial: inv };
 			}
-			return { ok: true, changes: out.changes };
+			return { changes: out.changes };
 		} catch (e) {
 			this.restore(s0);
 			const debug = `commit/invariant threw: ${String(e)}`;
-			return { ok: false, denial: { point: { kind: "engine" }, text: debug } };
+			return { denial: { point: { kind: "engine" }, text: debug } };
 		}
 	}
 
@@ -1359,12 +1356,12 @@ export class Simulation {
 
 	/** 裁决产出的记录内容 */
 	private settle(s0: World, action: Action, trigger: Trigger, r: RawResult): StepOutcome {
-		if (r.ok) {
+		if (r.denial === undefined) {
 			const cc = this.commitChecked(s0, r.deltas, r.rule, trigger, action);
-			if (!cc.ok) return { ok: false, rule: r.rule, denial: cc.denial };
-			return { ok: true, rule: r.rule, law: r.law, changes: cc.changes, ...(r.reply !== undefined && { reply: r.reply }), ...(r.statements !== undefined && { statements: r.statements }) };
+			if (cc.denial !== undefined) return { rule: r.rule, denial: cc.denial };
+			return { rule: r.rule, law: r.law, changes: cc.changes, ...(r.reply !== undefined && { reply: r.reply }), ...(r.statements !== undefined && { statements: r.statements }) };
 		}
-		return { ok: false, ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
+		return { ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 	}
 
 	/** 账本位置只在步确定入账时推进：act 步计入序号，clock 步的拍位由跨度循环给定。 */
@@ -1405,7 +1402,7 @@ export class Simulation {
 		};
 		try {
 			for (const step of record.steps) {
-				if (!step.ok) continue;
+				if (step.denial !== undefined) continue;
 				for (const c of step.changes) {
 					const broken = this.verifyChange(c);
 					if (broken) return fail(broken);
