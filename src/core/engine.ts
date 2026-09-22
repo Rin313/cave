@@ -44,7 +44,6 @@ export type EngineEvent =
 	| { type: "narration_delta"; delta: string }
 	| { type: "narration_reset" };
 
-/** mapping 相位文本丢弃；narration 相位文本结算时从消息账本重读作回合叙述，可空。 */
 interface RunState {
 	phase: "mapping" | "narration";
 	messageStart: number;
@@ -250,7 +249,7 @@ export class Engine {
 		}
 	}
 
-	/** 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文；可空。 */
+	/** 本回合首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文；可空。 */
 	private narrationText(session: SessionHandle): string {
 		const messages = session.messages.slice(this.run.messageStart);
 		const firstAct = messages.findIndex((m) => m.role === "toolResult" && m.toolName === "act");
