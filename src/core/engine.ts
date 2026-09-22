@@ -55,7 +55,6 @@ interface RunState {
 
 export class Engine {
 	readonly sim: Simulation;
-	/** 会话按需建立：装载/浏览不需要模型与 pi 资源，首次 act/narrate 才解析并建会话。 */
 	private session: SessionHandle | null = null;
 	private opening: Promise<SessionHandle> | null = null;
 	private readonly options: EngineOptions;
@@ -225,7 +224,7 @@ export class Engine {
 		if (this.dead !== null) throw new Error(`引擎状态已不可信（${this.dead}）：须重启进程由档案重建`);
 	}
 
-	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定（provider 缓存依赖）。 */
+	/** 近况只在回合边界重投影：回合内 prompt 前缀字节稳定 */
 	private updateRecent(): void {
 		try {
 			const next = recentEntries(this.sim, this.options.archive.records);
@@ -251,7 +250,7 @@ export class Engine {
 		}
 	}
 
-	/** 叙述 = 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文；可空。 */
+	/** 本回合消息账本中首个 act 结果之后的 assistant 正文；narrate 无 act，取本回合全部正文；可空。 */
 	private narrationText(session: SessionHandle): string {
 		const messages = session.messages.slice(this.run.messageStart);
 		const firstAct = messages.findIndex((m) => m.role === "toolResult" && m.toolName === "act");
@@ -263,7 +262,7 @@ export class Engine {
 		return text;
 	}
 
-	/** 定稿：窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信，档案可能留有残行，重启装载会原样拒绝（不修复）。 */
+	/** 窗口关闭后表达落定，回合与其表达一次追加；落盘失败即引擎不可信，档案可能留有残行，重启装载会原样拒绝 */
 	private finalizeTurn(utterance: string, narration: string): void {
 		const record: ChronicleEntry = deepFreeze({ utterance, steps: this.run.steps, narration });
 		try {
