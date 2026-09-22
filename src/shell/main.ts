@@ -47,7 +47,7 @@ app.on("second-instance", (_event, argv) => {
 	void loadFace(w, face);
 });
 
-/** 根：games、runs 与配置（settings、auth、models）的共同所在；即宿主用户数据目录（--user-data-dir 可覆盖）。 */
+/** games、runs 与配置（settings、auth、models）的共同所在；即宿主用户数据目录（--user-data-dir 可覆盖）。 */
 const ROOT = app.getPath("userData");
 const SETTINGS_FILE = join(ROOT, "settings.json");
 
@@ -220,7 +220,7 @@ async function currentModel(): Promise<{ runtime: ModelRuntime; model: AgentSpec
 	return { runtime, model, ...(level !== undefined && { level }) };
 }
 
-/** 会话规格惰性解析：模型与凭据只在 act/narrate 建会话时求值，设置每次都重读。 */
+/** 模型与凭据只在 act/narrate 建会话时求值，设置每次都重读。 */
 async function agent(): Promise<AgentSpec> {
 	const resolved = await currentModel();
 	if (resolved === null) throw new Error(`模型未配置：在启动器选择模型，或在 ${SETTINGS_FILE} 写入 defaultProvider 与 defaultModel`);
@@ -352,7 +352,6 @@ interface RunFace {
 	mtime: number;
 }
 
-/** 枚举某游戏的存档（按记录文件 mtime 降序）：存档面只按游戏坐标取，不跨游戏列。 */
 function listRuns(root: string, game: string): RunFace[] {
 	const out: RunFace[] = [];
 	for (const run of subdirs(runsDir(root, game))) {
@@ -376,7 +375,7 @@ async function createSession(game: string, run: string): Promise<Session> {
 	return { game, run, engine, unsubscribe };
 }
 
-/** 打开或附着：同一 (game, run) 复用同一活实例（并发 open 也只剩一个）；失败即释放位置（打开中不可关闭，故释放无需复核表项身份）。 */
+/** 打开或附着：同一 (game, run) 复用同一活实例；失败即释放位置（打开中不可关闭，故释放无需复核表项身份）。 */
 function openSession(game: string, run: string): Promise<Session> {
 	const key = sessionKey(game, run);
 	const found = sessions.get(key);
@@ -429,7 +428,6 @@ function strIn(value: unknown, cmd: string, field: string): string {
 	return value;
 }
 
-/** 必填的 game 字段，须为游戏 id（路径段）。 */
 function gameIn(req: GameRequest | undefined, cmd: string): string {
 	const game = req?.game;
 	if (game === undefined) throw new Error(`${cmd} 需要游戏 id`);
@@ -437,17 +435,14 @@ function gameIn(req: GameRequest | undefined, cmd: string): string {
 	return game;
 }
 
-/** 必填的 game 与 run 字段。 */
 function idsIn(req: RunRequest | undefined, cmd: string): { game: string; run: string } {
 	const game = gameIn(req, cmd);
 	if (!isSegment(req?.run)) throw new Error(`${cmd} 的 run 须为存档 id（路径段，不含分隔符）`);
 	return { game, run: req.run };
 }
 
-/** 存档清单：只按给定游戏坐标取，不跨游戏列；无记录目录不列。 */
 ipcMain.handle("runs", (_event, req: GameRequest | undefined) => listRuns(ROOT, gameIn(req, "runs")));
 
-/** 回合记录原样读取（诊断面）：不装载 def、不重放、不改档案；损坏即抛（错误即诊断）。 */
 ipcMain.handle("records", (_event, req: RunRequest | undefined) => {
 	const { game, run } = idsIn(req, "records");
 	return { game, run, records: readRecords(recordsPath(ROOT, game, run)) };
