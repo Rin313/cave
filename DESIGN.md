@@ -77,17 +77,17 @@ Denial   ::= (Point, ⟨text⟩?)                 -- 受众 engine 时文本必�
 ### 裁决
 
 ```
-verb = (label, description, schema, span ∈ ℕ, invisible?, rules)    -- 外部动词：唯一调用通道是 act
-tick = (id, rules)                                      -- 唯一调用点是 clock（泵每拍空参）
-a    = (verb, params)      params : P_verb ⇀ V          -- 一次尝试即一次裁决、一个跨度、一个拒绝单位
+verb = (label, description, schema, invisible?, rules)  -- 外部动词：唯一调用通道是 act
+hook = (id, rules)                                      -- 唯一调用点是 hook（每 act 后一次，空参）
+a    = (verb, params)      params : P_verb ⇀ V          -- 一次尝试即一次裁决、一个拒绝单位
 ref(a) ⊆ P_verb           指称参数键集（P_verb 即该动词的参数键集）
 Q    = (world, params, roll)                    -- world 深冻结，params 冻结，越权写即抛
-J    : Q → ((Grant ⊎ RuleDenial) × ℕ?) ⊎ ⊥              -- ℕ? 即跨度覆写，两分支同轴；⊥ 即弃权
+J    : Q → (Grant ⊎ RuleDenial) ⊎ ⊥                     -- ⊥ 即弃权
 Grant      ::= (Δ*, ⟨law⟩?, reply?, statements?)
 RuleDenial ::= (Point = rule(⟨law⟩), ⟨text⟩?)
 ```
 
-- 世界腔文本只有两种角色。`reply`（答复）是对本次提案的答复：每步至多一条（结构保证单值；句数属作者纪律），只存在于有提案者的步（act）——授予缺文本渲染裸 ✓，否决缺文本回落 noResponse。`statements`（陈述）是授予许可的 0..n 条世界腔陈述（零变更授予亦可携）。否决只有答复。二者都在变更行判据与指称闭包之外——可显示不在 P 中的名字与无名边的聚合，但不产生指称、不改变 P/Ref、不进指称门；随步逐字入账并冻结，投影不回读世界、不重解析。位置由 (trigger, 果, 角色) 决定：act 的答复内联在尝试行、陈述附随变更块；clock 无答复对象，拍内授予不得携 reply——引擎点否决（与不得延伸跨度同制），拍内文本只经 statements；否决仍为失败拍；装载判据同此（clock 步不得携 reply 与非空参数，世界腔文本非空）。
+- 世界腔文本只有两种角色。`reply`（答复）是对本次提案的答复：每步至多一条（结构保证单值；句数属作者纪律），只存在于有提案者的步（act）——授予缺文本渲染裸 ✓，否决缺文本回落 noResponse。`statements`（陈述）是授予许可的 0..n 条世界腔陈述（零变更授予亦可携）。否决只有答复。二者都在变更行判据与指称闭包之外——可显示不在 P 中的名字与无名边的聚合，但不产生指称、不改变 P/Ref、不进指称门；随步逐字入账并冻结，投影不回读世界、不重解析。位置由 (trigger, 果, 角色) 决定：act 的答复内联在尝试行、陈述附随变更块；hook 无答复对象，hook 步内授予不得携 reply——引擎点否决；授予文本只经 statements，否决文本随 Denial（呈现为失败行）；装载判据同此（hook 步不得携 reply 与非空参数，世界腔文本非空）。
 - 卫语句链 `rules`：链上每条守卫携链内唯一 id；首个非 ⊥ 表态即判决，授予可携 `law`（缺省即守卫 id），否决的 `law` 由 `deny` 给定——记录两侧自含 (守卫, law)。全弃权由引擎闭合为 `closure`。指称参数先过指称门（域即可指称集），非指称参数按字面径由法则裁决。
 - 判定与审查是作者否决的两个时相：判定（`Rule`）在提交前读 `w⁻`，携参数与骰子，可授予变更；审查（`Invariant`）在提交后读 `w⁺`、`before`、`changes` 与 `proposal`（admit 无尝试），不可授予。一切否决同形为 `Denial`：rule → `rule(law)`+world(reply?)，gate → `gate`+world（门文案是词表缺省，由呈现解析），closure → `closure`，invariant → `invariant(id,fault)`+受众文本，engine → `engine`+engine(debug)。门、闭合、自检与作者否决共享同一记录形状与回滚路径，但不能是作者的具名否决点。判定与审查中的作者抛出同归 engine 点，出处与细节在 text。
 
@@ -95,22 +95,20 @@ RuleDenial ::= (Point = rule(⟨law⟩), ⟨text⟩?)
 roll(addr, key, sides) = 1 + ⌊h(addr, key) · sides⌋      h : 确定性哈希 → [0,1)
 ```
 
-- 骰子地址 `addr = (act 序号, trigger, verb, 拍位)`——尝试在账本中的位置；act 序号 = 该尝试所属 act 的序号，拍位 = act 步 0、clock 步为其跨度内第几拍。地址对尝试单射且由账本前缀与负载唯一确定：跨度不入地址，等待不左右随机（拍位标定同一跨度内的各拍；同拍多规则共享拍位，凭 verb 区分）。入账与否不改变地址（弃权与入账同址同值）；地址不入 params：自由文本入地址会让输入左右随机；同地址恒同值；sides 违约即抛。
+- 骰子地址 `addr = (act 序号, trigger, verb)`——尝试在账本中的位置；act 序号 = 该尝试所属 act 的序号，hook 步与其 act 同序号，凭 trigger 与 verb 区分。地址对尝试单射且由账本前缀与负载唯一确定。入账与否不改变地址（弃权与入账同址同值）；地址不入 params：自由文本入地址会让输入左右随机；同地址恒同值；sides 违约即抛。
 
 ### 步
 
 ```
-Commit ::= (trigger, action, span|offset, 果)
-trigger ∈ { act, clock }              -- 入账通道；调用点的标记，作者不可传
-action ::= (verb, params)             -- 公共载荷；clock 的 params 恒空
-span   ::= (覆写 ?? 缺省) ∈ ℕ            -- act 的生效跨度：表态处定死，审查与否决不重算
-offset ::= 1..所属 act 的 span           -- clock 步的拍位：进骰子地址，并供呈现定位
+Commit ::= (trigger, action, 果)
+trigger ∈ { act, hook }               -- 入账通道；调用点的标记，作者不可传
+action ::= (verb, params)             -- 公共载荷；hook 的 params 恒空
 果     ::= granted(guard, law, changes, reply?, statements?) | denied(guard?, Denial)
 ```
 
-- 入账内容：凡裁决时读出且不可由账本前缀回算者随步入账。act 步记 span，clock 步记 offset（静默拍不留步；泵按 span 逐拍产生 offset ∈ [1, span] 且同跨度内非降）；边界值 `prev` 一并入账，供渲染与重放消费；提交产出与装载接受共用单步形状判据，跨步一致性不对账。由 kind 唯一决定的呈现身份不入账（lawOf 产生）；只读派生视图（脸表、sees、言默、近况、账本读数）一律是投影。
-- 序列按构造保序：账本序即事件的先后。trigger 由调用点给定（act：AI 经动词面；clock：泵逐拍），作者不可传，随步入账——记录自含分类、跨度与拍位，投影不重跑裁决、不据动词表反推（name/label/messages 等呈现词汇仍取自 def）。`(trigger, id)` 才是规则链的身份，id 只是各自表内的局部名，同名互不相干，引擎不检查跨表唯一。一切步一律携 action。果是裁决点：授予记守卫与法则，否决记 Point 与受众；链上规则表态（或授予被审查拒绝）时守卫随果入账（gate/closure 无守卫），授予轨迹不入账。
-- 提交存在判据：变更 ∨ 答复 ∨ 陈述 ∨ 否决 ∨ 应答义务。act 提案恒因应答义务入账（授予无文本以 ✓ 行入账、否决缺文本以 noResponse 兜底）；clock 提案无应答义务，空授予即默、不留空步。步入账即冻结。呈现按 trigger 分流：act 产尝试行（✓/✗ 动词与答复），clock 归 ⏱（授予成块、否决为失败拍、全弃权即默）。
+- 入账内容：凡裁决时读出且不可由账本前缀回算者随步入账。静默的 hook 步不留步（全弃权与空授予即默）；边界值 `prev` 一并入账，供渲染与重放消费；提交产出与装载接受共用单步形状判据，跨步一致性不对账。由 kind 唯一决定的呈现身份不入账（lawOf 产生）；只读派生视图（脸表、sees、言默、近况）一律是投影。
+- 序列按构造保序：账本序即事件的先后。trigger 由调用点给定（act：AI 经动词面；hook：每 act 后的常驻规则），作者不可传，随步入账——记录自含分类，投影不重跑裁决、不据动词表反推（name/label/messages 等呈现词汇仍取自 def）。`(trigger, id)` 才是规则链的身份，id 只是各自表内的局部名，同名互不相干，引擎不检查跨表唯一。一切步一律携 action。果是裁决点：授予记守卫与法则，否决记 Point 与受众；链上规则表态（或授予被审查拒绝）时守卫随果入账（gate/closure 无守卫），授予轨迹不入账。
+- 提交存在判据：变更 ∨ 答复 ∨ 陈述 ∨ 否决 ∨ 应答义务。act 提案恒因应答义务入账（授予无文本以 ✓ 行入账、否决缺文本以 noResponse 兜底）；hook 提案无应答义务，空授予即默、不留空步。步入账即冻结。呈现按 trigger 分流：act 产尝试行（✓/✗ 动词与答复），hook 归 ⏱（授予成块、否决为失败行、全弃权即默）。
 
 ### 视角
 
@@ -135,28 +133,27 @@ P(w)   ::= { e : sees(⟨e⟩) }
 Ref(w) ::= { e : refers(e) }
 H(w)   ::= P(w) ∪ Ref(w)
 present(w, cell) ::= name(cell) ≠ ∅ ∧ sees(cell)
-viewBase(w, r) = ( readout = r,               -- r 为账本读数（Σ act span）
-                entities  = { card(e) : id(e) ∈ P(w) },
+viewBase(w) = ( entities  = { card(e) : id(e) ∈ P(w) },
                 relations = { (a, b, name(⟨a,b,τ⟩), v) : (a,b,τ,v) ∈ Rel(w) : present(w, ⟨a,b,τ⟩) ∧ {a, b} ⊆ H(w) ∧ 载荷指称 ⊆ H(w) },
                 known     = { (id(e), name(⟨e⟩)) : id(e) ∈ Ref(w)∖P(w) } )
-view(w, r) = def.view 缺席 ? viewBase(w, r) : def.view(w, viewBase(w, r), Γ(w))
+view(w) = def.view 缺席 ? viewBase(w) : def.view(w, viewBase(w), Γ(w))
 refs(k) ::= k 非指称 ? ∅ : 值的指称集
 card(e) = ( id(e), name(⟨e⟩), props = [(name(⟨e,k⟩), v) : k ∈ K : present(w, ⟨e,k⟩) ∧ refs(k) ⊆ H(w)] )   -- 序列承载；ref 值为 id
 ```
 
 ## 协议
 
-**账本与刻度**　`E, Rel` 是内容，门的原子域。账本序给出先后，act 步的 `span` 给出度量，clock 步的 `offset` 给出拍位，`readout = Σ act span`（原点 gauge，只供呈现）。泵是调度原语而非时间本体。记账律：act 的 span 即其跨度，clock 步不延伸跨度；已入账的跨度不可回滚，未入账的跨度必须一并回滚。方向由「账本只追加 ∧ span ≥ 0」给出。
+**账本**　`E, Rel` 是内容，门的原子域。账本序给出先后与方向；时间不是世界内容——游戏若要时间（日历、时长、速率），由世界属性承载，规则可读可写。hook 是每 act 后的常驻钩子，不是时间本体。记账律：账本只追加；已入账的事件不可回滚，未入账的事件必须一并回滚。
 
-**事件投影**　AI 所得 = `Π(记录, def) ⊕ 可见变更行 ⊕ 世界腔文本（答复、陈述与否决理由）`。近况 `Π` 是记录与 def 的纯函数且不持久化（记录的提交边界由账本末世界逆推重建，脸表、格命名与 `sees` 即时求值，不回读活世界）：作者以 `recent(记录, base)` 选择注入的回合记录（账本序的单调子序列；`base` 即缺省选择＝最后 `recentWindow` 条，`recentWindow` 缺席即全量，可委托；`recent` 与 `recentWindow` 至少必填其一），引擎按与 act 结果相同的变更行判据投影（推论·跨度账目闭合）；言默同源重算。act 结果的新见段是同一投影的回合内增量：本回合新进可见域的实体出卡，新进可指称域的实体出句柄。
+**事件投影**　AI 所得 = `Π(记录, def) ⊕ 可见变更行 ⊕ 世界腔文本（答复、陈述与否决理由）`。近况 `Π` 是记录与 def 的纯函数且不持久化（记录的提交边界由账本末世界逆推重建，脸表、格命名与 `sees` 即时求值，不回读活世界）：作者以 `recent(记录, base)` 选择注入的回合记录（账本序的单调子序列；`base` 即缺省选择＝最后 `recentWindow` 条，`recentWindow` 缺席即全量，可委托；`recent` 与 `recentWindow` 至少必填其一），引擎按与 act 结果相同的变更行判据投影；言默同源重算。act 结果的新见段是同一投影的回合内增量：本回合新进可见域的实体出卡，新进可指称域的实体出句柄。
 
 **内核不持行动主体** 视角是 `World → Access` 的纯函数，主体是游戏的法则约定。
 
 ## 面向作者的契约
 
-- **动词表**：`params` 由值声明（type×重数）加可选与描述构成，派生接口模式、内核校验与规则参数的编译期类型；`ref` 值过指称门（域即可指称集）；`many` 令参数为非空序列——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。全表另派生 AI 广告（`verbFace`／`catalog`：id、label、description、span、逐参数的 type×重数×可选×ref 与过门注记）；`act` 工具描述缺省即协议约束＋该广告，作者经 `prompt.tool` 委托或覆盖。
-- **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被记录与断言消费，`text` 是世界腔答复（缺省回落 noResponse），`span` 覆写缺省跨度；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。
-- **引擎文本**（`Messages` 皆非空；`say` 可接管总函数）：引擎合成文本的场合是闭集 `Speech`——记录点的 `(point, verb)`（rule/closure/gate/invariant/engine）与边界情形 `noProposal`（空提案、零行文）。解析序：记录文本中受众 world 者直用（`deny` 的 text、invariant 的 reply）；其余经 `say(speech, base)`——`base` 对 gate 先取动词 `invisible`、再取 `invisibleEntity`、最后 `noResponse`，其余场合一律 `noResponse`（受众 engine 点的隐身呈现）。`verb.invisible` 是词表缺省，不进入记录、不越级 say。记录点场合的解析是记录与 def 的纯函数（act 结果与近况恒同）；边界场合不在账本；`say` 失败时直取 `noResponse`；投影与裁决失灵属引擎缺陷，回落 `noResponse`。`timePassed` 承载静默拍聚合，不属 `say`；回复/陈述是授予侧的逐次文本，亦不入 `say`。
+- **动词表**：`params` 由值声明（type×重数）加可选与描述构成，派生接口模式、内核校验与规则参数的编译期类型；`ref` 值过指称门（域即可指称集）；`many` 令参数为非空序列——一次尝试的操作数是裁决的一部分（指称逐项过门、整次原子），批次是多个尝试在世界态上的顺序 fold；操作数与顺序组合是两根轴，多重性不由批次承载。全表另派生 AI 广告（`verbFace`／`catalog`：id、label、description、逐参数的 type×重数×可选×ref 与过门注记）；`act` 工具描述缺省即协议约束＋该广告，作者经 `prompt.tool` 委托或覆盖。
+- **拒绝**：作者的否决是 `Denial` 在 `rule` 点上的特化——`law` 只被记录与断言消费，`text` 是世界腔答复（缺省回落 noResponse）；授予侧对称：`grant` 可选携 `law`（缺省守卫 id），两侧记录都自含 (守卫, law)。
+- **引擎文本**（`Messages` 皆非空；`say` 可接管总函数）：引擎合成文本的场合是闭集 `Speech`——记录点的 `(point, verb)`（rule/closure/gate/invariant/engine）与边界情形 `noProposal`（空提案、零行文）。解析序：记录文本中受众 world 者直用（`deny` 的 text、invariant 的 reply）；其余经 `say(speech, base)`——`base` 对 gate 先取动词 `invisible`、再取 `invisibleEntity`、最后 `noResponse`，其余场合一律 `noResponse`（受众 engine 点的隐身呈现）。`verb.invisible` 是词表缺省，不进入记录、不越级 say。记录点场合的解析是记录与 def 的纯函数（act 结果与近况恒同）；边界场合不在账本；`say` 失败时直取 `noResponse`；投影与裁决失灵属引擎缺陷，回落 `noResponse`。回复/陈述是授予侧的逐次文本，亦不入 `say`。
 
 ## 架构决策
 

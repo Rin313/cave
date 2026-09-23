@@ -77,8 +77,6 @@ export interface Messages {
 	noResponse: string;
 	/** 指称门否决的缺省文案（say 的 base） */
 	invisibleEntity?: string;
-	/** 静默拍聚合文案 */
-	timePassed: string;
 }
 
 /** 字面类型：边值的值域；边值是字面载荷，端点已是引用。 */
@@ -148,28 +146,27 @@ export interface Q<P = Record<string, Value>> {
 	roll(key: string, sides: number): number;
 }
 
-/** 裁决结果；span 覆写缺省跨度（授予与否决同轴）；reply 只属 act（clock 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被记录与断言消费。 */
+/** 裁决结果；reply 只属 act（hook 携之即引擎点否决）；授予的可选 law 缺省即守卫 id，只被记录与断言消费。 */
 export type Verdict =
-	| { deltas: Delta[]; law?: string; reply?: string; statements?: string[]; span?: number; denial?: never }
-	| { denial: RuleDenial; span?: number };
+	| { deltas: Delta[]; law?: string; reply?: string; statements?: string[]; denial?: never }
+	| { denial: RuleDenial };
 
 export interface Rule {
 	id: string;
 	judge: (q: Q) => Verdict | null;
 }
 
-export function grant(deltas: Delta[], opts: { law?: string; reply?: string; statements?: string[]; span?: number } = {}): Verdict {
+export function grant(deltas: Delta[], opts: { law?: string; reply?: string; statements?: string[] } = {}): Verdict {
 	return {
 		deltas,
 		...(opts.law !== undefined && { law: opts.law }),
 		...(opts.reply !== undefined && { reply: opts.reply }),
 		...(opts.statements !== undefined && { statements: opts.statements }),
-		...(opts.span !== undefined && { span: opts.span }),
 	};
 }
 
-export function deny(law: string, text?: string, span?: number): Verdict {
-	return { denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) }, ...(span !== undefined && { span }) };
+export function deny(law: string, text?: string): Verdict {
+	return { denial: { point: { kind: "rule", law }, ...(text !== undefined && { text }) } };
 }
 
 export const D = {
@@ -262,7 +259,6 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 	label: string;
 	description: string;
 	params: P;
-	span: number;
 	invisible?: string;
 	rules: { id: string; judge: (q: Q<ParamsOf<P>>) => Verdict | null }[];
 }): VerbDef {
@@ -270,7 +266,6 @@ export function defineVerb<P extends Record<string, ParamSpec>>(spec: {
 		label: spec.label,
 		description: spec.description,
 		params: spec.params,
-		span: spec.span,
 		...(spec.invisible !== undefined && { invisible: spec.invisible }),
 		rules: spec.rules.map((r) => ({ id: r.id, judge: (q: Q) => r.judge(q as Q<ParamsOf<P>>) })),
 	};
@@ -285,13 +280,12 @@ export interface VerbDef extends RuleDecl {
 	label: string;
 	description: string;
 	params: Record<string, ParamSpec>;
-	span: number;
 	/** 门否决文案（词表缺省，位于 say 的 base 之下，不进入记录） */
 	invisible?: string;
 }
 
-/** 唯一调用通道是 clock（泵每拍一次，空参）。不进动词面、无参数、无跨度、无答复、无呈现名；id 只进账本与骰子地址。 */
-export interface TickDef extends RuleDecl {
+/** 唯一调用通道是 hook（每 act 后一次，空参）。不进动词面、无参数、无答复、无呈现名；id 只进账本与骰子地址。 */
+export interface HookDef extends RuleDecl {
 	id: string;
 }
 
@@ -300,7 +294,6 @@ export interface VerbFace {
 	id: string;
 	label: string;
 	description: string;
-	span: number;
 	params: readonly ParamFace[];
 }
 
@@ -320,7 +313,6 @@ export function verbFace(verbs: Readonly<Record<string, VerbDef>>): readonly Ver
 		id,
 		label: v.label,
 		description: v.description,
-		span: v.span,
 		params: Object.entries(v.params).map(([name, s]) => ({
 			name,
 			type: s.type,
@@ -336,7 +328,7 @@ export function verbFace(verbs: Readonly<Record<string, VerbDef>>): readonly Ver
 export function catalog(verbs: Readonly<Record<string, VerbDef>>): string {
 	const rows: string[] = [];
 	for (const v of verbFace(verbs)) {
-		rows.push(`${v.id} "${v.label}" — ${v.description} [takes ${v.span} tick${v.span === 1 ? "" : "s"}]`);
+		rows.push(`${v.id} "${v.label}" — ${v.description}`);
 		for (const p of v.params) {
 			const notes = [p.ref ? "ref (id of a visible or known entity)" : p.type];
 			if (p.many) notes.push("non-empty list");
@@ -383,17 +375,13 @@ function paramProblems(verb: VerbDef, params: Record<string, unknown>): string[]
 }
 
 /** 判定数据面：verdict 中会进记录的字段（作者可影响的部分）——违约由 engine(grant) 承接。 */
-function verdictProblems(v: Verdict, clock: boolean): string[] {
+function verdictProblems(v: Verdict, hook: boolean): string[] {
 	const out: string[] = [];
-	if (v.span !== undefined) {
-		if (clock) out.push("不得延伸跨度");
-		else if (!Number.isInteger(v.span) || v.span < 0) out.push(`span 须为非负整数拍数，得到 ${String(v.span)}`);
-	}
 	if (v.denial === undefined) {
 		if (v.law !== undefined && typeof v.law !== "string") out.push("law 须为字符串");
 		if (!Array.isArray(v.deltas)) out.push("deltas 须为序列");
 		if (v.reply !== undefined && (typeof v.reply !== "string" || v.reply === "")) out.push("reply 须为非空字符串");
-		if (clock && v.reply !== undefined) out.push("不得答复");
+		if (hook && v.reply !== undefined) out.push("不得答复");
 		if (v.statements !== undefined && (!Array.isArray(v.statements) || !v.statements.every((s) => typeof s === "string" && s !== ""))) out.push("statements 须为非空字符串序列");
 		return out;
 	}
@@ -407,7 +395,6 @@ function verdictProblems(v: Verdict, clock: boolean): string[] {
 }
 
 export interface RecentEntry {
-	readout: number;
 	utterance: string;
 	moves: string[];
 }
@@ -434,7 +421,7 @@ function recentBlock(recent: readonly RecentEntry[]): string {
 	if (recent.length === 0) return "";
 	const lines = ["[Recent turns, newest last]"];
 	for (const r of recent) {
-		lines.push(`- t${r.readout} ${r.utterance}`);
+		lines.push(`- ${r.utterance}`);
 		if (r.moves.length === 0) lines.push("  no visible events");
 		else for (const move of r.moves) lines.push(`  ${move}`);
 	}
@@ -467,8 +454,8 @@ export interface GameDef {
 	props?: Record<string, SlotDef>;
 	/** 边类型注册表：注册即获值域契约、引用生命周期与呈现名（label）；未注册 token 即字面（恒以 τ 为名）。 */
 	relTypes?: Record<string, SlotDef>;
-	/** 每拍按声明序由泵以空参调用，后一条看得见前一条的后果。 */
-	ticks?: TickDef[];
+	/** 每 act 后按声明序以空参调用一次，后一条看得见前一条的后果。 */
+	hooks?: HookDef[];
 	/** 视角：访问结构（格级披露 × 实体级可指称）；缺省全见、可指称即顶点披露。 */
 	perspective?: (world: World) => Partial<Access>;
 	/** 格命名：非空 token 即有名，null 即无名；空串是缺陷（抛）；顶点无名回落 id。缺省实现（顶点 id、属性/边 label）作为第二参数传入；声明即接管，可委托 base。 */
@@ -635,7 +622,6 @@ export interface FieldView {
 
 /** 闭合后的状态视图基座：卡、句柄、边（名字、披露与指称闭包同时成立；边名即呈现 token，不携 τ）；作者视图钩子的缺省值与素材。 */
 export type ViewBase = {
-	readout: number;
 	entities: Card[];
 	relations: { from: string; to: string; name: string; value: Value }[];
 	known?: Handle[];
@@ -646,11 +632,11 @@ function tupleKey(parts: readonly string[]): string {
 	return JSON.stringify(parts);
 }
 
-/** 入账通道：act（外部输入经动词面）、clock（泵逐拍）。 */
-export type Trigger = "act" | "clock";
+/** 入账通道：act（外部输入经动词面）、hook（每 act 后的常驻规则）。 */
+export type Trigger = "act" | "hook";
 
 /** 注册与查询的诊断名。 */
-const TRIGGER_LABEL: Record<Trigger, string> = { act: "动词", clock: "常驻规则" };
+const TRIGGER_LABEL: Record<Trigger, string> = { act: "动词", hook: "常驻规则" };
 
 /** 提案者：审查上下文用；rule 携授予法则与本次尝试的 trigger/action，admit 是以零变更审查整世界（装载终点）。 */
 export type Proposal =
@@ -673,9 +659,9 @@ export function roll(addr: string, key: string, sides: number): number {
 	return 1 + Math.floor(h * sides);
 }
 
-/** 尝试地址：账本位置 (act 序号, trigger, id, 拍位)——act 序号 = 该尝试所属 act 的序号，拍位 = act 步 0、clock 步在其跨度内的第几拍。 */
-function attemptAddr(actSeq: number, trigger: Trigger, verb: string, phase: number): string {
-	return tupleKey(["attempt", String(actSeq), trigger, verb, String(phase)]);
+/** 尝试地址：账本位置 (act 序号, trigger, id)——act 序号 = 该尝试所属 act 的序号，hook 步与其 act 同序号，凭 trigger 与 id 区分。 */
+function attemptAddr(actSeq: number, trigger: Trigger, verb: string): string {
+	return tupleKey(["attempt", String(actSeq), trigger, verb]);
 }
 
 /** 裁决点的呈现身份（探针与诊断用）；分类看 kind，不看字符串。 */
@@ -689,24 +675,24 @@ export function lawOf(point: Point): string {
 	}
 }
 
-/** 一步：act 记 span（生效跨度），clock 记 offset（所属跨度内的拍位，进骰子地址）；授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
+/** 一步：授予记守卫与法则，否决记 Point 与受众；链上规则表态或授予被审查拒绝时守卫随果入账，gate/closure 无守卫。 */
 export type Commit =
-	| { trigger: "act"; action: Action; span: number; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[]; denial?: never }
-	| { trigger: "act"; action: Action; span: number; rule?: string; denial: Denial }
-	| { trigger: "clock"; action: Action; offset: number; rule: string; law: string; changes: Change[]; statements?: string[]; denial?: never }
-	| { trigger: "clock"; action: Action; offset: number; rule?: string; denial: Denial };
+	| { trigger: "act"; action: Action; rule: string; law: string; changes: Change[]; reply?: string; statements?: string[]; denial?: never }
+	| { trigger: "act"; action: Action; rule?: string; denial: Denial }
+	| { trigger: "hook"; action: Action; rule: string; law: string; changes: Change[]; statements?: string[]; denial?: never }
+	| { trigger: "hook"; action: Action; rule?: string; denial: Denial };
 
 type ActCommit = Extract<Commit, { trigger: "act" }>;
-type ClockCommit = Extract<Commit, { trigger: "clock" }>;
+type HookCommit = Extract<Commit, { trigger: "hook" }>;
 
-/** 入账判据：clock 的默（全弃权与空授予）不留步。 */
-function recorded(c: ClockCommit): boolean {
+/** 入账判据：hook 的默（全弃权与空授予）不留步。 */
+function recorded(c: HookCommit): boolean {
 	return c.denial === undefined ? c.changes.length > 0 || (c.statements?.length ?? 0) > 0 : c.denial.point.kind !== "closure";
 }
 
 export interface Resolution {
 	step: ActCommit;
-	ticks: ClockCommit[];
+	hooks: HookCommit[];
 }
 
 /** 记录形状：Point/Denial/Change/Commit 的运行时值域——提交路径（产出）与装载路径（接受）共用同一判据。 */
@@ -742,23 +728,20 @@ function isChange(v: unknown): boolean {
 	}
 }
 
-/** 步形状：act 的 span ≥ 0，clock 的 offset ≥ 1；授予行 law/changes 必填、不得携 denial；否决的 rule 可缺，不得携授予字段；clock 不携 reply、参数空。 */
+/** 步形状：授予行 law/changes 必填、不得携 denial；否决的 rule 可缺，不得携授予字段；hook 不携 reply、参数空。 */
 export function isCommit(s: unknown): boolean {
 	if (s === null || typeof s !== "object" || Array.isArray(s)) return false;
 	const c = s as Record<string, unknown>;
-	if (c.trigger !== "act" && c.trigger !== "clock") return false;
-	if (c.trigger === "act") {
-		if (typeof c.span !== "number" || !Number.isInteger(c.span) || c.span < 0) return false;
-	} else if (typeof c.offset !== "number" || !Number.isInteger(c.offset) || c.offset < 1) return false;
+	if (c.trigger !== "act" && c.trigger !== "hook") return false;
 	const a = c.action as Record<string, unknown> | null | undefined;
 	if (a === null || typeof a !== "object" || Array.isArray(a)) return false;
 	if (typeof a.verb !== "string" || a.verb === "" || a.params === null || typeof a.params !== "object" || Array.isArray(a.params)) return false;
-	if (c.trigger === "clock" && Object.keys(a.params).length > 0) return false;
+	if (c.trigger === "hook" && Object.keys(a.params).length > 0) return false;
 	if (c.denial === undefined) {
 		if (typeof c.rule !== "string" || c.rule === "") return false;
 		if (typeof c.law !== "string" || c.law === "") return false;
 		if (!Array.isArray(c.changes) || !c.changes.every(isChange)) return false;
-		if (c.reply !== undefined && (c.trigger === "clock" || typeof c.reply !== "string" || c.reply === "")) return false;
+		if (c.reply !== undefined && (c.trigger === "hook" || typeof c.reply !== "string" || c.reply === "")) return false;
 		return c.statements === undefined || (Array.isArray(c.statements) && c.statements.every((x) => typeof x === "string" && x !== ""));
 	}
 	if (c.rule !== undefined && (typeof c.rule !== "string" || c.rule === "")) return false;
@@ -964,29 +947,24 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 		};
 		return { face, renames, changeLine };
 	};
-	const msgs = sim.def.messages;
 	const lines: string[] = [];
-	const said = new Map<number, { changes: string[]; statements: string[]; denials: string[] }>();
-	let granted = 0;
+	const held: { changes: string[]; statements: string[]; denials: string[] } = { changes: [], statements: [], denials: [] };
 	const flush = (): void => {
-		for (const { changes, statements, denials } of said.values()) {
-			if (changes.length || statements.length) lines.push(`⏱ ${[
-				changes.length ? `(${changes.join("; ")})` : "",
-				statements.length ? `[${statements.join("; ")}]` : "",
-			].join("")}`);
-			for (const d of denials) lines.push(`⏱ ✗ ${d}`);
-		}
-		const silent = granted - said.size;
-		if (silent > 0) lines.push(`⏱ ${msgs.timePassed} ×${silent}`);
-		said.clear();
+		if (held.changes.length || held.statements.length) lines.push(`⏱ ${[
+			held.changes.length ? `(${held.changes.join("; ")})` : "",
+			held.statements.length ? `[${held.statements.join("; ")}]` : "",
+		].join("")}`);
+		for (const d of held.denials) lines.push(`⏱ ✗ ${d}`);
+		held.changes.length = 0;
+		held.statements.length = 0;
+		held.denials.length = 0;
 	};
 	for (let i = 0; i < n; i++) {
 		const s = steps[i]!;
 		const { face, renames, changeLine } = renderer(i);
 		const changes = s.denial === undefined ? [...renames, ...s.changes.map(changeLine).filter((x): x is string => x !== null)] : [];
-		if (s.trigger !== "clock") {
+		if (s.trigger !== "hook") {
 			flush();
-			granted = s.span;
 			const reply = s.denial === undefined ? s.reply : renderDenial(sim.def, s.denial, s.action.verb);
 			const statements = s.denial === undefined ? (s.statements ?? []) : [];
 			const tail = [
@@ -994,15 +972,11 @@ export function spineLines(sim: Simulation, steps: readonly Commit[], worldAfter
 				statements.length ? `[${statements.join("; ")}]` : "",
 			].join("");
 			lines.push(`${s.denial === undefined ? "✓" : "✗"} ${sim.describeAction(s, face)}${reply !== undefined ? `：${reply}` : ""}${tail}`);
+		} else if (s.denial === undefined) {
+			held.changes.push(...changes);
+			if (s.statements?.length) held.statements.push(...s.statements);
 		} else {
-			const held = said.get(s.offset) ?? { changes: [], statements: [], denials: [] };
-			if (s.denial === undefined) {
-				held.changes.push(...changes);
-				if (s.statements?.length) held.statements.push(...s.statements);
-			} else {
-				held.denials.push(renderDenial(sim.def, s.denial, s.action.verb));
-			}
-			if (held.changes.length || held.statements.length || held.denials.length) said.set(s.offset, held);
+			held.denials.push(renderDenial(sim.def, s.denial, s.action.verb));
 		}
 	}
 	flush();
@@ -1036,23 +1010,10 @@ function selectRecent(def: GameDef, records: readonly ChronicleEntry[]): readonl
 	return picked;
 }
 
-/** 一步集的账本跨度：act 的 span 之和 */
-function spanOf(steps: readonly Commit[]): number {
-	let n = 0;
-	for (const s of steps) if (s.trigger === "act") n += s.span;
-	return n;
-}
-
-/** 投影所选记录：自账本末世界逐条逆推至最早入选者（spineLines 不自改入参，故就地回退），只取入选记录的提交边界；言默与 act 结果同判据。回合坐标由账本前缀的跨度累计派生。 */
+/** 投影所选记录：自账本末世界逐条逆推至最早入选者（spineLines 不自改入参，故就地回退），只取入选记录的提交边界；言默与 act 结果同判据。 */
 function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], selected: readonly ChronicleEntry[]): RecentEntry[] {
 	if (selected.length === 0) return [];
 	const slot = new Map(selected.map((r, i) => [r, i]));
-	const times = new Map<ChronicleEntry, number>();
-	let acc = 0;
-	for (const r of records) {
-		acc += spanOf(r.steps);
-		times.set(r, acc);
-	}
 	const moves: string[][] = new Array(selected.length);
 	let need = selected.length;
 	const w = sim.snapshot();
@@ -1065,7 +1026,7 @@ function projectRecent(sim: Simulation, records: readonly ChronicleEntry[], sele
 		}
 		if (need > 0) rewind(w, r.steps);
 	}
-	return selected.map((r, i) => ({ readout: times.get(r)!, utterance: JSON.stringify(r.utterance), moves: moves[i]! }));
+	return selected.map((r, i) => ({ utterance: JSON.stringify(r.utterance), moves: moves[i]! }));
 }
 
 /** 近况：选择 × 投影 */
@@ -1079,8 +1040,8 @@ export function relVal(world: World, from: string, to: string, type: string): Va
 
 /** 门内裁决的表态；授予记守卫与法则，否决自带裁决点与守卫。 */
 type RawResult =
-	| { deltas: Delta[]; rule: string; law: string; reply?: string; statements?: string[]; span?: number; denial?: never }
-	| { denial: Denial; rule?: string; span?: number };
+	| { deltas: Delta[]; rule: string; law: string; reply?: string; statements?: string[]; denial?: never }
+	| { denial: Denial; rule?: string };
 
 /** 裁决产出的记录内容：授予携守卫与法则，否决携裁决点与守卫。 */
 type StepOutcome =
@@ -1090,10 +1051,8 @@ type StepOutcome =
 export class Simulation {
 	readonly def: GameDef;
 	readonly world: World;
-	/** 规则链注册表：两通道同制，(trigger, id) 是身份；clock 的插入序即拍内执行序。 */
-	private readonly chains: Record<Trigger, Map<string, readonly Rule[]>> = { act: new Map(), clock: new Map() };
-	/** 账本读数：Σ act span，只供呈现。 */
-	#readout = 0;
+	/** 规则链注册表：两通道同制，(trigger, id) 是身份；hook 的插入序即执行序。 */
+	private readonly chains: Record<Trigger, Map<string, readonly Rule[]>> = { act: new Map(), hook: new Map() };
 	/** 已入账 act 步数：骰子地址的账本位置；只随成功提交或重放推进。 */
 	private actSeq = 0;
 
@@ -1102,7 +1061,6 @@ export class Simulation {
 		this.world = clone(def.world);
 		const { messages } = def;
 		if (typeof messages.noResponse !== "string" || messages.noResponse.trim() === "") throw new Error("messages.noResponse 须为非空字符串");
-		if (typeof messages.timePassed !== "string" || messages.timePassed.trim() === "") throw new Error("messages.timePassed 须为非空字符串");
 		if (messages.invisibleEntity !== undefined && (typeof messages.invisibleEntity !== "string" || messages.invisibleEntity.trim() === "")) throw new Error("messages.invisibleEntity 须为非空字符串");
 		if (def.say !== undefined && typeof def.say !== "function") throw new Error("GameDef.say 须为函数");
 		if (def.recent === undefined && def.recentWindow === undefined) throw new Error("GameDef.recent / recentWindow 至少必填其一");
@@ -1115,13 +1073,12 @@ export class Simulation {
 			invariantIds.add(inv.id);
 		}
 		for (const [id, v] of Object.entries(def.verbs)) {
-			if (!Number.isInteger(v.span) || v.span < 0) throw new Error(`动词 ${id} 的 span 须为非负整数拍数，得到 ${String(v.span)}`);
 			for (const [p, s] of Object.entries(v.params)) validateDecl(`动词 ${id} 的参数「${p}」`, true, s);
 			if (v.invisible !== undefined && (typeof v.invisible !== "string" || v.invisible.trim() === "")) throw new Error(`动词 ${id} 的 invisible 须为非空字符串`);
 			if (v.invisible !== undefined && refParamsOf(v).length === 0) throw new Error(`动词 ${id} 无指称参数，invisible 文案不会被消费`);
 			this.register("act", id, v);
 		}
-		for (const t of def.ticks ?? []) this.register("clock", t.id, t);
+		for (const t of def.hooks ?? []) this.register("hook", t.id, t);
 		// props 与 relTypes 同制：注册即契约；未注册键即字面，名字由呈现层按 (名, 值) 序列消费，不要求唯一
 		for (const [k, d] of Object.entries(def.props ?? {})) validateDecl(`属性「${k}」`, false, d);
 		for (const [t, d] of Object.entries(def.relTypes ?? {})) validateDecl(`边类型「${t}」`, false, d);
@@ -1226,7 +1183,7 @@ export class Simulation {
 		return rules;
 	}
 
-	private adjudicateRaw(action: Action, rules: readonly Rule[], refParams: readonly string[], gate: Set<string>, world: World, addr: string, clock: boolean): RawResult {
+	private adjudicateRaw(action: Action, rules: readonly Rule[], refParams: readonly string[], gate: Set<string>, world: World, addr: string, hook: boolean): RawResult {
 		const invalid = refParams
 			.flatMap((p) => {
 				const v = action.params[p];
@@ -1242,12 +1199,12 @@ export class Simulation {
 				return { rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${String(e)}` } };
 			}
 			if (!v) continue;
-			const problems = verdictProblems(v, clock);
+			const problems = verdictProblems(v, hook);
 			if (problems.length) return { rule: r.id, denial: { point: { kind: "engine" }, text: `rule:${r.id}: ${problems.join("; ")}` } };
 			if (v.denial === undefined) {
-				return { deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }), ...(v.span !== undefined && { span: v.span }) };
+				return { deltas: v.deltas, rule: r.id, law: v.law !== undefined && v.law !== "" ? v.law : r.id, ...(v.reply !== undefined && { reply: v.reply }), ...(v.statements !== undefined && { statements: v.statements }) };
 			}
-			return { denial: v.denial, rule: r.id, ...(v.span !== undefined && { span: v.span }) };
+			return { denial: v.denial, rule: r.id };
 		}
 		return { denial: { point: { kind: "closure" } } };
 	}
@@ -1261,7 +1218,7 @@ export class Simulation {
 		};
 	}
 
-	/** 克隆覆写：冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账跨度。 */
+	/** 克隆覆写：冻结引用不得留在活账本上。回滚恒回封装单元（提交或 apply）起点，不越过已入账的步。 */
 	private restore(s0: World): void {
 		Object.assign(this.world, clone(s0));
 	}
@@ -1312,42 +1269,38 @@ export class Simulation {
 		return null;
 	}
 
-	/** 异常逃逸 ⇒ 世界、派生读数与账本位置恢复调用前原状再抛；attempt 入界即冻结（Q.params 与步记录同一对象），Resolution 出界即冻结。 */
+	/** 异常逃逸 ⇒ 世界与账本位置恢复调用前原状再抛；attempt 入界即冻结（Q.params 与步记录同一对象），Resolution 出界即冻结。 */
 	apply(action: Action): Resolution {
 		deepFreeze(action);
 		const s0 = this.readState();
-		const read0 = this.#readout;
 		const seq0 = this.actSeq;
 		try {
 			const step = this.attempt(s0, action, "act");
-			const ticks = this.pump(step.span);
+			const hooks = this.runHooks();
 			this.markStep(step);
-			return deepFreeze({ step, ticks });
+			return deepFreeze({ step, hooks });
 		} catch (e) {
 			this.restore(s0);
-			this.#readout = read0;
 			this.actSeq = seq0;
 			throw e;
 		}
 	}
 
 	private attempt(s0: World, action: Action, trigger: "act"): ActCommit;
-	private attempt(s0: World, action: Action, trigger: "clock", offset: number): ClockCommit;
-	private attempt(s0: World, action: Action, trigger: Trigger, offset?: number): ActCommit | ClockCommit {
+	private attempt(s0: World, action: Action, trigger: "hook"): HookCommit;
+	private attempt(s0: World, action: Action, trigger: Trigger): ActCommit | HookCommit {
 		deepFreeze(action);
-		const clock = trigger === "clock";
-		const verb = clock ? undefined : this.staticForm(action);
+		const hook = trigger === "hook";
+		const verb = hook ? undefined : this.staticForm(action);
 		const rules = this.chainOf(trigger, action.verb);
 		const refParams = verb === undefined ? [] : refParamsOf(verb);
-		const defaultSpan = verb === undefined ? 0 : verb.span;
-		const addr = attemptAddr(this.actSeq, trigger, action.verb, clock ? offset! : 0);
+		const addr = attemptAddr(this.actSeq, trigger, action.verb);
 		const gate = this.boundary(s0).referable;
-		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, clock);
-		// 跨度随表态定死（覆写 ?? 缺省）；授予被审查拒绝时跨度与守卫一并保留，不退回缺省
+		const r = this.adjudicateRaw(action, rules, refParams, gate, s0, addr, hook);
 		const outcome: StepOutcome = this.settle(s0, action, trigger, r);
-		const step: ActCommit | ClockCommit = clock
-			? { trigger: "clock", action, offset: offset!, ...outcome }
-			: { trigger: "act", action, span: r.span ?? defaultSpan, ...outcome };
+		const step: ActCommit | HookCommit = hook
+			? { trigger: "hook", action, ...outcome }
+			: { trigger: "act", action, ...outcome };
 		// 绊线：提交产出必落在装载域内（与装载路径同一判据）
 		if (!isCommit(step)) throw new Error(`内核缺陷：提交产出的记录被装载判据拒绝 ${JSON.stringify(step)}`);
 		return step;
@@ -1363,24 +1316,22 @@ export class Simulation {
 		return { ...(r.rule !== undefined && { rule: r.rule }), denial: r.denial };
 	}
 
-	/** 账本位置只在步确定入账时推进：act 步计入序号，clock 步的拍位由跨度循环给定。 */
+	/** 账本位置只在步确定入账时推进：act 步计入序号，hook 步与其 act 同序号。 */
 	private markStep(step: Commit): void {
 		if (step.trigger === "act") this.actSeq += 1;
 	}
 
-	private pump(span: number): ClockCommit[] {
-		const out: ClockCommit[] = [];
-		for (let i = 1; i <= span; i++) {
-			this.#readout += 1;
-			for (const id of this.chains.clock.keys()) {
-				const c = this.attempt(this.readState(), { verb: id, params: {} }, "clock", i);
-				if (recorded(c)) out.push(c);
-			}
+	/** 每 act 后按声明序以空参调用 hook 链一次，后一条看得见前一条的后果。 */
+	private runHooks(): HookCommit[] {
+		const out: HookCommit[] = [];
+		for (const id of this.chains.hook.keys()) {
+			const c = this.attempt(this.readState(), { verb: id, params: {} }, "hook");
+			if (recorded(c)) out.push(c);
 		}
 		return out;
 	}
 
-	/** 尝试行不经跨度门；未过所见者原样回显。 */
+	/** 尝试行不过所见门；未过所见者原样回显。 */
 	describeAction(s: Commit, face: Face): string {
 		const action = s.action;
 		const verb = this.def.verbs[action.verb];
@@ -1411,9 +1362,8 @@ export class Simulation {
 			}
 			const broken = integrityProblems(this.def, this.readState());
 			if (broken) return fail(broken);
-			// 账本位置与派生读数只在整条记录通过后推进：失败路径没有非世界状态需要回滚
+			// 账本位置只在整条记录通过后推进：失败路径没有非世界状态需要回滚
 			for (const step of record.steps) this.markStep(step);
-			this.#readout += spanOf(record.steps);
 			return null;
 		} catch (e) {
 			return fail(String(e));
@@ -1450,11 +1400,6 @@ export class Simulation {
 		return clone(this.world);
 	}
 
-	/** 账本读数：Σ act span */
-	get readout(): number {
-		return this.#readout;
-	}
-
 	/** 闭合基座：可见者出卡，可指称而不可见者出句柄（known）；关系过名字、披露与闭包（H）。 */
 	private viewBase(w: World, field: FieldView): ViewBase {
 		const entities = w.entities.filter((e) => field.visible.has(e.id)).map((e) => this.cardOf(e, field, faceAt(field, e.id)));
@@ -1466,7 +1411,7 @@ export class Simulation {
 				return field.present(cell) && field.known.has(r.from) && field.known.has(r.to) && refsWithin(rd, r.value, field.known);
 			})
 			.map((r) => ({ from: r.from, to: r.to, name: field.name({ cell: "edge", from: r.from, to: r.to, type: r.type })!, value: r.value }));
-		const out: ViewBase = { readout: this.#readout, relations, entities };
+		const out: ViewBase = { relations, entities };
 		if (known.length) out.known = known;
 		return out;
 	}

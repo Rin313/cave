@@ -327,7 +327,7 @@ function adjudicate(def: GameDef, sim: Simulation, run: RunState, actions: reado
 	try {
 		for (const a of actions) {
 			const res = sim.apply(a);
-			steps.push(res.step, ...res.ticks);
+			steps.push(res.step, ...res.hooks);
 		}
 	} catch (e) {
 		// 此处只剩投影与内核缺陷：apply 边界重抛，已裁决步照常入账

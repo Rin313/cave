@@ -413,9 +413,9 @@ function closeSession(game: string, run: string): void {
 	session.unsubscribe();
 }
 
-/** 状态快照：视图与账本读数由同一读态求值。 */
-function stateOf(session: Session): { game: string; run: string; readout: number; view: unknown } {
-	return { game: session.game, run: session.run, readout: session.engine.sim.readout, view: session.engine.sim.view() };
+/** 状态快照：视图由当前读态求值。 */
+function stateOf(session: Session): { game: string; run: string; view: unknown } {
+	return { game: session.game, run: session.run, view: session.engine.sim.view() };
 }
 
 /** IPC 载荷不可信：只声明形状，语义逐命令校验。 */
