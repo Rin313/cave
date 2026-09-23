@@ -74,7 +74,6 @@ export interface Action {
 }
 
 export interface Messages {
-	/** 引擎文本缺省 */
 	noResponse: string;
 	/** 指称门否决的缺省文案（say 的 base） */
 	invisibleEntity?: string;
